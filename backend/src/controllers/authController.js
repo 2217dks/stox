@@ -9,6 +9,7 @@ const {
   registerUser,
   loginUser,
   refreshAccessToken,
+  revokeRefreshToken,
 } = require("../services/authService");
 
 async function register(req, res) {
@@ -254,8 +255,66 @@ async function refresh(req, res) {
   }
 }
 
+async function logout(req, res) {
+  try {
+    // --------------------------------------------------------
+    // 1. Validate request body
+    // --------------------------------------------------------
+
+    const validatedData = refreshTokenSchema.parse(req.body);
+
+    // --------------------------------------------------------
+    // 2. Revoke refresh token
+    // --------------------------------------------------------
+
+    const revoked = await revokeRefreshToken(validatedData.refreshToken);
+
+    // --------------------------------------------------------
+    // 3. Return logout response
+    // --------------------------------------------------------
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        loggedOut: true,
+        tokenRevoked: revoked,
+      },
+    });
+  } catch (error) {
+    // --------------------------------------------------------
+    // Validation errors
+    // --------------------------------------------------------
+
+    if (error instanceof ZodError) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: "Request validation failed.",
+          details: error.issues,
+        },
+      });
+    }
+
+    // --------------------------------------------------------
+    // Unexpected error
+    // --------------------------------------------------------
+
+    console.error("Logout error:", error);
+
+    return res.status(500).json({
+      success: false,
+      error: {
+        code: "INTERNAL_SERVER_ERROR",
+        message: "An unexpected error occurred.",
+      },
+    });
+  }
+}
+
 module.exports = {
   register,
   login,
   refresh,
+  logout,
 };
