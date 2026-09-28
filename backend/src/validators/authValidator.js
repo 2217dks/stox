@@ -43,8 +43,13 @@ const refreshTokenSchema = z.object({
     .max(2000, "Refresh token is invalid."),
 });
 
+const googleLoginSchema = z.object({
+  credential: z.string().trim().min(1, "Google credential is required."),
+});
+
 module.exports = {
   registerSchema,
   loginSchema,
   refreshTokenSchema,
+  googleLoginSchema,
 };

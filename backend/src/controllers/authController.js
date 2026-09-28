@@ -4,12 +4,15 @@ const {
   registerSchema,
   loginSchema,
   refreshTokenSchema,
+  googleLoginSchema,
 } = require("../validators/authValidator");
 const {
   registerUser,
   loginUser,
   refreshAccessToken,
   revokeRefreshToken,
+  loginWithGoogle,
+  getCurrentUser,
 } = require("../services/authService");
 
 async function register(req, res) {
@@ -312,9 +315,87 @@ async function logout(req, res) {
   }
 }
 
+const google = async (req, res) => {
+  try {
+    const { credential } = googleLoginSchema.parse(req.body);
+
+    const result = await loginWithGoogle(credential);
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: error.issues[0]?.message || "Invalid request.",
+        },
+      });
+    }
+
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        success: false,
+        error: {
+          code: error.code || "AUTH_ERROR",
+          message: error.message,
+        },
+      });
+    }
+
+    console.error("Google authentication error:", error);
+
+    return res.status(500).json({
+      success: false,
+      error: {
+        code: "INTERNAL_SERVER_ERROR",
+        message: "An unexpected error occurred.",
+      },
+    });
+  }
+};
+
+async function currentUser(req, res) {
+  try {
+    const user = await getCurrentUser(req.user.userId);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        user,
+      },
+    });
+  } catch (error) {
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        success: false,
+        error: {
+          code: error.code || "AUTH_ERROR",
+          message: error.message,
+        },
+      });
+    }
+
+    console.error("Get current user error:", error);
+
+    return res.status(500).json({
+      success: false,
+      error: {
+        code: "INTERNAL_SERVER_ERROR",
+        message: "An unexpected error occurred.",
+      },
+    });
+  }
+}
+
 module.exports = {
   register,
   login,
   refresh,
   logout,
+  google,
+  currentUser,
 };

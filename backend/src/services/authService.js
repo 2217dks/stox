@@ -1,6 +1,9 @@
+require("dotenv").config();
+
 const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
+const { OAuth2Client } = require("google-auth-library");
 
 const prisma = require("../config/database");
 
@@ -14,6 +17,8 @@ const BCRYPT_SALT_ROUNDS = Number.parseInt(
   process.env.BCRYPT_SALT_ROUNDS || "10",
   10,
 );
+
+const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 function requireEnv(name, value) {
   if (!value) {
@@ -349,6 +354,13 @@ async function loginUser({ email, password, userAgent, ipAddress }) {
     throw error;
   }
 
+  if (!user || !user.passwordHash) {
+    const error = new Error("Invalid email or password.");
+    error.statusCode = 401;
+    error.code = "INVALID_CREDENTIALS";
+    throw error;
+  }
+
   const passwordMatches = await verifyPassword(password, user.passwordHash);
 
   if (!passwordMatches) {
@@ -496,6 +508,167 @@ async function revokeRefreshToken(refreshToken) {
   return result.count > 0;
 }
 
+async function loginWithGoogle(credential) {
+  if (!credential) {
+    const error = new Error("Google credential is required.");
+    error.statusCode = 400;
+    error.code = "GOOGLE_CREDENTIAL_REQUIRED";
+    throw error;
+  }
+
+  let ticket;
+
+  try {
+    ticket = await googleClient.verifyIdToken({
+      idToken: credential,
+      audience: process.env.GOOGLE_CLIENT_ID,
+    });
+  } catch (error) {
+    const authError = new Error("Invalid Google credential.");
+    authError.statusCode = 401;
+    authError.code = "INVALID_GOOGLE_TOKEN";
+    throw authError;
+  }
+
+  const payload = ticket.getPayload();
+
+  if (!payload) {
+    const error = new Error("Invalid Google account payload.");
+    error.statusCode = 401;
+    error.code = "INVALID_GOOGLE_TOKEN";
+    throw error;
+  }
+
+  const {
+    sub: googleId,
+    email,
+    email_verified: emailVerified,
+    name,
+    picture,
+  } = payload;
+
+  if (!googleId || !email) {
+    const error = new Error("Google account information is incomplete.");
+    error.statusCode = 401;
+    error.code = "INVALID_GOOGLE_ACCOUNT";
+    throw error;
+  }
+
+  const normalizedEmail = normalizeEmail(email);
+
+  let user = await prisma.user.findUnique({
+    where: {
+      googleId,
+    },
+  });
+
+  // Existing Google-linked account
+  if (user) {
+    if (user.isSuspended) {
+      const error = new Error("Account is suspended.");
+      error.statusCode = 403;
+      error.code = "ACCOUNT_SUSPENDED";
+      throw error;
+    }
+
+    const result = await prisma.$transaction(async (tx) => {
+      const updatedUser = await tx.user.update({
+        where: {
+          id: user.id,
+        },
+        data: {
+          lastLoginAt: new Date(),
+          ...(picture ? { avatarUrl: picture } : {}),
+        },
+      });
+
+      const tokens = await issueTokenPair(tx, updatedUser);
+
+      return {
+        user: sanitizeUser(updatedUser),
+        tokens,
+      };
+    });
+
+    return result;
+  }
+
+  // Existing password account with same email
+  const existingEmailUser = await prisma.user.findUnique({
+    where: {
+      email: normalizedEmail,
+    },
+  });
+
+  if (existingEmailUser) {
+    const error = new Error(
+      "An account already exists with this email. Sign in with your password before linking Google.",
+    );
+
+    error.statusCode = 409;
+    error.code = "GOOGLE_ACCOUNT_LINK_REQUIRED";
+
+    throw error;
+  }
+
+  // New Google account
+  const result = await prisma.$transaction(async (tx) => {
+    const newUser = await tx.user.create({
+      data: {
+        email: normalizedEmail,
+        name: name?.trim() || "Stox User",
+        googleId,
+        passwordHash: null,
+        avatarUrl: picture || null,
+        isVerified: Boolean(emailVerified),
+      },
+    });
+
+    await tx.portfolio.create({
+      data: {
+        userId: newUser.id,
+        name: "Main Portfolio",
+        startingBalance: 10000,
+        cashBalance: 10000,
+        isDefault: true,
+      },
+    });
+
+    const tokens = await issueTokenPair(tx, newUser);
+
+    return {
+      user: sanitizeUser(newUser),
+      tokens,
+    };
+  });
+
+  return result;
+}
+
+async function getCurrentUser(userId) {
+  const user = await prisma.user.findUnique({
+    where: {
+      id: userId,
+    },
+  });
+
+  if (!user) {
+    const error = new Error("User not found.");
+    error.statusCode = 404;
+    error.code = "USER_NOT_FOUND";
+    throw error;
+  }
+
+  if (user.isSuspended) {
+    const error = new Error("Account is suspended.");
+    error.statusCode = 403;
+    error.code = "ACCOUNT_SUSPENDED";
+    throw error;
+  }
+
+  return sanitizeUser(user);
+}
+
 module.exports = {
   normalizeEmail,
   validatePasswordStrength,
@@ -509,4 +682,6 @@ module.exports = {
   loginUser,
   refreshAccessToken,
   revokeRefreshToken,
+  loginWithGoogle,
+  getCurrentUser,
 };
