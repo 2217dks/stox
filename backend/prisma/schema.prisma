@@ -4,5 +4,207 @@ datasource db {
 
 generator client {
   provider = "prisma-client-js"
-  output   = "../generated/prisma"
+}
+
+// ============================================================
+// ENUMS
+// ============================================================
+
+enum Role {
+  TRADER
+  ADMIN
+  MODERATOR
+}
+
+enum AssetType {
+  STOCK
+  CRYPTO
+  FOREX
+}
+
+enum OrderSide {
+  BUY
+  SELL
+}
+
+enum OrderType {
+  MARKET
+  LIMIT
+  STOP_LOSS
+  TAKE_PROFIT
+}
+
+enum OrderStatus {
+  PENDING
+  EXECUTED
+  CANCELLED
+  EXPIRED
+  REJECTED
+}
+
+enum OrderSource {
+  MANUAL
+  COPY_TRADE
+  DCA_BOT
+  LEAGUE
+}
+
+// ============================================================
+// USER
+// ============================================================
+
+model User {
+  id           String  @id @default(uuid())
+  email        String  @unique
+  passwordHash String
+  name         String
+  avatarUrl    String?
+
+  role Role @default(TRADER)
+
+  isVerified  Boolean @default(false)
+  isSuspended Boolean @default(false)
+
+  // Notification preferences
+  emailAlerts Boolean @default(true)
+  emailDigest Boolean @default(true)
+  pushEnabled Boolean @default(false)
+  pushToken   String?
+
+  // Relations
+  portfolios    Portfolio[]
+  refreshTokens RefreshToken[]
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  lastLoginAt DateTime?
+
+  @@index([role])
+}
+
+// ============================================================
+// REFRESH TOKENS
+// ============================================================
+
+model RefreshToken {
+  id String @id @default(uuid())
+
+  token  String @unique
+  userId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  expiresAt DateTime
+  revokedAt DateTime?
+
+  userAgent String?
+  ipAddress String?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ============================================================
+// PORTFOLIO
+// ============================================================
+
+model Portfolio {
+  id String @id @default(uuid())
+
+  userId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  name        String  @default("Main Portfolio")
+  description String?
+
+  // Virtual trading money
+  startingBalance Decimal @default(10000) @db.Decimal(18, 8)
+  cashBalance     Decimal @default(10000) @db.Decimal(18, 8)
+
+  isDefault Boolean @default(false)
+  isActive  Boolean @default(true)
+
+  // Relations
+  holdings Holding[]
+  orders   Order[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, name])
+  @@index([userId])
+  @@index([userId, isActive])
+}
+
+// ============================================================
+// HOLDING
+// ============================================================
+
+model Holding {
+  id String @id @default(uuid())
+
+  portfolioId String
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  symbol    String
+  assetType AssetType
+
+  quantity        Decimal @db.Decimal(18, 8)
+  averageBuyPrice Decimal @db.Decimal(18, 8)
+  totalInvested   Decimal @db.Decimal(18, 8)
+
+  isShort Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([portfolioId, symbol])
+  @@index([portfolioId])
+  @@index([symbol])
+}
+
+// ============================================================
+// ORDER
+// ============================================================
+
+model Order {
+  id String @id @default(uuid())
+
+  portfolioId String
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  symbol    String
+  assetType AssetType
+
+  side   OrderSide
+  type   OrderType
+  status OrderStatus @default(PENDING)
+
+  quantity Decimal @db.Decimal(18, 8)
+
+  // Used by LIMIT / STOP / TAKE-PROFIT orders
+  limitPrice Decimal? @db.Decimal(18, 8)
+  stopPrice  Decimal? @db.Decimal(18, 8)
+
+  // Filled price for executed orders
+  executedPrice Decimal? @db.Decimal(18, 8)
+
+  executedAt DateTime?
+  expiresAt  DateTime?
+
+  notes String?
+
+  source OrderSource @default(MANUAL)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([portfolioId])
+  @@index([portfolioId, status])
+  @@index([status, createdAt])
+  @@index([symbol, status])
 }
