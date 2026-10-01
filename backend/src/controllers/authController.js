@@ -5,6 +5,7 @@ const {
   loginSchema,
   refreshTokenSchema,
   googleLoginSchema,
+  updateProfileSchema,
 } = require("../validators/authValidator");
 const {
   registerUser,
@@ -13,6 +14,7 @@ const {
   revokeRefreshToken,
   loginWithGoogle,
   getCurrentUser,
+  updateProfile,
 } = require("../services/authService");
 
 async function register(req, res) {
@@ -391,6 +393,51 @@ async function currentUser(req, res) {
   }
 }
 
+async function updateCurrentUser(req, res) {
+  try {
+    const profileData = updateProfileSchema.parse(req.body);
+
+    const user = await updateProfile(req.user.userId, profileData);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        user,
+      },
+    });
+  } catch (error) {
+    if (error instanceof ZodError) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: "VALIDATION_ERROR",
+          message: error.issues[0]?.message || "Invalid profile data.",
+        },
+      });
+    }
+
+    if (error.statusCode) {
+      return res.status(error.statusCode).json({
+        success: false,
+        error: {
+          code: error.code || "PROFILE_UPDATE_ERROR",
+          message: error.message,
+        },
+      });
+    }
+
+    console.error("Update profile error:", error);
+
+    return res.status(500).json({
+      success: false,
+      error: {
+        code: "INTERNAL_SERVER_ERROR",
+        message: "An unexpected error occurred.",
+      },
+    });
+  }
+}
+
 module.exports = {
   register,
   login,
@@ -398,4 +445,5 @@ module.exports = {
   logout,
   google,
   currentUser,
+  updateCurrentUser,
 };

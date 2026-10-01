@@ -7,6 +7,7 @@ const {
   logout,
   google,
   currentUser,
+  updateCurrentUser,
 } = require("../controllers/authController");
 
 const authMiddleware = require("../middleware/auth");
@@ -18,7 +19,7 @@ router.post("/login", login);
 router.post("/refresh", refresh);
 router.post("/logout", logout);
 router.post("/google", google);
-
 router.get("/me", authMiddleware, currentUser);
+router.patch("/profile", authMiddleware, updateCurrentUser);
 
 module.exports = router;
