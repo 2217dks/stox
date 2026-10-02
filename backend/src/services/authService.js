@@ -669,6 +669,47 @@ async function getCurrentUser(userId) {
   return sanitizeUser(user);
 }
 
+async function updateProfile(userId, profileData) {
+  const user = await prisma.user.findUnique({
+    where: {
+      id: userId,
+    },
+  });
+
+  if (!user) {
+    const error = new Error("User not found.");
+    error.statusCode = 404;
+    error.code = "USER_NOT_FOUND";
+    throw error;
+  }
+
+  if (user.isSuspended) {
+    const error = new Error("Account is suspended.");
+    error.statusCode = 403;
+    error.code = "ACCOUNT_SUSPENDED";
+    throw error;
+  }
+
+  const data = {};
+
+  if (profileData.name !== undefined) {
+    data.name = profileData.name;
+  }
+
+  if (profileData.avatarUrl !== undefined) {
+    data.avatarUrl = profileData.avatarUrl;
+  }
+
+  const updatedUser = await prisma.user.update({
+    where: {
+      id: userId,
+    },
+    data,
+  });
+
+  return sanitizeUser(updatedUser);
+}
+
 module.exports = {
   normalizeEmail,
   validatePasswordStrength,
@@ -684,4 +725,5 @@ module.exports = {
   revokeRefreshToken,
   loginWithGoogle,
   getCurrentUser,
+  updateProfile,
 };
