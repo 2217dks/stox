@@ -47,9 +47,34 @@ const googleLoginSchema = z.object({
   credential: z.string().trim().min(1, "Google credential is required."),
 });
 
+const updateProfileSchema = z
+  .object({
+    name: z
+      .string()
+      .trim()
+      .min(2, "Name must be at least 2 characters.")
+      .max(100, "Name must not exceed 100 characters.")
+      .optional(),
+
+    avatarUrl: z
+      .union([
+        z
+          .string()
+          .trim()
+          .url("Avatar URL must be a valid URL.")
+          .max(500, "Avatar URL is too long."),
+        z.null(),
+      ])
+      .optional(),
+  })
+  .refine((data) => data.name !== undefined || data.avatarUrl !== undefined, {
+    message: "At least one profile field must be provided.",
+  });
+
 module.exports = {
   registerSchema,
   loginSchema,
   refreshTokenSchema,
   googleLoginSchema,
+  updateProfileSchema,
 };
