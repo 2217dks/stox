@@ -7,4 +7,6 @@ const router = express.Router();
 
 router.get("/", authMiddleware, portfolioController.listPortfolios);
 
+router.post("/", authMiddleware, portfolioController.createPortfolio);
+
 module.exports = router;
