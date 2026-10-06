@@ -67,8 +67,9 @@ Key properties:
 - **Operational vs programmer errors.** `AppError` marks expected failures
   (bad input, missing record, conflicts). Unknown errors are presumed to be bugs —
   the client gets a safe generic message; the full stack goes to server logs only.
-- **Log split.** Status ≥ 500 → `console.error` with stack. Status < 500 →
-  one-line `console.warn` (a 401 is traffic, not an incident).
+- **Log split (winston via `src/utils/logger.js`).** Status ≥ 500 →
+  `logger.error` with stack. Status < 500 → one-line `logger.warn`
+  (a 401 is traffic, not an incident).
 - **`notFound` middleware** (`src/middleware/notFound.js`) manufactures a 404
   `AppError` for unmatched routes and delegates to the handler — mounted after all
   routes, before the error handler, in `src/app.js`.
@@ -234,8 +235,9 @@ router.patch("/profile", authMiddleware, validate(updateProfileSchema), updateCu
 3. **Sending sensitive internals to clients** — raw `err.message` from unknown
    errors can leak DB URLs or stack info. Only `AppError`/ZodError messages are
    exposed verbatim.
-4. **`console.error` per-controller** — the handler already logs; duplicates pollute
-   logs. Remove them.
+4. **`console.error` per-controller** — the winston logger
+   (`src/utils/logger.js`) is the single logging pipeline; the error handler
+   and request logger already emit. Duplicates pollute logs.
 5. **Catching a ZodError to format it yourself** — the handler's `ZodError` rung
    already does this. Let it propagate.
 6. **Throwing a raw `new Error("User-facing message")`** — becomes a 500 with a
@@ -262,7 +264,7 @@ assert(res.body.error?.code === "INVALID_CREDENTIALS");
 
 - Manual smoke checks: unknown route → `ROUTE_NOT_FOUND`; garbage body →
   `VALIDATION_ERROR` with `details`; duplicate email → `EMAIL_ALREADY_EXISTS`.
-- Log check: 4xx → `console.warn` line; 5xx → `console.error` + stack.
+- Log check: 4xx → `logger.warn` line; 5xx → `logger.error` + stack.
 
 ---
 
