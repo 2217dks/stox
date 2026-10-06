@@ -172,9 +172,38 @@ async function listPortfolioHoldings(userId, portfolioId) {
   }));
 }
 
+async function getPortfolioCashBalance(userId, portfolioId) {
+  await ensureActiveUser(userId);
+
+  const portfolio = await prisma.portfolio.findFirst({
+    where: {
+      id: portfolioId,
+      userId,
+    },
+    select: {
+      id: true,
+      cashBalance: true,
+    },
+  });
+
+  if (!portfolio) {
+    throw createServiceError(
+      "Portfolio not found.",
+      404,
+      "PORTFOLIO_NOT_FOUND",
+    );
+  }
+
+  return {
+    portfolioId: portfolio.id,
+    cashBalance: portfolio.cashBalance.toString(),
+  };
+}
+
 module.exports = {
   listUserPortfolios,
   getPortfolioById,
   createPortfolio,
   listPortfolioHoldings,
+  getPortfolioCashBalance,
 };
