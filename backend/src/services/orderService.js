@@ -1,11 +1,5 @@
 const prisma = require("../config/database");
-
-function createServiceError(message, statusCode, code) {
-  const error = new Error(message);
-  error.statusCode = statusCode;
-  error.code = code;
-  return error;
-}
+const { AppError } = require("../utils/errors");
 
 async function ensureActiveUser(userId) {
   const user = await prisma.user.findUnique({
@@ -17,11 +11,11 @@ async function ensureActiveUser(userId) {
   });
 
   if (!user) {
-    throw createServiceError("User not found.", 404, "USER_NOT_FOUND");
+    throw AppError.notFound("User not found.", "USER_NOT_FOUND");
   }
 
   if (user.isSuspended) {
-    throw createServiceError("Account is suspended.", 403, "ACCOUNT_SUSPENDED");
+    throw AppError.forbidden("Account is suspended.", "ACCOUNT_SUSPENDED");
   }
 
   return user;
@@ -40,19 +34,11 @@ async function getOwnedActivePortfolio(userId, portfolioId) {
   });
 
   if (!portfolio) {
-    throw createServiceError(
-      "Portfolio not found.",
-      404,
-      "PORTFOLIO_NOT_FOUND",
-    );
+    throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
   }
 
   if (!portfolio.isActive) {
-    throw createServiceError(
-      "Portfolio is inactive.",
-      400,
-      "PORTFOLIO_INACTIVE",
-    );
+    throw AppError.badRequest("Portfolio is inactive.", "PORTFOLIO_INACTIVE");
   }
 
   return portfolio;
@@ -73,13 +59,12 @@ async function createMarketOrder({
   const normalizedSymbol = symbol.trim().toUpperCase();
 
   if (!normalizedSymbol) {
-    throw createServiceError("Symbol is required.", 400, "SYMBOL_REQUIRED");
+    throw AppError.badRequest("Symbol is required.", "SYMBOL_REQUIRED");
   }
 
   if (!quantity || /^0+(\.0+)?$/.test(quantity)) {
-    throw createServiceError(
+    throw AppError.badRequest(
       "Quantity must be greater than zero.",
-      400,
       "INVALID_QUANTITY",
     );
   }
