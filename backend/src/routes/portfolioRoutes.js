@@ -9,4 +9,10 @@ router.get("/", authMiddleware, portfolioController.listPortfolios);
 
 router.post("/", authMiddleware, portfolioController.createPortfolio);
 
+router.get(
+  "/:portfolioId/holdings",
+  authMiddleware,
+  portfolioController.getPortfolioHoldings,
+);
+
 module.exports = router;
