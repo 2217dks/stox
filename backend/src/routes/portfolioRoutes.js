@@ -15,4 +15,10 @@ router.get(
   portfolioController.getPortfolioHoldings,
 );
 
+router.get(
+  "/:portfolioId/cash-balance",
+  authMiddleware,
+  portfolioController.getCashBalance,
+);
+
 module.exports = router;
