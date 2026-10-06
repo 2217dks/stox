@@ -1,5 +1,6 @@
 const { ZodError } = require("zod");
 const { AppError } = require("../utils/errors");
+const logger = require("../utils/logger");
 
 function errorHandler(err, req, res, next) {
   let statusCode = 500;
@@ -41,12 +42,12 @@ function errorHandler(err, req, res, next) {
   };
 
   if (statusCode >= 500) {
-    console.error(
-      `[errorHandler] ${JSON.stringify(logEntry)}`,
-      stack ? `\n${stack}` : "",
-    );
+    logger.error("error handler response", {
+      ...logEntry,
+      stack: stack || undefined,
+    });
   } else {
-    console.warn(`[errorHandler] ${JSON.stringify(logEntry)}`);
+    logger.warn("error handler response", logEntry);
   }
 
   const body = {
