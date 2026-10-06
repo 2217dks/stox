@@ -22,6 +22,14 @@ function errorHandler(err, req, res, next) {
       path: issue.path.join("."),
       message: issue.message,
     }));
+  } else if (
+    typeof err.statusCode === "number" &&
+    err.statusCode >= 400 &&
+    err.statusCode < 600
+  ) {
+    statusCode = err.statusCode;
+    code = typeof err.code === "string" ? err.code : "REQUEST_ERROR";
+    message = err.message;
   }
 
   const logEntry = {

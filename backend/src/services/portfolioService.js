@@ -1,12 +1,8 @@
 const prisma = require("../config/database");
+const { AppError } = require("../utils/errors");
 
 function createServiceError(message, statusCode, code) {
-  const error = new Error(message);
-
-  error.statusCode = statusCode;
-  error.code = code;
-
-  return error;
+  return new AppError(message, { statusCode, code });
 }
 
 async function ensureActiveUser(userId) {
