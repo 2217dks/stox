@@ -12,7 +12,9 @@ function authMiddleware(req, res, next) {
 
   const [scheme, token] = authorization.split(" ");
 
-  if (scheme !== "Bearer" || !token) {
+  // RFC 7235 §2.1: the auth-scheme token is case-insensitive
+  // ("bearer", "Bearer", "BEARER" are all valid).
+  if (scheme.toLowerCase() !== "bearer" || !token) {
     return next(
       AppError.unauthorized("Invalid authorization header.", "INVALID_AUTH_HEADER"),
     );
