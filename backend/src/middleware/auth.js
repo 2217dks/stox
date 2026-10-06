@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const { AppError } = require("../utils/errors");
 
 require("dotenv").config();
 
@@ -6,25 +7,15 @@ function authMiddleware(req, res, next) {
   const authorization = req.headers.authorization;
 
   if (!authorization) {
-    return res.status(401).json({
-      success: false,
-      error: {
-        code: "UNAUTHORIZED",
-        message: "Authentication required.",
-      },
-    });
+    return next(AppError.unauthorized());
   }
 
   const [scheme, token] = authorization.split(" ");
 
   if (scheme !== "Bearer" || !token) {
-    return res.status(401).json({
-      success: false,
-      error: {
-        code: "INVALID_AUTH_HEADER",
-        message: "Invalid authorization header.",
-      },
-    });
+    return next(
+      AppError.unauthorized("Invalid authorization header.", "INVALID_AUTH_HEADER"),
+    );
   }
 
   try {
@@ -33,13 +24,9 @@ function authMiddleware(req, res, next) {
     });
 
     if (!decoded.userId) {
-      return res.status(401).json({
-        success: false,
-        error: {
-          code: "INVALID_ACCESS_TOKEN",
-          message: "Invalid access token.",
-        },
-      });
+      return next(
+        AppError.unauthorized("Invalid access token.", "INVALID_ACCESS_TOKEN"),
+      );
     }
 
     req.user = {
@@ -50,13 +37,12 @@ function authMiddleware(req, res, next) {
 
     next();
   } catch (error) {
-    return res.status(401).json({
-      success: false,
-      error: {
-        code: "INVALID_ACCESS_TOKEN",
-        message: "Invalid or expired access token.",
-      },
-    });
+    return next(
+      AppError.unauthorized(
+        "Invalid or expired access token.",
+        "INVALID_ACCESS_TOKEN",
+      ),
+    );
   }
 }
 
