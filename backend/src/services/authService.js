@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const { OAuth2Client } = require("google-auth-library");
+const { AppError } = require("../utils/errors");
 
 const prisma = require("../config/database");
 
@@ -268,13 +269,11 @@ async function registerUser({ name, email, password, userAgent, ipAddress }) {
   const passwordValidation = validatePasswordStrength(password);
 
   if (!passwordValidation.valid) {
-    const error = new Error(passwordValidation.errors.join(" "));
-
-    error.code = "WEAK_PASSWORD";
-    error.statusCode = 400;
-    error.details = passwordValidation.errors;
-
-    throw error;
+    throw AppError.badRequest(
+      passwordValidation.errors.join(" "),
+      "WEAK_PASSWORD",
+      passwordValidation.errors,
+    );
   }
 
   const existingUser = await prisma.user.findUnique({
@@ -284,10 +283,10 @@ async function registerUser({ name, email, password, userAgent, ipAddress }) {
   });
 
   if (existingUser) {
-    const error = new Error("An account with this email already exists.");
-    error.code = "EMAIL_ALREADY_EXISTS";
-    error.statusCode = 409;
-    throw error;
+    throw AppError.conflict(
+      "An account with this email already exists.",
+      "EMAIL_ALREADY_EXISTS",
+    );
   }
 
   const passwordHash = await hashPassword(password);
@@ -341,33 +340,21 @@ async function loginUser({ email, password, userAgent, ipAddress }) {
   });
 
   if (!user) {
-    const error = new Error("Invalid email or password.");
-    error.code = "INVALID_CREDENTIALS";
-    error.statusCode = 401;
-    throw error;
+    throw AppError.unauthorized("Invalid email or password.", "INVALID_CREDENTIALS");
   }
 
   if (user.isSuspended) {
-    const error = new Error("This account has been suspended.");
-    error.code = "ACCOUNT_SUSPENDED";
-    error.statusCode = 403;
-    throw error;
+    throw AppError.forbidden("This account has been suspended.", "ACCOUNT_SUSPENDED");
   }
 
   if (!user || !user.passwordHash) {
-    const error = new Error("Invalid email or password.");
-    error.statusCode = 401;
-    error.code = "INVALID_CREDENTIALS";
-    throw error;
+    throw AppError.unauthorized("Invalid email or password.", "INVALID_CREDENTIALS");
   }
 
   const passwordMatches = await verifyPassword(password, user.passwordHash);
 
   if (!passwordMatches) {
-    const error = new Error("Invalid email or password.");
-    error.code = "INVALID_CREDENTIALS";
-    error.statusCode = 401;
-    throw error;
+    throw AppError.unauthorized("Invalid email or password.", "INVALID_CREDENTIALS");
   }
 
   const result = await prisma.$transaction(async (tx) => {
@@ -414,10 +401,7 @@ async function loginUser({ email, password, userAgent, ipAddress }) {
  */
 async function refreshAccessToken({ refreshToken, userAgent, ipAddress }) {
   if (!refreshToken) {
-    const error = new Error("Refresh token is required.");
-    error.code = "REFRESH_TOKEN_REQUIRED";
-    error.statusCode = 401;
-    throw error;
+    throw AppError.unauthorized("Refresh token is required.", "REFRESH_TOKEN_REQUIRED");
   }
 
   const hashedToken = hashRefreshToken(refreshToken);
@@ -432,31 +416,19 @@ async function refreshAccessToken({ refreshToken, userAgent, ipAddress }) {
   });
 
   if (!storedToken) {
-    const error = new Error("Invalid refresh token.");
-    error.code = "INVALID_REFRESH_TOKEN";
-    error.statusCode = 401;
-    throw error;
+    throw AppError.unauthorized("Invalid refresh token.", "INVALID_REFRESH_TOKEN");
   }
 
   if (storedToken.revokedAt) {
-    const error = new Error("Refresh token has been revoked.");
-    error.code = "REFRESH_TOKEN_REVOKED";
-    error.statusCode = 401;
-    throw error;
+    throw AppError.unauthorized("Refresh token has been revoked.", "REFRESH_TOKEN_REVOKED");
   }
 
   if (storedToken.expiresAt <= new Date()) {
-    const error = new Error("Refresh token has expired.");
-    error.code = "REFRESH_TOKEN_EXPIRED";
-    error.statusCode = 401;
-    throw error;
+    throw AppError.unauthorized("Refresh token has expired.", "REFRESH_TOKEN_EXPIRED");
   }
 
   if (storedToken.user.isSuspended) {
-    const error = new Error("This account has been suspended.");
-    error.code = "ACCOUNT_SUSPENDED";
-    error.statusCode = 403;
-    throw error;
+    throw AppError.forbidden("This account has been suspended.", "ACCOUNT_SUSPENDED");
   }
 
   const result = await prisma.$transaction(async (tx) => {
@@ -510,10 +482,7 @@ async function revokeRefreshToken(refreshToken) {
 
 async function loginWithGoogle(credential) {
   if (!credential) {
-    const error = new Error("Google credential is required.");
-    error.statusCode = 400;
-    error.code = "GOOGLE_CREDENTIAL_REQUIRED";
-    throw error;
+    throw AppError.badRequest("Google credential is required.", "GOOGLE_CREDENTIAL_REQUIRED");
   }
 
   let ticket;
@@ -524,19 +493,13 @@ async function loginWithGoogle(credential) {
       audience: process.env.GOOGLE_CLIENT_ID,
     });
   } catch (error) {
-    const authError = new Error("Invalid Google credential.");
-    authError.statusCode = 401;
-    authError.code = "INVALID_GOOGLE_TOKEN";
-    throw authError;
+    throw AppError.unauthorized("Invalid Google credential.", "INVALID_GOOGLE_TOKEN");
   }
 
   const payload = ticket.getPayload();
 
   if (!payload) {
-    const error = new Error("Invalid Google account payload.");
-    error.statusCode = 401;
-    error.code = "INVALID_GOOGLE_TOKEN";
-    throw error;
+    throw AppError.unauthorized("Invalid Google account payload.", "INVALID_GOOGLE_TOKEN");
   }
 
   const {
@@ -548,10 +511,10 @@ async function loginWithGoogle(credential) {
   } = payload;
 
   if (!googleId || !email) {
-    const error = new Error("Google account information is incomplete.");
-    error.statusCode = 401;
-    error.code = "INVALID_GOOGLE_ACCOUNT";
-    throw error;
+    throw AppError.unauthorized(
+      "Google account information is incomplete.",
+      "INVALID_GOOGLE_ACCOUNT",
+    );
   }
 
   const normalizedEmail = normalizeEmail(email);
@@ -565,10 +528,7 @@ async function loginWithGoogle(credential) {
   // Existing Google-linked account
   if (user) {
     if (user.isSuspended) {
-      const error = new Error("Account is suspended.");
-      error.statusCode = 403;
-      error.code = "ACCOUNT_SUSPENDED";
-      throw error;
+      throw AppError.forbidden("Account is suspended.", "ACCOUNT_SUSPENDED");
     }
 
     const result = await prisma.$transaction(async (tx) => {
@@ -601,14 +561,10 @@ async function loginWithGoogle(credential) {
   });
 
   if (existingEmailUser) {
-    const error = new Error(
+    throw AppError.conflict(
       "An account already exists with this email. Sign in with your password before linking Google.",
+      "GOOGLE_ACCOUNT_LINK_REQUIRED",
     );
-
-    error.statusCode = 409;
-    error.code = "GOOGLE_ACCOUNT_LINK_REQUIRED";
-
-    throw error;
   }
 
   // New Google account
@@ -653,17 +609,11 @@ async function getCurrentUser(userId) {
   });
 
   if (!user) {
-    const error = new Error("User not found.");
-    error.statusCode = 404;
-    error.code = "USER_NOT_FOUND";
-    throw error;
+    throw AppError.notFound("User not found.", "USER_NOT_FOUND");
   }
 
   if (user.isSuspended) {
-    const error = new Error("Account is suspended.");
-    error.statusCode = 403;
-    error.code = "ACCOUNT_SUSPENDED";
-    throw error;
+    throw AppError.forbidden("Account is suspended.", "ACCOUNT_SUSPENDED");
   }
 
   return sanitizeUser(user);
@@ -677,17 +627,11 @@ async function updateProfile(userId, profileData) {
   });
 
   if (!user) {
-    const error = new Error("User not found.");
-    error.statusCode = 404;
-    error.code = "USER_NOT_FOUND";
-    throw error;
+    throw AppError.notFound("User not found.", "USER_NOT_FOUND");
   }
 
   if (user.isSuspended) {
-    const error = new Error("Account is suspended.");
-    error.statusCode = 403;
-    error.code = "ACCOUNT_SUSPENDED";
-    throw error;
+    throw AppError.forbidden("Account is suspended.", "ACCOUNT_SUSPENDED");
   }
 
   const data = {};

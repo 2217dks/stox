@@ -2,12 +2,14 @@ const express = require("express");
 const request = require("supertest");
 
 const authRoutes = require("../src/routes/authRoutes");
+const errorHandler = require("../src/middleware/errorHandler");
 const prisma = require("../src/config/database");
 
 const app = express();
 
 app.use(express.json());
 app.use("/api/v1/auth", authRoutes);
+app.use(errorHandler);
 
 async function main() {
   const email = `me-test-${Date.now()}@stox.local`;
