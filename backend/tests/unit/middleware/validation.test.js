@@ -24,7 +24,7 @@ describe("validation middleware", () => {
     expect(next).toHaveBeenCalledTimes(1);
   });
 
-  test("validates and replaces req.query", () => {
+  test("validates and stores parsed req.query in a separate property", () => {
     const schema = z.object({
       page: z.coerce.number().int().min(1),
     });
@@ -37,16 +37,20 @@ describe("validation middleware", () => {
 
     const next = jest.fn();
 
-    validate(schema, "query")(req, {}, next);
+    validate(schema, "query", "validatedQuery")(req, {}, next);
 
     expect(req.query).toEqual({
+      page: "2",
+    });
+
+    expect(req.validatedQuery).toEqual({
       page: 2,
     });
 
     expect(next).toHaveBeenCalledTimes(1);
   });
 
-  test("validates and replaces req.params", () => {
+  test("validates and stores parsed req.params in a separate property", () => {
     const schema = z.object({
       userId: z.string().uuid(),
     });
@@ -61,16 +65,42 @@ describe("validation middleware", () => {
 
     const next = jest.fn();
 
-    validate(schema, "params")(req, {}, next);
+    validate(schema, "params", "validatedParams")(req, {}, next);
 
     expect(req.params).toEqual({
+      userId,
+    });
+
+    expect(req.validatedParams).toEqual({
       userId,
     });
 
     expect(next).toHaveBeenCalledTimes(1);
   });
 
-  test("forwards validation errors", () => {
+  test("uses the source property as the destination by default", () => {
+    const schema = z.object({
+      value: z.string().trim(),
+    });
+
+    const req = {
+      body: {
+        value: "  test  ",
+      },
+    };
+
+    const next = jest.fn();
+
+    validate(schema)(req, {}, next);
+
+    expect(req.body).toEqual({
+      value: "test",
+    });
+
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  test("throws when validation fails", () => {
     const schema = z.object({
       page: z.coerce.number().int().min(1),
     });
@@ -83,8 +113,11 @@ describe("validation middleware", () => {
 
     const next = jest.fn();
 
-    expect(() => validate(schema, "query")(req, {}, next)).toThrow();
+    expect(() =>
+      validate(schema, "query", "validatedQuery")(req, {}, next),
+    ).toThrow();
 
     expect(next).not.toHaveBeenCalled();
+    expect(req.validatedQuery).toBeUndefined();
   });
 });
