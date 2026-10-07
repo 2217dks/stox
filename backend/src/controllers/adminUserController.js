@@ -1,4 +1,7 @@
-const { listAdminUsers } = require("../services/adminUserService");
+const {
+  listAdminUsers,
+  getAdminUserById,
+} = require("../services/adminUserService");
 
 async function listUsers(req, res, next) {
   try {
@@ -13,6 +16,24 @@ async function listUsers(req, res, next) {
   }
 }
 
+async function getUser(req, res, next) {
+  try {
+    const { userId } = req.params;
+
+    const user = await getAdminUserById(userId);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        user,
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   listUsers,
+  getUser,
 };

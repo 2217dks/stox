@@ -6,6 +6,7 @@ const { requireRole } = require("../middleware/rbac");
 
 const {
   adminUserListQuerySchema,
+  adminUserParamsSchema,
 } = require("../validators/adminUserValidator");
 
 const adminUserController = require("../controllers/adminUserController");
@@ -18,6 +19,14 @@ router.get(
   requireRole("ADMIN"),
   validate(adminUserListQuerySchema, "query"),
   adminUserController.listUsers,
+);
+
+router.get(
+  "/users/:userId",
+  authMiddleware,
+  requireRole("ADMIN"),
+  validate(adminUserParamsSchema, "params"),
+  adminUserController.getUser,
 );
 
 module.exports = router;
