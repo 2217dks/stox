@@ -5,6 +5,7 @@ const routes = require("./routes");
 const requestLogger = require("./middleware/requestLogger");
 const notFoundHandler = require("./middleware/notFound");
 const errorHandler = require("./middleware/errorHandler");
+const { globalLimiter } = require("./middleware/rateLimiter");
 
 const app = express();
 
@@ -18,6 +19,7 @@ app.use(
 );
 
 app.use(express.json());
+app.use("/api", globalLimiter);
 
 app.use("/api/v1", routes);
 app.use(notFoundHandler);

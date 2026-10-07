@@ -20,12 +20,13 @@ const {
 
 const authMiddleware = require("../middleware/auth");
 const validate = require("../middleware/validation");
+const { authLimiter } = require("../middleware/rateLimiter");
 
 const router = express.Router();
 
-router.post("/register", validate(registerSchema), register);
-router.post("/login", validate(loginSchema), login);
-router.post("/refresh", validate(refreshTokenSchema), refresh);
+router.post("/register", authLimiter, validate(registerSchema), register);
+router.post("/login", authLimiter, validate(loginSchema), login);
+router.post("/refresh", authLimiter, validate(refreshTokenSchema), refresh);
 router.post("/logout", validate(refreshTokenSchema), logout);
 router.post("/google", validate(googleLoginSchema), google);
 router.get("/me", authMiddleware, currentUser);
