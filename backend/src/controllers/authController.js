@@ -1,12 +1,3 @@
-const { ZodError } = require("zod");
-
-const {
-  registerSchema,
-  loginSchema,
-  refreshTokenSchema,
-  googleLoginSchema,
-  updateProfileSchema,
-} = require("../validators/authValidator");
 const {
   registerUser,
   loginUser,
@@ -17,266 +8,80 @@ const {
   updateProfile,
 } = require("../services/authService");
 
-async function register(req, res) {
+async function register(req, res, next) {
   try {
-    // --------------------------------------------------------
-    // 1. Validate request body
-    // --------------------------------------------------------
-
-    const validatedData = registerSchema.parse(req.body);
-
-    // --------------------------------------------------------
-    // 2. Collect request metadata
-    // --------------------------------------------------------
+    const { name, email, password } = req.body;
 
     const userAgent = req.get("user-agent") || null;
     const ipAddress = req.ip || null;
 
-    // --------------------------------------------------------
-    // 3. Call authentication service
-    // --------------------------------------------------------
-
     const result = await registerUser({
-      name: validatedData.name,
-      email: validatedData.email,
-      password: validatedData.password,
+      name,
+      email,
+      password,
       userAgent,
       ipAddress,
     });
-
-    // --------------------------------------------------------
-    // 4. Return created user + tokens
-    // --------------------------------------------------------
 
     return res.status(201).json({
       success: true,
       data: result,
     });
   } catch (error) {
-    // --------------------------------------------------------
-    // Validation errors
-    // --------------------------------------------------------
-
-    if (error instanceof ZodError) {
-      return res.status(400).json({
-        success: false,
-        error: {
-          code: "VALIDATION_ERROR",
-          message: "Request validation failed.",
-          details: error.issues,
-        },
-      });
-    }
-
-    // --------------------------------------------------------
-    // Known service errors
-    // --------------------------------------------------------
-
-    if (error.statusCode) {
-      return res.status(error.statusCode).json({
-        success: false,
-        error: {
-          code: error.code || "AUTH_ERROR",
-          message: error.message,
-          ...(error.details ? { details: error.details } : {}),
-        },
-      });
-    }
-
-    // --------------------------------------------------------
-    // Unexpected error
-    // --------------------------------------------------------
-
-    console.error("Registration error:", error);
-
-    return res.status(500).json({
-      success: false,
-      error: {
-        code: "INTERNAL_SERVER_ERROR",
-        message: "An unexpected error occurred.",
-      },
-    });
+    return next(error);
   }
 }
 
-async function login(req, res) {
+async function login(req, res, next) {
   try {
-    // --------------------------------------------------------
-    // 1. Validate request body
-    // --------------------------------------------------------
-
-    const validatedData = loginSchema.parse(req.body);
-
-    // --------------------------------------------------------
-    // 2. Collect request metadata
-    // --------------------------------------------------------
+    const { email, password } = req.body;
 
     const userAgent = req.get("user-agent") || null;
     const ipAddress = req.ip || null;
-
-    // --------------------------------------------------------
-    // 3. Call authentication service
-    // --------------------------------------------------------
 
     const result = await loginUser({
-      email: validatedData.email,
-      password: validatedData.password,
+      email,
+      password,
       userAgent,
       ipAddress,
     });
-
-    // --------------------------------------------------------
-    // 4. Return authenticated user + tokens
-    // --------------------------------------------------------
 
     return res.status(200).json({
       success: true,
       data: result,
     });
   } catch (error) {
-    // --------------------------------------------------------
-    // Validation errors
-    // --------------------------------------------------------
-
-    if (error instanceof ZodError) {
-      return res.status(400).json({
-        success: false,
-        error: {
-          code: "VALIDATION_ERROR",
-          message: "Request validation failed.",
-          details: error.issues,
-        },
-      });
-    }
-
-    // --------------------------------------------------------
-    // Known authentication errors
-    // --------------------------------------------------------
-
-    if (error.statusCode) {
-      return res.status(error.statusCode).json({
-        success: false,
-        error: {
-          code: error.code || "AUTH_ERROR",
-          message: error.message,
-          ...(error.details ? { details: error.details } : {}),
-        },
-      });
-    }
-
-    // --------------------------------------------------------
-    // Unexpected error
-    // --------------------------------------------------------
-
-    console.error("Login error:", error);
-
-    return res.status(500).json({
-      success: false,
-      error: {
-        code: "INTERNAL_SERVER_ERROR",
-        message: "An unexpected error occurred.",
-      },
-    });
+    return next(error);
   }
 }
 
-async function refresh(req, res) {
+async function refresh(req, res, next) {
   try {
-    // --------------------------------------------------------
-    // 1. Validate request body
-    // --------------------------------------------------------
-
-    const validatedData = refreshTokenSchema.parse(req.body);
-
-    // --------------------------------------------------------
-    // 2. Collect request metadata
-    // --------------------------------------------------------
+    const { refreshToken } = req.body;
 
     const userAgent = req.get("user-agent") || null;
     const ipAddress = req.ip || null;
 
-    // --------------------------------------------------------
-    // 3. Rotate the refresh token
-    // --------------------------------------------------------
-
     const result = await refreshAccessToken({
-      refreshToken: validatedData.refreshToken,
+      refreshToken,
       userAgent,
       ipAddress,
     });
-
-    // --------------------------------------------------------
-    // 4. Return the new token pair
-    // --------------------------------------------------------
 
     return res.status(200).json({
       success: true,
       data: result,
     });
   } catch (error) {
-    // --------------------------------------------------------
-    // Validation errors
-    // --------------------------------------------------------
-
-    if (error instanceof ZodError) {
-      return res.status(400).json({
-        success: false,
-        error: {
-          code: "VALIDATION_ERROR",
-          message: "Request validation failed.",
-          details: error.issues,
-        },
-      });
-    }
-
-    // --------------------------------------------------------
-    // Known authentication errors
-    // --------------------------------------------------------
-
-    if (error.statusCode) {
-      return res.status(error.statusCode).json({
-        success: false,
-        error: {
-          code: error.code || "AUTH_ERROR",
-          message: error.message,
-          ...(error.details ? { details: error.details } : {}),
-        },
-      });
-    }
-
-    // --------------------------------------------------------
-    // Unexpected error
-    // --------------------------------------------------------
-
-    console.error("Refresh-token error:", error);
-
-    return res.status(500).json({
-      success: false,
-      error: {
-        code: "INTERNAL_SERVER_ERROR",
-        message: "An unexpected error occurred.",
-      },
-    });
+    return next(error);
   }
 }
 
-async function logout(req, res) {
+async function logout(req, res, next) {
   try {
-    // --------------------------------------------------------
-    // 1. Validate request body
-    // --------------------------------------------------------
+    const { refreshToken } = req.body;
 
-    const validatedData = refreshTokenSchema.parse(req.body);
-
-    // --------------------------------------------------------
-    // 2. Revoke refresh token
-    // --------------------------------------------------------
-
-    const revoked = await revokeRefreshToken(validatedData.refreshToken);
-
-    // --------------------------------------------------------
-    // 3. Return logout response
-    // --------------------------------------------------------
+    const revoked = await revokeRefreshToken(refreshToken);
 
     return res.status(200).json({
       success: true,
@@ -286,40 +91,13 @@ async function logout(req, res) {
       },
     });
   } catch (error) {
-    // --------------------------------------------------------
-    // Validation errors
-    // --------------------------------------------------------
-
-    if (error instanceof ZodError) {
-      return res.status(400).json({
-        success: false,
-        error: {
-          code: "VALIDATION_ERROR",
-          message: "Request validation failed.",
-          details: error.issues,
-        },
-      });
-    }
-
-    // --------------------------------------------------------
-    // Unexpected error
-    // --------------------------------------------------------
-
-    console.error("Logout error:", error);
-
-    return res.status(500).json({
-      success: false,
-      error: {
-        code: "INTERNAL_SERVER_ERROR",
-        message: "An unexpected error occurred.",
-      },
-    });
+    return next(error);
   }
 }
 
-const google = async (req, res) => {
+async function google(req, res, next) {
   try {
-    const { credential } = googleLoginSchema.parse(req.body);
+    const { credential } = req.body;
 
     const result = await loginWithGoogle(credential);
 
@@ -328,39 +106,11 @@ const google = async (req, res) => {
       data: result,
     });
   } catch (error) {
-    if (error instanceof ZodError) {
-      return res.status(400).json({
-        success: false,
-        error: {
-          code: "VALIDATION_ERROR",
-          message: error.issues[0]?.message || "Invalid request.",
-        },
-      });
-    }
-
-    if (error.statusCode) {
-      return res.status(error.statusCode).json({
-        success: false,
-        error: {
-          code: error.code || "AUTH_ERROR",
-          message: error.message,
-        },
-      });
-    }
-
-    console.error("Google authentication error:", error);
-
-    return res.status(500).json({
-      success: false,
-      error: {
-        code: "INTERNAL_SERVER_ERROR",
-        message: "An unexpected error occurred.",
-      },
-    });
+    return next(error);
   }
-};
+}
 
-async function currentUser(req, res) {
+async function currentUser(req, res, next) {
   try {
     const user = await getCurrentUser(req.user.userId);
 
@@ -371,33 +121,13 @@ async function currentUser(req, res) {
       },
     });
   } catch (error) {
-    if (error.statusCode) {
-      return res.status(error.statusCode).json({
-        success: false,
-        error: {
-          code: error.code || "AUTH_ERROR",
-          message: error.message,
-        },
-      });
-    }
-
-    console.error("Get current user error:", error);
-
-    return res.status(500).json({
-      success: false,
-      error: {
-        code: "INTERNAL_SERVER_ERROR",
-        message: "An unexpected error occurred.",
-      },
-    });
+    return next(error);
   }
 }
 
-async function updateCurrentUser(req, res) {
+async function updateCurrentUser(req, res, next) {
   try {
-    const profileData = updateProfileSchema.parse(req.body);
-
-    const user = await updateProfile(req.user.userId, profileData);
+    const user = await updateProfile(req.user.userId, req.body);
 
     return res.status(200).json({
       success: true,
@@ -406,35 +136,7 @@ async function updateCurrentUser(req, res) {
       },
     });
   } catch (error) {
-    if (error instanceof ZodError) {
-      return res.status(400).json({
-        success: false,
-        error: {
-          code: "VALIDATION_ERROR",
-          message: error.issues[0]?.message || "Invalid profile data.",
-        },
-      });
-    }
-
-    if (error.statusCode) {
-      return res.status(error.statusCode).json({
-        success: false,
-        error: {
-          code: error.code || "PROFILE_UPDATE_ERROR",
-          message: error.message,
-        },
-      });
-    }
-
-    console.error("Update profile error:", error);
-
-    return res.status(500).json({
-      success: false,
-      error: {
-        code: "INTERNAL_SERVER_ERROR",
-        message: "An unexpected error occurred.",
-      },
-    });
+    return next(error);
   }
 }
 

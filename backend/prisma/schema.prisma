@@ -130,6 +130,7 @@ model Portfolio {
   // Relations
   holdings Holding[]
   orders   Order[]
+  trades   Trade[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -200,6 +201,7 @@ model Order {
   notes String?
 
   source OrderSource @default(MANUAL)
+  trade  Trade?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -244,4 +246,32 @@ model Symbol {
 
   @@index([symbol])
   @@index([assetType])
+}
+
+// Trade
+// ============================================================
+
+model Trade {
+  id          String @id @default(uuid())
+  portfolioId String
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  orderId String @unique
+
+  order          Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  symbol         String
+  assetType      AssetType
+  side           OrderSide
+  quantity       Decimal   @db.Decimal(18, 8)
+  price          Decimal   @db.Decimal(18, 8)
+  totalValue     Decimal   @db.Decimal(18, 8)
+  fees           Decimal   @default(0) @db.Decimal(18, 8)
+  realizedPnl    Decimal?  @db.Decimal(18, 8)
+  realizedPnlPct Decimal?  @db.Decimal(18, 8)
+  executedAt     DateTime  @default(now())
+
+  @@index([portfolioId])
+  @@index([symbol])
+  @@index([executedAt])
 }

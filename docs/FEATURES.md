@@ -1,218 +1,417 @@
 # ✨ Features
 
-> **Complete feature list + signature challenges for stox.**
+> Complete end-state feature specification for stox.
 
 ---
 
-## 📌 Table of Contents
+# 🎯 Core Trading
 
-- [Core Features (MVP)](#-core-features-mvp)
-- [Advanced Trading Features](#-advanced-trading-features)
-- [Real-Time Features](#-real-time-features)
-- [Social & Gamification](#-social--gamification)
-- [Analytics Features](#-analytics-features)
-- [Notification Features](#-notification-features)
-- [Admin Features](#-admin-features)
-- [Optional / Stretch Features](#-optional--stretch-features)
-- [Signature Challenges](#-signature-challenges)
+## User Accounts
 
----
-
-## 🎯 Core Features (MVP)
-
-| #   | Feature                | Description                                      | Priority |
-| --- | ---------------------- | ------------------------------------------------ | -------- |
-| 1   | **User Registration**  | Email + password signup with bcrypt hashing      | P0       |
-| 2   | **User Login**         | JWT access + refresh tokens                      | P0       |
-| 3   | **Portfolio Creation** | Auto-created on signup with $10,000 virtual cash | P0       |
-| 4   | **Market Order**       | Buy/sell at current market price                 | P0       |
-| 5   | **Real-Time Prices**   | Live price updates for stocks + crypto           | P0       |
-| 6   | **Holdings View**      | See all owned assets and current value           | P0       |
-| 7   | **Trade History**      | Complete audit trail of all trades               | P0       |
-| 8   | **P&L Tracking**       | Realized and unrealized profit/loss              | P0       |
+- Email/password registration
+- JWT authentication
+- Google authentication
+- Secure session management
+- Profile management
+- Notification preferences
 
 ---
 
-## 📈 Advanced Trading Features
+## Virtual Capital
 
-| #   | Feature                 | Description                                | Signature Challenge |
-| --- | ----------------------- | ------------------------------------------ | ------------------- |
-| 9   | **Limit Orders**        | Buy/sell only at specified price           | Background Jobs     |
-| 10  | **Stop-Loss Orders**    | Auto-sell when price drops below threshold | Background Jobs     |
-| 11  | **Take-Profit Orders**  | Auto-sell when price rises above threshold | Background Jobs     |
-| 12  | **Short Selling**       | Profit from price decreases                | Complex Logic       |
-| 13  | **DCA Bot**             | Auto-invest fixed amount at intervals      | Background Jobs     |
-| 14  | **Multiple Portfolios** | Run different strategies separately        | ABAC                |
+Every user receives virtual starting capital.
 
----
+Users can:
 
-## ⚡ Real-Time Features
-
-| #   | Feature                    | Description                             | Signature Challenge   |
-| --- | -------------------------- | --------------------------------------- | --------------------- |
-| 15  | **Live Price Streaming**   | Sub-second price updates via Socket.IO  | Real-time Sync        |
-| 16  | **Order Book Depth**       | Live buy/sell walls (Binance only)      | Real-time Sync        |
-| 17  | **Trade Tape**             | Live feed of every trade (Binance only) | Real-time Sync        |
-| 18  | **Price Alerts**           | Get notified when price hits target     | Notification Pipeline |
-| 19  | **Live Portfolio Updates** | Portfolio value updates in real-time    | Real-time Sync        |
+- Deposit virtual starting capital through supported portfolio creation
+- Maintain multiple portfolios
+- Track cash independently per portfolio
+- Compare strategies across portfolios
 
 ---
 
-## 🎮 Social & Gamification Features
+## Market Orders
 
-| #   | Feature                | Description                           | Signature Challenge |
-| --- | ---------------------- | ------------------------------------- | ------------------- |
-| 20  | **Copy Trading**       | Auto-mirror another trader's trades   | Real-time + Jobs    |
-| 21  | **Social Feed**        | See what traders you follow are doing | Real-time Sync      |
-| 22  | **Leaderboard**        | Rank traders by portfolio return      | Aggregations        |
-| 23  | **Trading Leagues**    | Time-bound competitions               | Background Jobs     |
-| 24  | **Sentiment Voting**   | Community bullish/bearish votes       | Real-time Sync      |
-| 25  | **Achievement Badges** | Unlock badges for milestones          | Background Jobs     |
+Market orders execute against the latest available market price.
 
----
+Supported:
 
-## 📊 Analytics Features
-
-| #   | Feature                      | Description                             | Signature Challenge |
-| --- | ---------------------------- | --------------------------------------- | ------------------- |
-| 26  | **P&L Heatmap**              | GitHub-style daily profit/loss calendar | Aggregations        |
-| 27  | **Risk Metrics**             | Sharpe ratio, max drawdown, volatility  | Complex Queries     |
-| 28  | **Asset Allocation**         | Pie chart of portfolio composition      | Aggregations        |
-| 29  | **Performance vs Benchmark** | Compare against S&P 500 / BTC           | Caching             |
-| 30  | **Win Rate Analysis**        | Percentage of profitable trades         | Aggregations        |
+- BUY
+- SELL
+- Stocks
+- Crypto
+- Forex where market-data support exists
 
 ---
 
-## 🔔 Notification Features
+## Limit Orders
 
-| #   | Feature                       | Description                      | Signature Challenge   |
-| --- | ----------------------------- | -------------------------------- | --------------------- |
-| 31  | **Price Alert Emails**        | Email when alert triggers        | Notification Pipeline |
-| 32  | **Order Execution Alerts**    | Notify when order fills          | Notification Pipeline |
-| 33  | **Daily Digest**              | Summary of portfolio performance | Background Jobs       |
-| 34  | **Achievement Notifications** | Alert when badge unlocked        | Notification Pipeline |
+Users define a maximum/minimum acceptable execution price.
 
----
+Examples:
 
-## 🛡️ Admin Features
-
-| #   | Feature                 | Description                           | Signature Challenge |
-| --- | ----------------------- | ------------------------------------- | ------------------- |
-| 35  | **User Management**     | View, suspend, or delete users        | RBAC                |
-| 36  | **Platform Analytics**  | Total users, trades, volume           | Aggregations        |
-| 37  | **Market Data Monitor** | Health of Finnhub/Binance connections | Monitoring          |
-| 38  | **Report Generation**   | Export platform reports               | Background Jobs     |
-
----
-
-## 🚀 Optional / Stretch Features
-
-| #   | Feature                 | Description                        | Complexity |
-| --- | ----------------------- | ---------------------------------- | ---------- |
-| 39  | **Backtesting Engine**  | Test strategies on historical data | High       |
-| 40  | **Webhook Alerts**      | Send webhooks to external bots     | Medium     |
-| 41  | **News Feed**           | Latest news per stock (Finnhub)    | Low        |
-| 42  | **Tax-Loss Harvesting** | Suggestions to offset gains        | Medium     |
-| 43  | **Mobile App**          | React Native version               | High       |
-| 44  | **API Keys for Users**  | Let users build their own bots     | Medium     |
-
----
-
-## 🏆 Signature Challenges
-
-### 1. Real-Time Sync (Socket.IO)
-
-**What it is:** Every connected client sees price updates, order executions, and portfolio changes in real-time.
-
-**Implementation:**
-
-```javascript
-// Socket.IO namespaces and rooms
-const marketNamespace = io.of('/market');
-const tradingNamespace = io.of('/trading');
-const notificationNamespace = io.of('/notifications');
-
-// Room structure:
-// stock:AAPL       → users watching Apple
-// stock:BTCUSDT    → users watching Bitcoin
-// user:uuid        → personal notifications
-// portfolio:uuid   → portfolio updates
-
-// Broadcasting price updates
-marketDataService.on('price', (data) => {
-  io.of('/market')
-    .to(`stock:${data.symbol}`)
-    .emit('price-update', data);
-});
-
-// Reconnection handling
-socket.on('reconnect', async () => {
-  const subscriptions = await getUserSubscriptions(userId);
-  subscriptions.forEach(symbol => {
-    socket.join(`stock:${symbol}`);
-    socket.emit('price-update', await getLatestPrice(symbol));
-  });
-});
+```text
+BUY AAPL at ≤ $250
+SELL AAPL at ≥ $300
 ```
 
-**Key Technical Points:**
+---
 
-- Namespaces for separation of concerns
-- Rooms for targeted broadcasts (one per symbol)
-- Reconnection handling with state recovery
-- Horizontal scaling via Redis adapter
+## Stop-Loss Orders
+
+Automatically trigger when an asset reaches the defined stop condition.
 
 ---
 
-### 2. Background Jobs (BullMQ)
+## Take-Profit Orders
 
-**What it is:** Slow operations (order execution, alerts, reports) run in background workers, keeping the API fast.
-
-**Queues:**
-
-| Queue           | Purpose                          | Frequency        |
-| --------------- | -------------------------------- | ---------------- |
-| `orders`        | Check and execute pending orders | Every 5 seconds  |
-| `alerts`        | Check price alerts               | Every 5 seconds  |
-| `notifications` | Send emails/push notifications   | On-demand        |
-| `reports`       | Generate daily/weekly reports    | Scheduled (cron) |
-| `copy-trades`   | Mirror trades for copy traders   | On-demand        |
-| `achievements`  | Check and award achievements     | Every minute     |
-
-See [BACKGROUND_JOBS.md](BACKGROUND_JOBS.md) for details.
+Automatically trigger when an asset reaches the desired profit level.
 
 ---
 
-### 3. Caching (Redis)
+## Short Selling
 
-**What it is:** Redis caches hot data to reduce database load and improve response times.
+Users can open short positions and profit from downward price movement.
 
-**Measurable Win:**
+The system tracks:
 
-```
-Without Cache:  GET /api/v1/portfolio/me  →  245ms
-With Cache:     GET /api/v1/portfolio/me  →  12ms
-Improvement:    95% faster
-```
-
-See [CACHING.md](CACHING.md) for details.
+- Short quantity
+- Entry price
+- Current value
+- Unrealized P&L
+- Realized P&L
 
 ---
 
-### 4. Notification Pipeline
+## Multiple Portfolios
 
-**What it is:** Event-driven system that sends emails and push notifications when key events occur.
+Users can maintain separate strategies such as:
 
-**Architecture:**
-
-```
-Event Occurs → Event Emitter → Queue Job → Worker → Send Notification
-                    │
-                    ├── Order Executed
-                    ├── Price Alert Triggered
-                    ├── Achievement Unlocked
-                    ├── Copy Trade Executed
-                    └── Daily Digest Ready
+```text
+Long Term
+Day Trading
+Crypto
+Experimental
 ```
 
-See [NOTIFICATIONS.md](NOTIFICATIONS.md) for details.
+Each portfolio maintains independent:
+
+- cash
+- holdings
+- orders
+- trades
+- performance
+
+---
+
+# 📊 Portfolio Management
+
+Each portfolio displays:
+
+- Total value
+- Cash
+- Holdings value
+- Daily change
+- Total return
+- Realized P&L
+- Unrealized P&L
+- Allocation
+
+Each holding includes:
+
+- Symbol
+- Asset type
+- Quantity
+- Average price
+- Current price
+- Invested value
+- Current value
+- P&L
+- P&L percentage
+
+---
+
+# 📈 Analytics
+
+## Performance
+
+- Daily return
+- Cumulative return
+- Portfolio value history
+- Benchmark comparison
+
+## Risk
+
+- Volatility
+- Maximum drawdown
+- Sharpe ratio
+- Risk-adjusted performance
+
+## Trading Statistics
+
+- Win rate
+- Winning trades
+- Losing trades
+- Average trade return
+- Best trade
+- Worst trade
+- Total trading volume
+
+---
+
+# 📅 P&L Heatmap
+
+A calendar-style visualization displays daily portfolio performance.
+
+Each day represents:
+
+```text
+date
++
+daily P&L
++
+daily return
+```
+
+---
+
+# 📡 Market Data
+
+## Stocks
+
+- Live quotes
+- Historical candles
+- Company metadata
+- News
+- Trading status
+
+## Crypto
+
+- Live quotes
+- Trade tape
+- Order-book depth
+- Historical data
+
+---
+
+# ⚡ Real-Time Features
+
+Live updates include:
+
+- market prices
+- order execution
+- portfolio value
+- holdings
+- notifications
+- price alerts
+- social activity
+
+---
+
+# 🔔 Price Alerts
+
+Users can create alerts based on:
+
+- Price above
+- Price below
+- Percentage increase
+- Percentage decrease
+
+Alerts can automatically expire or become triggered.
+
+---
+
+# 👥 Social Features
+
+## Profiles
+
+Users can publish selected trading information through a public profile.
+
+## Following
+
+Users can:
+
+- Follow traders
+- Unfollow traders
+- View followers
+- View following
+
+## Social Feed
+
+The feed can include events such as:
+
+```text
+New trade
+Achievement unlocked
+League result
+Portfolio milestone
+```
+
+---
+
+# 🔄 Copy Trading
+
+Users can choose another trader to copy.
+
+Copy settings include:
+
+- Allocation percentage
+- Maximum trade size
+- Active/inactive state
+
+A copied trade enters the copier's portfolio through the normal order execution system.
+
+---
+
+# 🏆 Leaderboards
+
+Global leaderboards rank traders according to configurable performance metrics.
+
+Examples:
+
+- Total return
+- Monthly return
+- League performance
+- Win rate
+
+---
+
+# 🏟️ Trading Leagues
+
+Users can join time-bound competitions.
+
+Each league defines:
+
+- Name
+- Description
+- Start date
+- End date
+- Starting balance
+- Participant limit
+- Status
+
+League statuses:
+
+```text
+UPCOMING
+ACTIVE
+COMPLETED
+CANCELLED
+```
+
+Each participant receives a league-specific portfolio.
+
+---
+
+# 🏅 Achievements
+
+Achievements are defined using configurable criteria.
+
+Examples:
+
+- First Trade
+- First Profit
+- 10 Successful Trades
+- Portfolio Milestone
+- League Winner
+- Consistent Trader
+
+Achievement unlocking is processed asynchronously.
+
+---
+
+# 📊 Market Sentiment
+
+Users can vote:
+
+```text
+BULLISH
+BEARISH
+NEUTRAL
+```
+
+for supported symbols.
+
+Aggregated sentiment can be displayed alongside market information.
+
+---
+
+# 🔔 Notifications
+
+Notification types include:
+
+- Order executed
+- Price alert
+- Achievement unlocked
+- Copy trade executed
+- League updates
+- System notifications
+
+Channels:
+
+- In-app
+- Email
+- Push
+
+---
+
+# 🛡️ Administration
+
+Administrators can:
+
+- List users
+- Search users
+- Filter users
+- Suspend users
+- Review account information
+- View platform analytics
+- Monitor market-data providers
+- Inspect system health
+- Generate reports
+- Inspect audit logs
+
+---
+
+# 📈 Platform Analytics
+
+Admin analytics include:
+
+- Total users
+- Active users
+- Total portfolios
+- Total orders
+- Executed trades
+- Trading volume
+- Most traded symbols
+- Platform-wide returns
+- Active leagues
+- Notification volume
+
+---
+
+# 🧪 Reliability Features
+
+The completed system should support:
+
+- Database transactions
+- Idempotent background jobs
+- Retry handling
+- Real-time reconnection
+- Cache invalidation
+- Market-data fallback
+- Error recovery
+- Health monitoring
+
+---
+
+# 🚀 Stretch Features
+
+Potential extensions:
+
+- Backtesting
+- Strategy simulation
+- Webhook alerts
+- External API access
+- User API keys
+- Mobile application
+- Advanced trading bots
