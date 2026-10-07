@@ -26,6 +26,11 @@ const adminUserListQuerySchema = z.object({
   isVerified: booleanQuery.optional(),
 });
 
+const adminUserParamsSchema = z.object({
+  userId: z.string().uuid("Invalid user ID."),
+});
+
 module.exports = {
   adminUserListQuerySchema,
+  adminUserParamsSchema,
 };
