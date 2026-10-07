@@ -5,7 +5,7 @@ const {
 
 async function listUsers(req, res, next) {
   try {
-    const result = await listAdminUsers(req.query);
+    const result = await listAdminUsers(req.validatedQuery);
 
     return res.status(200).json({
       success: true,

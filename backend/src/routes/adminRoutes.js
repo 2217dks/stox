@@ -17,7 +17,7 @@ router.get(
   "/users",
   authMiddleware,
   requireRole("ADMIN"),
-  validate(adminUserListQuerySchema, "query"),
+  validate(adminUserListQuerySchema, "query", "validatedQuery"),
   adminUserController.listUsers,
 );
 
