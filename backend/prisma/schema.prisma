@@ -213,6 +213,41 @@ model Order {
 }
 
 // ============================================================
+// SYMBOL / MARKET ASSET
+// ============================================================
+
+// A tradable instrument (stock, crypto, forex) known to Stox.
+//
+// `symbol` is the INTERNAL, provider-agnostic Stox identity (e.g. "AAPL",
+// "BTCUSDT"). It is deliberately NOT namespaced with a market-data provider
+// (no "BINANCE:BTCUSDT"), so the Stox domain never depends on a specific
+// provider. Provider-specific tickers and their normalization belong to the
+// provider/adapter layer (MarketDataService), not to this model.
+model Symbol {
+  id        String    @id @default(uuid())
+  symbol    String    @unique
+  name      String
+  assetType AssetType
+  exchange  String?
+  currency  String    @default("USD")
+
+  // Instrument metadata (populated from provider fundamentals)
+  sector      String?
+  industry    String?
+  logoUrl     String?
+  description String?
+
+  // Availability flags: instruments can be hidden/disabled without deletion
+  isActive   Boolean @default(true)
+  isTradable Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([symbol])
+  @@index([assetType])
+}
+
 // Trade
 // ============================================================
 
