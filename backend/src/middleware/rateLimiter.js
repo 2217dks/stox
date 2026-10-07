@@ -5,6 +5,8 @@ function envInt(name, fallback) {
   return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
+const enabled = process.env.RATE_LIMIT_ENABLED !== "false";
+
 function rateLimitedResponse(req, res) {
   return res.status(429).json({
     success: false,
@@ -19,6 +21,7 @@ const commonOptions = {
   standardHeaders: true,
   legacyHeaders: false,
   handler: rateLimitedResponse,
+  ...(enabled ? {} : { skip: () => true }),
 };
 
 const globalLimiter = rateLimit({
