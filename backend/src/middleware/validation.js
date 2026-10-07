@@ -4,4 +4,13 @@ function validate(schema) {
     next();
   };
 }
+
+function validateParams(schema) {
+  return function validateParamsMiddleware(req, res, next) {
+    req.params = schema.parse(req.params);
+    next();
+  };
+}
+
 module.exports = validate;
+module.exports.validateParams = validateParams;

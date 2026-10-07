@@ -124,6 +124,124 @@ async function createPortfolio(userId, { name, description = null }) {
   }
 }
 
+async function updatePortfolio(userId, portfolioId, { name, description } = {}) {
+  await ensureActiveUser(userId);
+
+  const portfolio = await prisma.portfolio.findFirst({
+    where: {
+      id: portfolioId,
+      userId,
+    },
+  });
+
+  if (!portfolio) {
+    throw createServiceError(
+      "Portfolio not found.",
+      404,
+      "PORTFOLIO_NOT_FOUND",
+    );
+  }
+
+  // Only user-editable fields are copied. Balance, ownership and lifecycle
+  // flags (isDefault / isActive) are intentionally never updated here.
+  const data = {};
+
+  if (name !== undefined) {
+    const portfolioName = name?.trim();
+
+    if (!portfolioName) {
+      throw createServiceError(
+        "Portfolio name is required.",
+        400,
+        "PORTFOLIO_NAME_REQUIRED",
+      );
+    }
+
+    data.name = portfolioName;
+  }
+
+  if (description !== undefined) {
+    data.description =
+      description === null ? null : description?.trim() || null;
+  }
+
+  if (Object.keys(data).length === 0) {
+    return serializePortfolio(portfolio);
+  }
+
+  try {
+    const updatedPortfolio = await prisma.portfolio.update({
+      where: {
+        id: portfolio.id,
+      },
+      data,
+    });
+
+    return serializePortfolio(updatedPortfolio);
+  } catch (error) {
+    if (error?.code === "P2002") {
+      throw createServiceError(
+        "A portfolio with this name already exists.",
+        409,
+        "PORTFOLIO_NAME_EXISTS",
+      );
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * Deactivate a portfolio (soft delete).
+ *
+ * Rows are never removed, so holdings, orders and trades stay intact and the
+ * audit trail is preserved. The existing `isActive` flag is what the order
+ * service already checks (PORTFOLIO_INACTIVE), so this is the safe delete.
+ */
+async function deactivatePortfolio(userId, portfolioId) {
+  await ensureActiveUser(userId);
+
+  const portfolio = await prisma.portfolio.findFirst({
+    where: {
+      id: portfolioId,
+      userId,
+    },
+  });
+
+  if (!portfolio) {
+    throw createServiceError(
+      "Portfolio not found.",
+      404,
+      "PORTFOLIO_NOT_FOUND",
+    );
+  }
+
+  // The default/Main portfolio is protected: it must stay active.
+  if (portfolio.isDefault) {
+    throw createServiceError(
+      "The default portfolio cannot be deleted.",
+      409,
+      "PORTFOLIO_DEFAULT",
+    );
+  }
+
+  // Deactivation is idempotent.
+  if (!portfolio.isActive) {
+    return serializePortfolio(portfolio);
+  }
+
+  const deactivatedPortfolio = await prisma.portfolio.update({
+    where: {
+      id: portfolio.id,
+    },
+    data: {
+      isActive: false,
+    },
+  });
+
+  return serializePortfolio(deactivatedPortfolio);
+}
+
 async function listPortfolioHoldings(userId, portfolioId) {
   await ensureActiveUser(userId);
 
@@ -200,6 +318,8 @@ module.exports = {
   listUserPortfolios,
   getPortfolioById,
   createPortfolio,
+  updatePortfolio,
+  deactivatePortfolio,
   listPortfolioHoldings,
   getPortfolioCashBalance,
 };
