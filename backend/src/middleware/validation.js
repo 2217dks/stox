@@ -1,7 +1,11 @@
-function validate(schema) {
+function validate(schema, source = "body") {
   return function validateMiddleware(req, res, next) {
-    req.body = schema.parse(req.body);
+    const parsed = schema.parse(req[source]);
+
+    req[source] = parsed;
+
     next();
   };
 }
+
 module.exports = validate;
