@@ -1,211 +1,460 @@
 # 📈 stox
 
-> **A real-time paper trading simulator for US stocks and cryptocurrency. Practice trading with virtual money, real market data, and zero financial risk.**
+> **A realistic paper-trading platform for US stocks and cryptocurrency — built to make trading feel real without risking real money.**
 
 ---
 
-## 📖 What Is stox?
+## 🎯 What is stox?
 
-stox is a full-stack web application where users practice buying and selling **US stocks** (via Finnhub) and **cryptocurrencies** (via Binance) using **virtual money**. No real money is involved. Users compete on leaderboards, set price alerts, place advanced orders, copy other traders, and analyze their portfolio performance.
+**stox** is a full-stack paper trading platform that lets users practice trading with virtual money while working with real market data.
 
-Think of it as a **video game for trading** — realistic, competitive, and completely safe.
+Users can:
 
----
+- Build and manage virtual portfolios
+- Buy and sell stocks and cryptocurrency
+- Place market, limit, stop-loss, and take-profit orders
+- Track live positions and profit/loss
+- Follow other traders
+- Copy trading strategies
+- Compete on leaderboards and trading leagues
+- Set price alerts
+- Analyze portfolio performance and risk
+- Receive real-time notifications
+- Earn achievements through trading milestones
 
-## 🎯 Why stox?
-
-| For Users                          | For Evaluators                     |
-| ---------------------------------- | ---------------------------------- |
-| Risk-free trading practice         | Real-time WebSocket architecture   |
-| Real market data (stocks + crypto) | Complex background job processing  |
-| Competitive gamification           | Redis caching with measurable wins |
-| Portfolio analytics                | Event-driven notification pipeline |
-| Learning tool for finance          | Full production-grade deployment   |
-
-### What Makes It Unique
-
-- **Dual asset classes** — stocks AND crypto in one platform
-- **Real-time price streaming** — sub-second updates via WebSocket
-- **Advanced order types** — limit, stop-loss, take-profit
-- **Copy trading** — social trading with real-time trade mirroring
-- **Background job engine** — order execution, alerts, reports all async
-- **Measurable caching** — Redis with latency benchmarks shown in dashboard
+Every account starts with virtual funds. No real money is involved.
 
 ---
 
-## ✨ Core Features
+# 🌟 Why stox?
 
-### Trading
+Traditional paper-trading platforms often focus only on placing orders.
 
-- Market orders (buy/sell at current price)
-- Limit orders (buy/sell at target price)
-- Stop-loss orders (auto-sell to prevent losses)
-- Take-profit orders (auto-sell at target gain)
-- Short selling (profit when prices drop)
+stox is designed to simulate a much broader trading experience:
+
+```text
+Real Market Data
+       +
+Realistic Order Execution
+       +
+Portfolio Management
+       +
+Risk & Performance Analytics
+       +
+Real-Time Updates
+       +
+Social Trading
+       +
+Competition & Gamification
+```
+
+The goal is to make learning and experimenting with trading engaging without financial risk.
+
+---
+
+# 💰 Trading Experience
+
+Users receive a virtual starting balance and can build their own portfolios.
+
+The platform supports:
+
+### Orders
+
+- Market orders
+- Limit orders
+- Stop-loss orders
+- Take-profit orders
+
+### Position Management
+
+- Long positions
+- Short positions
 - Multiple portfolios
+- Portfolio-level cash balances
+- Holdings and average entry prices
 
-### Real-Time
+### Order Execution
 
-- Live price streaming (stocks + crypto)
-- Live portfolio value updates
-- Live order execution notifications
-- Order book depth (Binance)
-- Trade tape (Binance)
+Orders are evaluated against live market prices and executed according to their conditions.
 
-### Social
+The platform maintains consistency between:
+
+```text
+Order
+  ↓
+Trade
+  ↓
+Holding
+  ↓
+Cash Balance
+  ↓
+Portfolio Value
+```
+
+---
+
+# 📊 Live Markets
+
+stox combines multiple market-data sources to provide a single trading experience.
+
+### Stocks
+
+US stock market data including:
+
+- Prices
+- Historical candles
+- Company information
+- News
+- Market activity
+
+### Cryptocurrency
+
+Cryptocurrency market data including:
+
+- Live prices
+- Market trades
+- Order-book depth
+- Historical prices
+
+The application normalizes market data internally so the rest of the platform does not need to care which provider supplied it.
+
+---
+
+# ⚡ Real-Time Experience
+
+The application is designed around real-time updates.
+
+Users can see:
+
+- Live market prices
+- Portfolio-value changes
+- Order execution updates
+- Price-alert events
+- Notifications
+- Social activity
+
+Socket.IO provides the real-time communication layer while Redis supports scaling across multiple backend instances.
+
+---
+
+# 📈 Portfolio Analytics
+
+Every portfolio provides detailed performance information.
+
+Users can view:
+
+- Total portfolio value
+- Cash balance
+- Holdings value
+- Realized P&L
+- Unrealized P&L
+- Daily P&L
+- Return percentage
+- Win rate
+- Asset allocation
+- Historical performance
+- Maximum drawdown
+- Volatility
+- Sharpe ratio
+- Performance against benchmarks
+- P&L heatmaps
+
+---
+
+# 👥 Social Trading
+
+stox includes a social trading layer.
+
+Users can:
 
 - Follow other traders
-- Copy trading (auto-mirror trades)
-- Social feed
-- Leaderboards
-- Trading leagues
+- View public trader profiles
+- See activity from followed traders
+- Copy traders
+- Control copy-trading allocation
+- Set maximum copied trade sizes
 
-### Analytics
-
-- P&L heatmap (calendar view)
-- Risk metrics (Sharpe ratio, max drawdown)
-- Asset allocation charts
-- Performance vs benchmarks
-- Win rate analysis
-
-### Gamification
-
-- Achievement badges
-- Trading competitions
-- Sentiment voting
+Copy trading is executed through the same core order and portfolio engine as normal trading.
 
 ---
 
-## 🛠️ Tech Stack
+# 🏆 Competition & Gamification
 
-| Layer             | Technology                                                              |
-| ----------------- | ----------------------------------------------------------------------- |
-| **Frontend**      | Next.js 14, React 18, Tailwind CSS, Socket.IO Client, Recharts          |
-| **Backend**       | Node.js 18, Express.js, Socket.IO, BullMQ, Prisma ORM                   |
-| **Database**      | PostgreSQL 14+                                                          |
-| **Cache & Queue** | Redis 7+                                                                |
-| **Auth**          | JWT (access + refresh), bcrypt                                          |
-| **Market Data**   | Finnhub (stocks), Binance (crypto)                                      |
-| **Deployment**    | Vercel (frontend), Render/Railway (backend), Neon (DB), Upstash (Redis) |
+Trading becomes competitive through:
+
+### Leaderboards
+
+Rank traders using performance metrics such as portfolio return.
+
+### Trading Leagues
+
+Users can participate in time-limited competitions with:
+
+- Starting virtual capital
+- Defined start/end dates
+- Rankings
+- Final returns
+- Participant limits
+
+### Achievements
+
+Users unlock achievements for milestones such as:
+
+- First trade
+- First profitable trade
+- Portfolio milestones
+- Trading streaks
+- League performance
+- Strategy milestones
 
 ---
 
-## 🏗️ High-Level Architecture
+# 🔔 Alerts & Notifications
 
-```
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│  Next.js    │────▶│  Express    │────▶│ PostgreSQL  │
-│  Frontend   │◀────│  Backend    │◀────│   Prisma    │
-└─────────────┘     └──────┬──────┘     └─────────────┘
-       ▲                   │
-       │                   ▼
-       │            ┌─────────────┐
-       │            │    Redis    │
-       │            │  Cache+Queue│
-       │            └──────┬──────┘
-       │                   │
-       │                   ▼
-       │            ┌─────────────┐     ┌─────────────┐
-       └────────────│  Socket.IO  │◀────│  Finnhub +  │
-                    │  Real-Time  │     │  Binance    │
-                    └─────────────┘     └─────────────┘
+Users can configure price alerts such as:
+
+```text
+AAPL > $250
+BTCUSDT < $100,000
 ```
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full details.
+Supported alert conditions include:
+
+- Price above target
+- Price below target
+- Percentage increase
+- Percentage decrease
+
+Notifications can be delivered through:
+
+- In-app notifications
+- Email
+- Push notifications
+
+Users control their notification preferences.
 
 ---
 
-## 📚 Documentation Index
+# 🔐 Security
 
-| Document                                      | Description                                             |
-| --------------------------------------------- | ------------------------------------------------------- |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md)       | Tech stack rationale + system architecture + data flows |
-| [FEATURES.md](docs/FEATURES.md)               | Complete feature list + signature challenges            |
-| [DATABASE.md](docs/DATABASE.md)               | Prisma schema + ER diagram                              |
-| [API.md](docs/API.md)                         | API conventions + all endpoints                         |
-| [REALTIME.md](docs/REALTIME.md)               | Socket.IO namespaces, rooms, events                     |
-| [BACKGROUND_JOBS.md](docs/BACKGROUND_JOBS.md) | BullMQ queues + workers                                 |
-| [CACHING.md](docs/CACHING.md)                 | Redis caching strategy + benchmarks                     |
-| [NOTIFICATIONS.md](docs/NOTIFICATIONS.md)     | Event-driven notification pipeline                      |
-| [SECURITY.md](docs/SECURITY.md)               | Auth, RBAC, ABAC, middleware, security                  |
-| [MARKET_DATA.md](docs/MARKET_DATA.md)         | Finnhub + Binance integration                           |
-| [FRONTEND.md](docs/FRONTEND.md)               | Frontend architecture + folder structure                |
-| [DEPLOYMENT.md](docs/DEPLOYMENT.md)           | Deployment guide                                        |
-| [PROJECT_PLAN.md](docs/PROJECT_PLAN.md)       | Team division, timeline, metrics, future scope          |
-| [SETUP.md](docs/SETUP.md)                     | Local development setup                                 |
+stox uses a layered security model.
 
----
+### Authentication
 
-## 🚀 Quick Start
+- JWT access tokens
+- Secure refresh-token rotation
+- Password hashing
+- Google authentication
+- Session tracking
 
-```bash
-# 1. Clone repository
-git clone https://github.com/your-team/stox.git
-cd stox
+### Authorization
 
-# 2. Install backend dependencies
-cd backend && npm install
+Role-based permissions support:
 
-# 3. Install frontend dependencies
-cd ../frontend && npm install
-
-# 4. Set up environment variables
-cp backend/.env.example backend/.env
-cp frontend/.env.example frontend/.env.local
-
-# 5. Start PostgreSQL and Redis
-docker-compose up -d postgres redis
-
-# 6. Run migrations and seed
-cd backend
-npx prisma migrate dev
-npx prisma db seed
-
-# 7. Start backend (terminal 1)
-npm run dev
-
-# 8. Start workers (terminal 2)
-npm run workers
-
-# 9. Start frontend (terminal 3)
-cd ../frontend && npm run dev
+```text
+TRADER
+MODERATOR
+ADMIN
 ```
 
-**Access Points:**
+Resource ownership is enforced server-side.
 
-- Frontend → http://localhost:3000
-- Backend API → http://localhost:5000/api/v1
-- Prisma Studio → http://localhost:5555
+### Protection
 
-Full setup guide: [docs/SETUP.md](docs/SETUP.md)
+The platform includes:
 
----
-
-## 🎓 What This Project Demonstrates
-
-✅ Full-stack development (Next.js + Express)  
-✅ Real-time WebSocket architecture (Socket.IO)  
-✅ Background job processing (BullMQ)  
-✅ Redis caching with measurable wins  
-✅ Event-driven notification pipeline  
-✅ Complex database schema (Prisma + PostgreSQL)  
-✅ Production-grade authentication (JWT + refresh)  
-✅ Role-based + attribute-based access control  
-✅ Security hardening (Helmet, rate limiting, validation)  
-✅ Deployment on modern cloud platforms
+- Request validation
+- Rate limiting
+- Security headers
+- Centralized error handling
+- CORS protection
+- Audit logging
+- Sensitive-data sanitization
 
 ---
 
-## 🏆 Signature Challenges
+# 🛡️ Admin Platform
 
-| Challenge                 | Implementation                              |
-| ------------------------- | ------------------------------------------- |
-| **Real-Time Sync**        | Socket.IO namespaces + rooms + reconnection |
-| **Background Jobs**       | BullMQ with retries + scheduled jobs        |
-| **Caching**               | Redis with 95% latency improvement          |
-| **Notification Pipeline** | Event-driven email + push + in-app          |
-| **Dual Market Data**      | Finnhub + Binance with fallback             |
-| **Complex Transactions**  | Atomic order execution with row locking     |
-| **Multi-Portfolio**       | ABAC-level isolation                        |
+Administrators have access to platform-level management tools.
 
-See [docs/FEATURES.md](docs/FEATURES.md) for full details.
+Admin capabilities include:
+
+- User management
+- User suspension
+- Platform analytics
+- System health monitoring
+- Market-data monitoring
+- Report generation
+- Audit-log inspection
+
+Administrative operations are protected by RBAC.
+
+---
+
+# 🧠 High-Level Architecture
+
+```text
+                         ┌─────────────────────┐
+                         │     Next.js Web App  │
+                         └──────────┬──────────┘
+                                    │
+                              REST / WebSocket
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │     Express API     │
+                         └──────────┬──────────┘
+                                    │
+             ┌──────────────────────┼──────────────────────┐
+             │                      │                      │
+             ▼                      ▼                      ▼
+      ┌──────────────┐       ┌──────────────┐       ┌──────────────┐
+      │ PostgreSQL   │       │ Redis/BullMQ │       │  Socket.IO   │
+      │   Database   │       │ Queue/Cache  │       │ Real-Time    │
+      └──────────────┘       └──────┬───────┘       └──────────────┘
+                                    │
+                                    ▼
+                             ┌──────────────┐
+                             │   Workers    │
+                             └──────┬───────┘
+                                    │
+                                    ▼
+                         ┌─────────────────────┐
+                         │  Market Data APIs   │
+                         └─────────────────────┘
+```
+
+---
+
+# 🛠️ Technology
+
+| Layer           | Technology        |
+| --------------- | ----------------- |
+| Frontend        | Next.js + React   |
+| Styling         | Tailwind CSS      |
+| Backend         | Node.js + Express |
+| Database        | PostgreSQL        |
+| ORM             | Prisma            |
+| Cache           | Redis             |
+| Background Jobs | BullMQ            |
+| Real-Time       | Socket.IO         |
+| Authentication  | JWT + OAuth       |
+| Validation      | Zod               |
+| Market Data     | Finnhub + Binance |
+| Testing         | Jest + Supertest  |
+
+---
+
+# 🏗️ Major Product Modules
+
+```text
+Authentication
+        │
+        ├── Users
+        ├── Sessions
+        └── Authorization
+
+Trading
+        │
+        ├── Portfolios
+        ├── Orders
+        ├── Trades
+        └── Holdings
+
+Market Data
+        │
+        ├── Quotes
+        ├── History
+        ├── News
+        └── Order Book
+
+Analytics
+        │
+        ├── P&L
+        ├── Risk
+        ├── Performance
+        └── Benchmarks
+
+Social
+        │
+        ├── Follow
+        ├── Feed
+        └── Copy Trading
+
+Competition
+        │
+        ├── Leaderboards
+        ├── Leagues
+        └── Achievements
+
+Notifications
+        │
+        ├── Alerts
+        ├── Email
+        ├── Push
+        └── In-App
+
+Administration
+        │
+        ├── Users
+        ├── Analytics
+        ├── Monitoring
+        └── Reports
+```
+
+---
+
+# 🌎 Target User Journey
+
+```text
+Create Account
+      ↓
+Receive Virtual Capital
+      ↓
+Explore Markets
+      ↓
+Build Portfolio
+      ↓
+Place Orders
+      ↓
+Orders Execute Against Market Data
+      ↓
+Track Portfolio Performance
+      ↓
+Analyze Risk & P&L
+      ↓
+Follow / Copy Traders
+      ↓
+Compete in Leagues
+      ↓
+Earn Achievements
+```
+
+---
+
+# 📚 Documentation
+
+| Document                                      | Description                     |
+| --------------------------------------------- | ------------------------------- |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md)       | Complete technical architecture |
+| [FEATURES.md](docs/FEATURES.md)               | Complete product feature set    |
+| [DATABASE.md](docs/DATABASE.md)               | Final database architecture     |
+| [API.md](docs/API.md)                         | REST API specification          |
+| [REALTIME.md](docs/REALTIME.md)               | Real-time architecture          |
+| [BACKGROUND_JOBS.md](docs/BACKGROUND_JOBS.md) | Background job system           |
+| [CACHING.md](docs/CACHING.md)                 | Redis caching architecture      |
+| [NOTIFICATIONS.md](docs/NOTIFICATIONS.md)     | Notification pipeline           |
+| [MARKET_DATA.md](docs/MARKET_DATA.md)         | Market-data architecture        |
+| [SECURITY.md](docs/SECURITY.md)               | Security architecture           |
+| [FRONTEND.md](docs/FRONTEND.md)               | Frontend architecture           |
+| [SETUP.md](docs/SETUP.md)                     | Project setup                   |
+| [DEPLOYMENT.md](docs/DEPLOYMENT.md)           | Deployment architecture         |
+| [PROJECT_PLAN.md](docs/PROJECT_PLAN.md)       | Development roadmap             |
+
+---
+
+# 📈 stox
+
+### **Trade. Analyze. Compete. Learn.**
+
+A realistic trading simulator without the financial risk.
