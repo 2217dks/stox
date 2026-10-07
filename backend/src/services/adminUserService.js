@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const { AppError } = require("../utils/errors");
 
 const ADMIN_USER_SELECT = {
   id: true,
@@ -81,6 +82,22 @@ async function listAdminUsers({
   };
 }
 
+async function getAdminUserById(userId) {
+  const user = await prisma.user.findUnique({
+    where: {
+      id: userId,
+    },
+    select: ADMIN_USER_SELECT,
+  });
+
+  if (!user) {
+    throw AppError.notFound("User not found.", "USER_NOT_FOUND");
+  }
+
+  return user;
+}
+
 module.exports = {
   listAdminUsers,
+  getAdminUserById,
 };
