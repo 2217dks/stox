@@ -39,7 +39,50 @@ async function createPortfolio(req, res, next) {
   }
 }
 
+async function getPortfolioHoldings(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.params;
+
+    const holdings = await portfolioService.listPortfolioHoldings(
+      userId,
+      portfolioId,
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        portfolioId,
+        holdings,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getCashBalance(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.params;
+
+    const result = await portfolioService.getPortfolioCashBalance(
+      userId,
+      portfolioId,
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   listPortfolios,
   createPortfolio,
+  getPortfolioHoldings,
+  getCashBalance,
 };

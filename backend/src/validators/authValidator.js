@@ -9,7 +9,7 @@ const registerSchema = z
       .min(2, "Name must be at least 2 characters long.")
       .max(100, "Name must not exceed 100 characters."),
 
-    email: z.string().trim().email("Please provide a valid email address."),
+    email: z.string().trim().email("Please provide a valid email address.").max(254, "Email must not exceed 254 characters."),
 
     // Do not trim password.
     // Spaces are technically valid symbols in our password policy.
@@ -30,7 +30,7 @@ const registerSchema = z
   });
 
 const loginSchema = z.object({
-  email: z.string().trim().email("Please provide a valid email address."),
+  email: z.string().trim().email("Please provide a valid email address.").max(254, "Email must not exceed 254 characters."),
 
   password: z.string().min(1, "Password is required."),
 });

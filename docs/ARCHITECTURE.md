@@ -1,281 +1,404 @@
-# 🏗️ Architecture
+# 🏗️ System Architecture
 
-> **Tech stack rationale + system architecture + data flows for stox.**
-
----
-
-## 📌 Table of Contents
-
-- [Tech Stack](#-tech-stack)
-- [Tech Stack Rationale](#-tech-stack-rationale)
-- [High-Level Architecture](#-high-level-architecture)
-- [Data Flow: Real-Time Price Update](#-data-flow-real-time-price-update)
-- [Data Flow: Order Execution](#-data-flow-order-execution)
-- [Deployment Architecture](#-deployment-architecture)
+> Final target architecture for the completed stox platform.
 
 ---
 
-## 🛠️ Tech Stack
+# 🧭 Architecture Overview
 
-### Complete Technology Breakdown
-
-| Layer              | Technology              | Version          | Purpose                      |
-| ------------------ | ----------------------- | ---------------- | ---------------------------- |
-| **Frontend**       | Next.js                 | 14+              | React framework with SSR/SSG |
-|                    | React                   | 18+              | UI library                   |
-|                    | Tailwind CSS            | 3+               | Utility-first styling        |
-|                    | Lucide React            | Latest           | Icon library                 |
-|                    | Recharts / Chart.js     | Latest           | Data visualization           |
-|                    | Socket.IO Client        | 4+               | Real-time communication      |
-|                    | Axios                   | Latest           | HTTP client                  |
-|                    | React Hook Form         | Latest           | Form management              |
-|                    | Zustand / Context API   | Latest           | State management             |
-| **Backend**        | Node.js                 | 18+              | Runtime environment          |
-|                    | Express.js              | 4+               | Web framework                |
-|                    | Prisma ORM              | 5+               | Database ORM                 |
-|                    | Socket.IO               | 4+               | WebSocket server             |
-|                    | BullMQ                  | Latest           | Background job queue         |
-|                    | ioredis                 | Latest           | Redis client                 |
-|                    | jsonwebtoken            | Latest           | JWT creation/verification    |
-|                    | bcryptjs                | Latest           | Password hashing             |
-|                    | Helmet                  | Latest           | Security headers             |
-|                    | express-rate-limit      | Latest           | Rate limiting                |
-|                    | express-validator / zod | Latest           | Input validation             |
-|                    | cors                    | Latest           | CORS handling                |
-|                    | winston / pino          | Latest           | Logging                      |
-| **Database**       | PostgreSQL              | 14+              | Primary database             |
-|                    | Prisma Migrate          | Latest           | Schema migrations            |
-|                    | Prisma Seed             | Latest           | Seed data                    |
-| **Cache & Queue**  | Redis                   | 7+               | Caching + BullMQ backend     |
-|                    | BullMQ                  | Latest           | Job queue                    |
-| **Market Data**    | Finnhub                 | API v1           | US stocks, forex, news       |
-|                    | Binance                 | Public API       | Crypto prices, order book    |
-|                    | Yahoo Finance           | Fallback         | Historical data fallback     |
-| **Authentication** | JWT                     | Access + Refresh | Stateless auth               |
-|                    | bcrypt                  | 10 rounds        | Password hashing             |
-| **Real-Time**      | Socket.IO               | 4+               | Rooms, namespaces            |
-|                    | WebSocket (ws)          | Latest           | Upstream market data         |
-| **Deployment**     | Vercel                  | —                | Frontend hosting             |
-|                    | Render / Railway        | —                | Backend hosting              |
-|                    | Neon / Supabase         | —                | Managed PostgreSQL           |
-|                    | Upstash                 | —                | Managed Redis                |
-| **DevOps**         | Docker                  | Latest           | Containerization             |
-|                    | Docker Compose          | Latest           | Local orchestration          |
-|                    | GitHub Actions          | —                | CI/CD                        |
-|                    | ESLint + Prettier       | Latest           | Code quality                 |
-| **Documentation**  | Swagger / OpenAPI       | —                | API documentation            |
-|                    | Postman                 | —                | API testing                  |
-|                    | Mermaid                 | —                | Architecture diagrams        |
-
----
-
-## 🎯 Tech Stack Rationale
-
-| Choice                       | Why                                                                          |
-| ---------------------------- | ---------------------------------------------------------------------------- |
-| **Next.js over plain React** | SSR for SEO, file-based routing, API routes, built-in optimization           |
-| **Express over Fastify**     | Larger ecosystem, more learning resources, team familiarity                  |
-| **PostgreSQL over MongoDB**  | Financial data is inherently relational; ACID compliance critical for trades |
-| **Prisma over raw SQL**      | Type safety, migrations, seed data, excellent DX                             |
-| **Redis for caching**        | Sub-millisecond reads, pub/sub for scaling, BullMQ backend                   |
-| **Socket.IO over raw WS**    | Rooms, namespaces, reconnection handling built-in                            |
-| **BullMQ over node-cron**    | Retries, scheduling, persistence, dashboard                                  |
-| **Finnhub + Binance**        | Dual asset coverage; Finnhub for stocks, Binance for crypto                  |
-| **JWT with refresh tokens**  | Stateless, scalable, industry standard                                       |
-
----
-
-## 🏛️ High-Level Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              CLIENT LAYER                                   │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐        │
-│  │  Browser    │  │  Browser    │  │  Browser    │  │  Mobile     │        │
-│  │  (Trader)   │  │  (Trader)   │  │  (Admin)    │  │  (Future)   │        │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘        │
-└─────────┼────────────────┼────────────────┼────────────────┼───────────────┘
-          │                │                │                │
-          ▼                ▼                ▼                ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           PRESENTATION LAYER                                │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                      Next.js Frontend                                       │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐                   │
-│  │Dashboard │  │ Trading  │  │Portfolio │  │ Leader-  │                   │
-│  │          │  │  View    │  │Analytics │  │  board   │                   │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘                   │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐                   │
-│  │  Alerts  │  │  Copy    │  │  Social  │  │  Admin   │                   │
-│  │          │  │ Trading  │  │   Feed   │  │  Panel   │                   │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘                   │
-└────────────────────────────────────┬────────────────────────────────────────┘
-                                     │
-                    ┌────────────────┼────────────────┐
-                    ▼                ▼                ▼
-              ┌──────────┐    ┌──────────┐    ┌──────────┐
-              │ REST API │    │Socket.IO │    │  Static  │
-              │  (HTTPS) │    │  (WSS)   │    │  Assets  │
-              └────┬─────┘    └────┬─────┘    └──────────┘
-                   │               │
-                   ▼               ▼
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                           APPLICATION LAYER                                 │
-├─────────────────────────────────────────────────────────────────────────────┤
-│                    Node.js + Express.js Backend                             │
-│  ┌────────────────────────────────────────────────────────────┐            │
-│  │                    Middleware Chain                         │            │
-│  │  Helmet → CORS → Rate Limit → Logger → Auth → Validation   │            │
-│  └────────────────────────────────────────────────────────────┘            │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐                  │
-│  │  Routes  │→ │Controllers│→ │ Services │→ │  Models  │                  │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘                  │
-└──────┬──────────────────┬──────────────────┬──────────────────┬────────────┘
-       │                  │                  │                  │
-       ▼                  ▼                  ▼                  ▼
-┌────────────┐  ┌────────────┐  ┌────────────┐  ┌────────────────────┐
-│ PostgreSQL │  │   Redis    │  │  BullMQ    │  │  External APIs     │
-│            │  │            │  │  Workers   │  │                    │
-│ - Users    │  │ - Cache    │  │ - Orders   │  │ - Finnhub (Stocks) │
-│ - Portfolios│ │ - Pub/Sub  │  │ - Alerts   │  │ - Binance (Crypto) │
-│ - Orders   │  │ - Sessions │  │ - Reports  │  │ - Yahoo (Fallback) │
-│ - Trades   │  │ - Rate Lim │  │ - Emails   │  │                    │
-│ - Alerts   │  │            │  │            │  │                    │
-└────────────┘  └────────────┘  └────────────┘  └────────────────────┘
+```text
+                         ┌──────────────────────┐
+                         │     Next.js App      │
+                         │   Web Application    │
+                         └──────────┬───────────┘
+                                    │
+                         REST / WebSocket
+                                    │
+                                    ▼
+                         ┌──────────────────────┐
+                         │     API Gateway      │
+                         │       Express        │
+                         └──────────┬───────────┘
+                                    │
+        ┌───────────────────────────┼──────────────────────────┐
+        │                           │                          │
+        ▼                           ▼                          ▼
+┌───────────────┐          ┌────────────────┐         ┌────────────────┐
+│ Authentication│          │ Trading Domain │         │ Market Domain  │
+│ Authorization │          │                │         │                │
+└───────────────┘          └───────┬────────┘         └───────┬────────┘
+                                   │                          │
+                                   │                          │
+                                   ▼                          ▼
+                            ┌──────────────┐           ┌──────────────┐
+                            │ PostgreSQL   │           │ Redis Cache  │
+                            └──────────────┘           └──────┬───────┘
+                                                             │
+                                                             ▼
+                                                    Market Data Providers
 ```
 
 ---
 
-## 📡 Data Flow: Real-Time Price Update
+# 🧩 Core Domains
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                        REAL-TIME PRICE FLOW                                 │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  1. EXTERNAL SOURCES                                                        │
-│  ┌─────────────────┐         ┌─────────────────┐                          │
-│  │    Finnhub      │         │    Binance      │                          │
-│  │  WebSocket      │         │  WebSocket      │                          │
-│  │  (US Stocks)    │         │  (Crypto)       │                          │
-│  └────────┬────────┘         └────────┬────────┘                          │
-│           │                           │                                    │
-│           ▼                           ▼                                    │
-│  2. INGESTION SERVICE                                                       │
-│  ┌─────────────────────────────────────────────────────────────────┐      │
-│  │  MarketDataService                                               │      │
-│  │  - Connects to both WebSockets                                   │      │
-│  │  - Normalizes data format                                        │      │
-│  │  - Handles reconnection                                          │      │
-│  │  - Manages subscriptions                                         │      │
-│  └──────────────────────────┬──────────────────────────────────────┘      │
-│                             │                                              │
-│                             ▼                                              │
-│  3. REDIS CACHE + PUB/SUB                                                  │
-│  ┌─────────────────────────────────────────────────────────────────┐      │
-│  │  SET price:AAPL { price: 175.50, ts: ... } EX 5                  │      │
-│  │  PUBLISH price-updates { symbol, price, volume, timestamp }      │      │
-│  └──────────────────────────┬──────────────────────────────────────┘      │
-│                             │                                              │
-│                             ▼                                              │
-│  4. SOCKET.IO BROADCAST                                                    │
-│  ┌─────────────────────────────────────────────────────────────────┐      │
-│  │  io.to(`stock:AAPL`).emit('price-update', data)                  │      │
-│  │  io.to(`stock:BTCUSDT`).emit('price-update', data)               │      │
-│  └──────────────────────────┬──────────────────────────────────────┘      │
-│                             │                                              │
-│                             ▼                                              │
-│  5. CLIENT RECEIVES                                                        │
-│  ┌─────────────────────────────────────────────────────────────────┐      │
-│  │  socket.on('price-update', (data) => {                           │      │
-│  │    updateChart(data);                                            │      │
-│  │    checkAlerts(data);                                            │      │
-│  │    updatePortfolio(data);                                        │      │
-│  │  });                                                             │      │
-│  └─────────────────────────────────────────────────────────────────┘      │
-└─────────────────────────────────────────────────────────────────────────────┘
+The backend is divided conceptually into:
+
+```text
+Authentication
+Users
+Portfolios
+Trading
+Market Data
+Analytics
+Social
+Gamification
+Notifications
+Administration
 ```
 
 ---
 
-## 📡 Data Flow: Order Execution
+# 🔐 Authentication Domain
 
+Responsible for:
+
+- registration
+- login
+- Google OAuth
+- JWT access tokens
+- refresh tokens
+- session management
+- logout
+- password security
+
+---
+
+# 📋 Trading Domain
+
+Responsible for:
+
+- portfolios
+- orders
+- order validation
+- order execution
+- holdings
+- trades
+- P&L
+- cash management
+
+The trading domain is the financial source of truth.
+
+---
+
+# 📊 Market Data Domain
+
+Responsible for:
+
+- symbol metadata
+- quotes
+- historical prices
+- market streams
+- provider abstraction
+- normalization
+- provider health
+- caching
+
+---
+
+# ⚡ Real-Time Domain
+
+Socket.IO handles:
+
+```text
+Market Updates
+Order Events
+Portfolio Events
+Notifications
+Social Events
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          ORDER EXECUTION FLOW                               │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  1. USER PLACES ORDER                                                       │
-│  ┌─────────────────────────────────────────────────────────────────┐      │
-│  │  POST /api/v1/orders                                             │      │
-│  │  { symbol: "AAPL", type: "LIMIT", side: "BUY",                   │      │
-│  │    quantity: 10, limitPrice: 140.00 }                             │      │
-│  └──────────────────────────┬──────────────────────────────────────┘      │
-│                             │                                              │
-│                             ▼                                              │
-│  2. VALIDATION & PERSISTENCE                                                │
-│  ┌─────────────────────────────────────────────────────────────────┐      │
-│  │  - Validate input (zod)                                          │      │
-│  │  - Check portfolio balance                                       │      │
-│  │  - Create Order record (status: PENDING)                         │      │
-│  │  - Return 201 Created                                            │      │
-│  └──────────────────────────┬──────────────────────────────────────┘      │
-│                             │                                              │
-│                             ▼                                              │
-│  3. BACKGROUND JOB (BullMQ)                                                 │
-│  ┌─────────────────────────────────────────────────────────────────┐      │
-│  │  orderQueue.add('check-order', { orderId })                      │      │
-│  │  - Runs every 5 seconds                                          │      │
-│  │  - Fetches pending orders                                        │      │
-│  │  - Compares limit price with current price                       │      │
-│  └──────────────────────────┬──────────────────────────────────────┘      │
-│                             │                                              │
-│                             ▼                                              │
-│  4. ORDER EXECUTION                                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐      │
-│  │  IF currentPrice <= limitPrice:                                  │      │
-│  │    - BEGIN TRANSACTION                                           │      │
-│  │    - Update portfolio balance                                    │      │
-│  │    - Create Trade record                                         │      │
-│  │    - Update Order status to EXECUTED                             │      │
-│  │    - COMMIT                                                      │      │
-│  └──────────────────────────┬──────────────────────────────────────┘      │
-│                             │                                              │
-│                             ▼                                              │
-│  5. NOTIFICATION & REAL-TIME UPDATE                                         │
-│  ┌─────────────────────────────────────────────────────────────────┐      │
-│  │  - notificationQueue.add('order-executed', { orderId })          │      │
-│  │  - io.to(`user:${userId}`).emit('order-executed', order)         │      │
-│  │  - Send email notification                                       │      │
-│  └─────────────────────────────────────────────────────────────────┘      │
-└─────────────────────────────────────────────────────────────────────────────┘
+
+Namespaces:
+
+```text
+/market
+/trading
+/notifications
+/social
+```
+
+Rooms:
+
+```text
+stock:<symbol>
+portfolio:<portfolioId>
+user:<userId>
+league:<leagueId>
 ```
 
 ---
 
-## 🚀 Deployment Architecture
+# ⚙️ Background Processing
 
+BullMQ workers handle:
+
+```text
+Order Execution
+Price Alerts
+Notifications
+Copy Trading
+Achievements
+League Processing
+Analytics Snapshots
+Reports
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                          PRODUCTION DEPLOYMENT                              │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                         VERCEL (Frontend)                            │   │
-│  │  Next.js App — SSR + CDN + Edge Functions                            │   │
-│  │  URL: https://stox.vercel.app                                  │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                    │                                        │
-│                                    ▼                                        │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                      RENDER / RAILWAY (Backend)                      │   │
-│  │  Express API + Socket.IO + BullMQ Workers                            │   │
-│  │  URL: https://stox-api.onrender.com                            │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                                    │                                        │
-│                    ┌───────────────┼───────────────┐                        │
-│                    ▼               ▼               ▼                        │
-│  ┌──────────────────┐ ┌──────────────────┐ ┌──────────────────┐           │
-│  │  NEON / SUPABASE │ │     UPSTASH      │ │   CLOUDINARY     │           │
-│  │  (PostgreSQL)    │ │     (Redis)      │ │   (File Storage) │           │
-│  └──────────────────┘ └──────────────────┘ └──────────────────┘           │
-└─────────────────────────────────────────────────────────────────────────────┘
+
+---
+
+# 🗄️ Persistence
+
+PostgreSQL stores durable business state.
+
+Redis stores:
+
+- hot market data
+- cache entries
+- queues
+- rate-limit state
+- real-time coordination
+
+---
+
+# 🔄 Order Execution Architecture
+
+```text
+User
+ │
+ ▼
+POST /orders
+ │
+ ▼
+Validation
+ │
+ ▼
+Order Created
+ │
+ ▼
+BullMQ
+ │
+ ▼
+Execution Worker
+ │
+ ▼
+Market Data
+ │
+ ▼
+Execution Conditions
+ │
+ ├── Not Met → remain pending
+ │
+ └── Met
+       │
+       ▼
+  Database Transaction
+       │
+       ├── Update Order
+       ├── Update Cash
+       ├── Update Holding
+       └── Create Trade
+               │
+               ▼
+       Publish Event
+               │
+        ┌──────┼───────┐
+        ▼      ▼       ▼
+    Socket.IO Queue   Analytics
+```
+
+---
+
+# 💰 Financial Consistency
+
+The following must remain synchronized:
+
+```text
+Portfolio Cash
++
+Holdings
++
+Orders
++
+Trades
++
+Portfolio Value
+```
+
+Order execution must therefore use database transactions.
+
+---
+
+# 📡 Market Data Flow
+
+```text
+Finnhub / Binance
+        │
+        ▼
+Provider Adapter
+        │
+        ▼
+Normalization
+        │
+        ├───────────────┐
+        ▼               ▼
+      Redis          PostgreSQL
+        │
+        ▼
+    Socket.IO
+        │
+        ▼
+      Clients
+```
+
+---
+
+# 🔔 Notification Flow
+
+```text
+Business Event
+      │
+      ▼
+Event Bus
+      │
+      ▼
+BullMQ
+      │
+      ▼
+Notification Worker
+      │
+      ├── In-App
+      ├── Email
+      └── Push
+```
+
+---
+
+# 📊 Analytics Flow
+
+```text
+Trades
+  │
+  ▼
+Performance Engine
+  │
+  ├── Returns
+  ├── P&L
+  ├── Drawdown
+  ├── Volatility
+  ├── Sharpe Ratio
+  └── Benchmarks
+         │
+         ▼
+Performance Snapshots
+         │
+         ▼
+Analytics API
+         │
+         ▼
+Frontend
+```
+
+---
+
+# 👥 Social Architecture
+
+```text
+User
+ │
+ ├── Follow
+ ├── Social Feed
+ └── Copy Trader
+        │
+        ▼
+   Copy Trade Engine
+        │
+        ▼
+   Order Service
+        │
+        ▼
+   Normal Trading Flow
+```
+
+Copy trading therefore reuses the core trading engine instead of creating a separate financial state system.
+
+---
+
+# 🏟️ League Architecture
+
+```text
+League
+  │
+  ├── Participants
+  ├── Start / End
+  └── League Portfolio
+          │
+          ▼
+      Performance
+          │
+          ▼
+       Rankings
+```
+
+---
+
+# 🛡️ Security Architecture
+
+```text
+Request
+  │
+  ▼
+Rate Limiter
+  │
+  ▼
+Authentication
+  │
+  ▼
+RBAC / Ownership
+  │
+  ▼
+Input Validation
+  │
+  ▼
+Controller
+  │
+  ▼
+Service
+  │
+  ▼
+Database
+```
+
+---
+
+# 🚀 Production Architecture
+
+```text
+                    ┌──────────────────────┐
+                    │       Vercel         │
+                    │     Next.js App      │
+                    └──────────┬───────────┘
+                               │
+                               ▼
+                    ┌──────────────────────┐
+                    │  Backend Platform    │
+                    │ Express + Socket.IO  │
+                    └──────────┬───────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              ▼                ▼                ▼
+        PostgreSQL           Redis            Workers
+        / Supabase          / Upstash        BullMQ
+              │                │                │
+              └────────────────┼────────────────┘
+                               ▼
+                       Market Providers
 ```

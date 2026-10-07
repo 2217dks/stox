@@ -1,295 +1,541 @@
-# 🔌 API Documentation
+# 🔌 API Specification
 
-> **RESTful API design for stox.**
-
----
-
-## 📌 Table of Contents
-
-- [API Conventions](#-api-conventions)
-- [Authentication Endpoints](#-authentication-endpoints)
-- [User Endpoints](#-user-endpoints)
-- [Portfolio Endpoints](#-portfolio-endpoints)
-- [Order Endpoints](#-order-endpoints)
-- [Trade Endpoints](#-trade-endpoints)
-- [Market Data Endpoints](#-market-data-endpoints)
-- [Alert Endpoints](#-alert-endpoints)
-- [Social Endpoints](#-social-endpoints)
-- [Copy Trading Endpoints](#-copy-trading-endpoints)
-- [Leaderboard & Leagues](#-leaderboard--leagues)
-- [Achievement Endpoints](#-achievement-endpoints)
-- [Sentiment Endpoints](#-sentiment-endpoints)
-- [Notification Endpoints](#-notification-endpoints)
-- [Admin Endpoints](#-admin-endpoints)
-- [Sample Requests](#-sample-requests)
+> Final REST API specification for stox.
 
 ---
 
-## 📐 API Conventions
+# 🌐 Base URL
 
-| Aspect              | Rule                                    |
-| ------------------- | --------------------------------------- |
-| **Base URL**        | `/api/v1`                               |
-| **Versioning**      | URL path (`/v1/`, `/v2/`)               |
-| **Resource Naming** | Plural nouns (`/users`, `/orders`)      |
-| **HTTP Methods**    | GET, POST, PUT, PATCH, DELETE           |
-| **Status Codes**    | 200, 201, 400, 401, 403, 404, 429, 500  |
-| **Authentication**  | Bearer token in `Authorization` header  |
-| **Pagination**      | `?page=1&limit=20`                      |
-| **Sorting**         | `?sort=createdAt&order=desc`            |
-| **Filtering**       | `?status=PENDING&symbol=AAPL`           |
-| **Error Format**    | `{ error: { code, message, details } }` |
+```text
+/api/v1
+```
 
 ---
 
-## 🔐 Authentication Endpoints
+# 📐 API Conventions
 
-| Method | Endpoint                | Description          | Auth          |
-| ------ | ----------------------- | -------------------- | ------------- |
-| POST   | `/api/v1/auth/register` | Register new user    | No            |
-| POST   | `/api/v1/auth/login`    | Login, get tokens    | No            |
-| POST   | `/api/v1/auth/refresh`  | Refresh access token | Refresh token |
-| POST   | `/api/v1/auth/logout`   | Logout, revoke token | Yes           |
-| GET    | `/api/v1/auth/me`       | Get current user     | Yes           |
-
----
-
-## 👤 User Endpoints
-
-| Method | Endpoint                      | Description          | Auth |
-| ------ | ----------------------------- | -------------------- | ---- |
-| GET    | `/api/v1/users/:id`           | Get user profile     | Yes  |
-| PATCH  | `/api/v1/users/me`            | Update profile       | Yes  |
-| GET    | `/api/v1/users/:id/portfolio` | Get public portfolio | Yes  |
-| GET    | `/api/v1/users/:id/trades`    | Get user's trades    | Yes  |
+| Property         | Convention           |
+| ---------------- | -------------------- |
+| Versioning       | `/api/v1`            |
+| Resource names   | Plural nouns         |
+| Authentication   | Bearer JWT           |
+| Pagination       | `page` + `limit`     |
+| Filtering        | Query parameters     |
+| Sorting          | `sort` + `order`     |
+| Success envelope | `{ success, data }`  |
+| Error envelope   | `{ success, error }` |
 
 ---
 
-## 💼 Portfolio Endpoints
+# 🔐 Authentication
 
-| Method | Endpoint                             | Description            | Auth |
-| ------ | ------------------------------------ | ---------------------- | ---- |
-| GET    | `/api/v1/portfolios`                 | List user's portfolios | Yes  |
-| POST   | `/api/v1/portfolios`                 | Create new portfolio   | Yes  |
-| GET    | `/api/v1/portfolios/:id`             | Get portfolio details  | Yes  |
-| PATCH  | `/api/v1/portfolios/:id`             | Update portfolio       | Yes  |
-| DELETE | `/api/v1/portfolios/:id`             | Delete portfolio       | Yes  |
-| GET    | `/api/v1/portfolios/:id/holdings`    | Get holdings           | Yes  |
-| GET    | `/api/v1/portfolios/:id/performance` | Get performance data   | Yes  |
-| GET    | `/api/v1/portfolios/:id/pnl-heatmap` | Get daily P&L heatmap  | Yes  |
+## `POST /auth/register`
 
----
+Create an account.
 
-## 📋 Order Endpoints
+### Request
 
-| Method | Endpoint             | Description          | Auth |
-| ------ | -------------------- | -------------------- | ---- |
-| GET    | `/api/v1/orders`     | List orders          | Yes  |
-| POST   | `/api/v1/orders`     | Place new order      | Yes  |
-| GET    | `/api/v1/orders/:id` | Get order details    | Yes  |
-| PATCH  | `/api/v1/orders/:id` | Modify pending order | Yes  |
-| DELETE | `/api/v1/orders/:id` | Cancel order         | Yes  |
-
----
-
-## 💱 Trade Endpoints
-
-| Method | Endpoint             | Description       | Auth |
-| ------ | -------------------- | ----------------- | ---- |
-| GET    | `/api/v1/trades`     | List trades       | Yes  |
-| GET    | `/api/v1/trades/:id` | Get trade details | Yes  |
-
----
-
-## 📊 Market Data Endpoints
-
-| Method | Endpoint                           | Description                 | Auth |
-| ------ | ---------------------------------- | --------------------------- | ---- |
-| GET    | `/api/v1/market/search`            | Search symbols              | Yes  |
-| GET    | `/api/v1/market/quote/:symbol`     | Get current quote           | Yes  |
-| GET    | `/api/v1/market/history/:symbol`   | Get historical candles      | Yes  |
-| GET    | `/api/v1/market/news/:symbol`      | Get news (Finnhub)          | Yes  |
-| GET    | `/api/v1/market/orderbook/:symbol` | Get order book (Binance)    | Yes  |
-| GET    | `/api/v1/market/trades/:symbol`    | Get recent trades (Binance) | Yes  |
-
----
-
-## 🔔 Alert Endpoints
-
-| Method | Endpoint             | Description        | Auth |
-| ------ | -------------------- | ------------------ | ---- |
-| GET    | `/api/v1/alerts`     | List user's alerts | Yes  |
-| POST   | `/api/v1/alerts`     | Create alert       | Yes  |
-| PATCH  | `/api/v1/alerts/:id` | Update alert       | Yes  |
-| DELETE | `/api/v1/alerts/:id` | Delete alert       | Yes  |
-
----
-
-## 👥 Social Endpoints
-
-| Method | Endpoint                        | Description     | Auth |
-| ------ | ------------------------------- | --------------- | ---- |
-| GET    | `/api/v1/social/feed`           | Get social feed | Yes  |
-| POST   | `/api/v1/social/follow/:userId` | Follow a user   | Yes  |
-| DELETE | `/api/v1/social/follow/:userId` | Unfollow a user | Yes  |
-| GET    | `/api/v1/social/followers`      | Get followers   | Yes  |
-| GET    | `/api/v1/social/following`      | Get following   | Yes  |
-
----
-
-## 🔄 Copy Trading Endpoints
-
-| Method | Endpoint                   | Description             | Auth |
-| ------ | -------------------------- | ----------------------- | ---- |
-| GET    | `/api/v1/copy-trading`     | List copy relationships | Yes  |
-| POST   | `/api/v1/copy-trading`     | Start copying a trader  | Yes  |
-| PATCH  | `/api/v1/copy-trading/:id` | Update copy settings    | Yes  |
-| DELETE | `/api/v1/copy-trading/:id` | Stop copying            | Yes  |
-
----
-
-## 🏆 Leaderboard & Leagues
-
-| Method | Endpoint                          | Description         | Auth |
-| ------ | --------------------------------- | ------------------- | ---- |
-| GET    | `/api/v1/leaderboard`             | Global leaderboard  | Yes  |
-| GET    | `/api/v1/leaderboard/friends`     | Friends leaderboard | Yes  |
-| GET    | `/api/v1/leagues`                 | List active leagues | Yes  |
-| POST   | `/api/v1/leagues/:id/join`        | Join a league       | Yes  |
-| GET    | `/api/v1/leagues/:id/leaderboard` | League leaderboard  | Yes  |
-
----
-
-## 🏅 Achievement Endpoints
-
-| Method | Endpoint                    | Description           | Auth |
-| ------ | --------------------------- | --------------------- | ---- |
-| GET    | `/api/v1/achievements`      | List all achievements | Yes  |
-| GET    | `/api/v1/achievements/mine` | User's achievements   | Yes  |
-
----
-
-## 📊 Sentiment Endpoints
-
-| Method | Endpoint                         | Description              | Auth |
-| ------ | -------------------------------- | ------------------------ | ---- |
-| GET    | `/api/v1/sentiment/:symbol`      | Get sentiment for symbol | Yes  |
-| POST   | `/api/v1/sentiment/:symbol/vote` | Vote on sentiment        | Yes  |
-
----
-
-## 🔔 Notification Endpoints
-
-| Method | Endpoint                         | Description        | Auth |
-| ------ | -------------------------------- | ------------------ | ---- |
-| GET    | `/api/v1/notifications`          | List notifications | Yes  |
-| PATCH  | `/api/v1/notifications/:id/read` | Mark as read       | Yes  |
-| PATCH  | `/api/v1/notifications/read-all` | Mark all as read   | Yes  |
-
----
-
-## 🛡️ Admin Endpoints
-
-| Method | Endpoint                          | Description        | Auth  |
-| ------ | --------------------------------- | ------------------ | ----- |
-| GET    | `/api/v1/admin/users`             | List all users     | Admin |
-| PATCH  | `/api/v1/admin/users/:id/suspend` | Suspend user       | Admin |
-| GET    | `/api/v1/admin/analytics`         | Platform analytics | Admin |
-| GET    | `/api/v1/admin/health`            | System health      | Admin |
-| POST   | `/api/v1/admin/reports`           | Generate report    | Admin |
-
----
-
-## 📝 Sample Requests
-
-### Place Order
-
-**Request:**
-
-```http
-POST /api/v1/orders
-Authorization: Bearer eyJhbGci...
-Content-Type: application/json
-
+```json
 {
-  "portfolioId": "uuid-here",
-  "symbol": "AAPL",
-  "side": "BUY",
-  "type": "LIMIT",
-  "quantity": 10,
-  "limitPrice": 140.00
+    "name": "John Trader",
+    "email": "john@example.com",
+    "password": "SecurePass123!"
 }
 ```
 
-**Response:**
+### Response
 
 ```json
 {
     "success": true,
     "data": {
-        "id": "order-uuid",
-        "portfolioId": "uuid-here",
-        "symbol": "AAPL",
-        "assetType": "STOCK",
-        "side": "BUY",
-        "type": "LIMIT",
-        "status": "PENDING",
-        "quantity": 10,
-        "limitPrice": 140.0,
-        "createdAt": "2026-09-19T14:32:15Z"
-    },
-    "meta": {
-        "message": "Order placed successfully"
+        "user": {},
+        "accessToken": "...",
+        "refreshToken": "...",
+        "expiresAt": "..."
     }
 }
 ```
 
-### Error Response
+---
+
+## `POST /auth/login`
+
+```json
+{
+    "email": "john@example.com",
+    "password": "SecurePass123!"
+}
+```
+
+---
+
+## `POST /auth/google`
+
+```json
+{
+    "credential": "..."
+}
+```
+
+---
+
+## `POST /auth/refresh`
+
+```json
+{
+    "refreshToken": "..."
+}
+```
+
+---
+
+## `POST /auth/logout`
+
+```json
+{
+    "refreshToken": "..."
+}
+```
+
+---
+
+## `GET /auth/me`
+
+Returns the authenticated user.
+
+---
+
+## `PATCH /auth/profile`
+
+Updates profile information.
+
+```json
+{
+    "name": "New Name",
+    "avatarUrl": "https://..."
+}
+```
+
+---
+
+# 👤 Users
+
+## `GET /users/:id`
+
+Get public user profile.
+
+## `GET /users/:id/portfolio`
+
+Get publicly visible portfolio information.
+
+## `GET /users/:id/trades`
+
+Get publicly visible trading history.
+
+---
+
+# 💼 Portfolios
+
+## `GET /portfolios`
+
+List authenticated user's portfolios.
+
+## `POST /portfolios`
+
+Create portfolio.
+
+## `GET /portfolios/:id`
+
+Get portfolio details.
+
+## `PATCH /portfolios/:id`
+
+Update portfolio.
+
+## `DELETE /portfolios/:id`
+
+Deactivate/delete portfolio.
+
+## `GET /portfolios/:id/holdings`
+
+Get current holdings.
+
+## `GET /portfolios/:id/performance`
+
+Get performance history and statistics.
+
+## `GET /portfolios/:id/pnl-heatmap`
+
+Get daily P&L heatmap data.
+
+---
+
+# 📋 Orders
+
+## `GET /orders`
+
+List authenticated user's orders.
+
+Supported filters:
+
+```text
+status
+symbol
+side
+type
+portfolioId
+date range
+```
+
+## `POST /orders`
+
+Place an order.
+
+```json
+{
+    "portfolioId": "uuid",
+    "symbol": "AAPL",
+    "assetType": "STOCK",
+    "side": "BUY",
+    "type": "LIMIT",
+    "quantity": "10",
+    "limitPrice": "250"
+}
+```
+
+## `GET /orders/:id`
+
+Get order details.
+
+## `PATCH /orders/:id`
+
+Modify an eligible pending order.
+
+## `DELETE /orders/:id`
+
+Cancel an eligible pending order.
+
+---
+
+# 💱 Trades
+
+## `GET /trades`
+
+List user's executed trades.
+
+## `GET /trades/:id`
+
+Get trade details.
+
+---
+
+# 📊 Market Data
+
+## `GET /market/search`
+
+Search tradable instruments.
+
+Example:
+
+```text
+?query=apple
+```
+
+## `GET /market/quote/:symbol`
+
+Get current market quote.
+
+## `GET /market/history/:symbol`
+
+Get historical OHLCV data.
+
+## `GET /market/news/:symbol`
+
+Get market news.
+
+## `GET /market/orderbook/:symbol`
+
+Get crypto order-book depth where supported.
+
+## `GET /market/trades/:symbol`
+
+Get recent market trades where supported.
+
+---
+
+# 🔔 Alerts
+
+## `GET /alerts`
+
+List user's alerts.
+
+## `POST /alerts`
+
+Create alert.
+
+```json
+{
+    "symbol": "AAPL",
+    "condition": "PRICE_ABOVE",
+    "targetPrice": "250",
+    "sendEmail": true,
+    "sendPush": false
+}
+```
+
+## `PATCH /alerts/:id`
+
+Update alert.
+
+## `DELETE /alerts/:id`
+
+Delete alert.
+
+---
+
+# 👥 Social
+
+## `GET /social/feed`
+
+Get social feed.
+
+## `POST /social/follow/:userId`
+
+Follow user.
+
+## `DELETE /social/follow/:userId`
+
+Unfollow user.
+
+## `GET /social/followers`
+
+Get followers.
+
+## `GET /social/following`
+
+Get following.
+
+---
+
+# 🔄 Copy Trading
+
+## `GET /copy-trading`
+
+List active copy relationships.
+
+## `POST /copy-trading`
+
+Start copying a trader.
+
+```json
+{
+    "traderId": "uuid",
+    "allocationPct": "50",
+    "maxTradeSize": "1000"
+}
+```
+
+## `PATCH /copy-trading/:id`
+
+Update copy settings.
+
+## `DELETE /copy-trading/:id`
+
+Stop copying.
+
+---
+
+# 🏆 Leaderboards
+
+## `GET /leaderboard`
+
+Global leaderboard.
+
+## `GET /leaderboard/friends`
+
+Leaderboard of followed users/friends.
+
+---
+
+# 🏟️ Leagues
+
+## `GET /leagues`
+
+List leagues.
+
+## `POST /leagues/:id/join`
+
+Join league.
+
+## `GET /leagues/:id/leaderboard`
+
+Get league rankings.
+
+---
+
+# 🏅 Achievements
+
+## `GET /achievements`
+
+Get all achievements.
+
+## `GET /achievements/mine`
+
+Get authenticated user's achievements.
+
+---
+
+# 📊 Sentiment
+
+## `GET /sentiment/:symbol`
+
+Get community sentiment.
+
+## `POST /sentiment/:symbol/vote`
+
+Submit or update sentiment vote.
+
+```json
+{
+    "sentiment": "BULLISH"
+}
+```
+
+---
+
+# 🔔 Notifications
+
+## `GET /notifications`
+
+List user's notifications.
+
+## `PATCH /notifications/:id/read`
+
+Mark notification as read.
+
+## `PATCH /notifications/read-all`
+
+Mark all notifications as read.
+
+---
+
+# 🛡️ Admin
+
+## `GET /admin/users`
+
+List users.
+
+Supported filters:
+
+```text
+page
+limit
+search
+role
+isSuspended
+isVerified
+```
+
+## `GET /admin/users/:id`
+
+Get user details.
+
+## `PATCH /admin/users/:id/suspend`
+
+Suspend or unsuspend a user.
+
+## `GET /admin/analytics`
+
+Platform-wide analytics.
+
+## `GET /admin/health`
+
+System health.
+
+## `GET /admin/market-data`
+
+Market-data provider health.
+
+## `POST /admin/reports`
+
+Generate administrative reports.
+
+## `GET /admin/audit-logs`
+
+Search audit activity.
+
+---
+
+# 📦 Response Format
+
+## Success
+
+```json
+{
+    "success": true,
+    "data": {}
+}
+```
+
+## Error
 
 ```json
 {
     "success": false,
     "error": {
         "code": "INSUFFICIENT_BALANCE",
-        "message": "Insufficient cash balance",
+        "message": "Insufficient portfolio cash.",
         "details": {
-            "required": 1400.0,
-            "available": 1200.0
+            "required": "2500",
+            "available": "1200"
         }
     }
 }
 ```
 
-### Register User
+---
 
-**Request:**
+# 📄 Pagination
 
-```http
-POST /api/v1/auth/register
-Content-Type: application/json
+Paginated endpoints use:
 
-{
-  "email": "trader@example.com",
-  "password": "SecurePass123!",
-  "name": "John Trader"
-}
+```text
+?page=1&limit=20
 ```
 
-**Response:**
+Response:
 
 ```json
 {
     "success": true,
     "data": {
-        "user": {
-            "id": "user-uuid",
-            "email": "trader@example.com",
-            "name": "John Trader",
-            "role": "TRADER"
-        },
-        "accessToken": "eyJhbGci...",
-        "refreshToken": "rt_abc123...",
-        "expiresIn": 900
+        "items": [],
+        "pagination": {
+            "page": 1,
+            "limit": 20,
+            "total": 120,
+            "totalPages": 6
+        }
     }
 }
+```
+
+---
+
+# ❌ Standard Error Categories
+
+```text
+VALIDATION_ERROR
+UNAUTHORIZED
+FORBIDDEN
+NOT_FOUND
+CONFLICT
+INSUFFICIENT_BALANCE
+INSUFFICIENT_POSITION
+INVALID_ORDER
+ORDER_NOT_EXECUTABLE
+RATE_LIMITED
+MARKET_DATA_UNAVAILABLE
+INTERNAL_SERVER_ERROR
 ```

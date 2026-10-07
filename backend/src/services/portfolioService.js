@@ -1,12 +1,8 @@
 const prisma = require("../config/database");
+const { AppError } = require("../utils/errors");
 
 function createServiceError(message, statusCode, code) {
-  const error = new Error(message);
-
-  error.statusCode = statusCode;
-  error.code = code;
-
-  return error;
+  return new AppError(message, { statusCode, code });
 }
 
 async function ensureActiveUser(userId) {
@@ -128,8 +124,82 @@ async function createPortfolio(userId, { name, description = null }) {
   }
 }
 
+async function listPortfolioHoldings(userId, portfolioId) {
+  await ensureActiveUser(userId);
+
+  const portfolio = await prisma.portfolio.findFirst({
+    where: {
+      id: portfolioId,
+      userId,
+    },
+    select: {
+      id: true,
+    },
+  });
+
+  if (!portfolio) {
+    throw createServiceError(
+      "Portfolio not found.",
+      404,
+      "PORTFOLIO_NOT_FOUND",
+    );
+  }
+
+  const holdings = await prisma.holding.findMany({
+    where: {
+      portfolioId: portfolio.id,
+    },
+    orderBy: {
+      symbol: "asc",
+    },
+  });
+
+  return holdings.map((holding) => ({
+    id: holding.id,
+    portfolioId: holding.portfolioId,
+    symbol: holding.symbol,
+    assetType: holding.assetType,
+    quantity: holding.quantity.toString(),
+    averageBuyPrice: holding.averageBuyPrice.toString(),
+    totalInvested: holding.totalInvested.toString(),
+    isShort: holding.isShort,
+    createdAt: holding.createdAt,
+    updatedAt: holding.updatedAt,
+  }));
+}
+
+async function getPortfolioCashBalance(userId, portfolioId) {
+  await ensureActiveUser(userId);
+
+  const portfolio = await prisma.portfolio.findFirst({
+    where: {
+      id: portfolioId,
+      userId,
+    },
+    select: {
+      id: true,
+      cashBalance: true,
+    },
+  });
+
+  if (!portfolio) {
+    throw createServiceError(
+      "Portfolio not found.",
+      404,
+      "PORTFOLIO_NOT_FOUND",
+    );
+  }
+
+  return {
+    portfolioId: portfolio.id,
+    cashBalance: portfolio.cashBalance.toString(),
+  };
+}
+
 module.exports = {
   listUserPortfolios,
   getPortfolioById,
   createPortfolio,
+  listPortfolioHoldings,
+  getPortfolioCashBalance,
 };
