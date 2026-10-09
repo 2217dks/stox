@@ -200,17 +200,23 @@ const UTC_OFFSET_PATTERN = /(?:Z|[+-]\d{2}:?\d{2})$/i;
 // silently normalizing them.
 function parseDateOnlyUtc(value, dayOffset) {
   const [year, month, day] = value.split("-").map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day + dayOffset));
 
+  // The original calendar date must round-trip first. Validating the
+  // offset-shifted date instead would reject valid end-of-month bounds
+  // (to=2026-10-31): the +1 day lands in the next month, so the shifted
+  // date's month no longer matches the input's month.
+  const original = new Date(Date.UTC(year, month - 1, day));
   if (
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day + dayOffset
+    original.getUTCFullYear() !== year ||
+    original.getUTCMonth() !== month - 1 ||
+    original.getUTCDate() !== day
   ) {
     return new Date(NaN);
   }
 
-  return date;
+  // The original date is proven valid, so normalized construction of the
+  // shifted date is exactly the intended next-day semantics.
+  return new Date(Date.UTC(year, month - 1, day + dayOffset));
 }
 
 function dateBoundSchema(dayOffset) {
