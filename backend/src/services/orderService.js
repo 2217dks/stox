@@ -44,13 +44,18 @@ async function getOwnedActivePortfolio(userId, portfolioId) {
   return portfolio;
 }
 
-async function createMarketOrder({
+// `createMarketOrder` is kept as a backward-compatible alias; the canonical
+// entry point is `createOrder`.
+async function createOrder({
   userId,
   portfolioId,
   symbol,
   assetType,
   side,
+  type = "MARKET",
   quantity,
+  limitPrice = null,
+  stopPrice = null,
 }) {
   await ensureActiveUser(userId);
 
@@ -75,9 +80,11 @@ async function createMarketOrder({
       symbol: normalizedSymbol,
       assetType,
       side,
-      type: "MARKET",
+      type,
       status: "PENDING",
       quantity,
+      limitPrice,
+      stopPrice,
       source: "MANUAL",
     },
   });
@@ -104,5 +111,6 @@ async function createMarketOrder({
 }
 
 module.exports = {
-  createMarketOrder,
+  createOrder,
+  createMarketOrder: createOrder,
 };
