@@ -1165,6 +1165,37 @@ describe("order history filters (black-box via GET /orders filters)", () => {
     );
   });
 
+  test("date-only to on the last day of a month includes that whole day", async () => {
+    const created = await postOrder({
+      portfolioId: mainPortfolioId,
+      symbol: "AAPL",
+      assetType: "STOCK",
+      side: "BUY",
+      quantity: "1",
+    });
+
+    expect(created.status).toBe(201);
+    createdOrderIds.push(created.body.data.order.id);
+
+    // Pin the order to a month-end day so the window itself crosses a
+    // month boundary when the date-only `to` bound is shifted by one day.
+    const monthEndInstant = "2026-10-31T14:30:00.000Z";
+    await prisma.order.update({
+      where: { id: created.body.data.order.id },
+      data: { createdAt: new Date(monthEndInstant) },
+    });
+
+    const response = await request(app)
+      .get("/api/v1/orders")
+      .query({ from: "2026-10-31", to: "2026-10-31", limit: "100" })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.orders.map((o) => o.id)).toContain(
+      created.body.data.order.id,
+    );
+  });
+
   test("explicit datetime to is exclusive (half-open window)", async () => {
     const created = await postOrder({
       portfolioId: mainPortfolioId,

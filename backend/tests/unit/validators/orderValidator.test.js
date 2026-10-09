@@ -664,6 +664,26 @@ describe("orderValidator schemas (black-box)", () => {
       expectValid(result);
     });
 
+    // End-of-month bounds: the +1 day shift crosses into the next
+    // month/year, which must not trip the impossible-date guard.
+    test("date-only to on the last day of a month is accepted", () => {
+      const monthEnd = listOrdersQuerySchema.safeParse({ to: "2026-10-31" });
+      const yearEnd = listOrdersQuerySchema.safeParse({ to: "2026-12-31" });
+
+      expectValid(monthEnd);
+      expect(monthEnd.data.to.toISOString()).toBe("2026-11-01T00:00:00.000Z");
+
+      expectValid(yearEnd);
+      expect(yearEnd.data.to.toISOString()).toBe("2027-01-01T00:00:00.000Z");
+    });
+
+    test("date-only to on a leap day is accepted", () => {
+      const result = listOrdersQuerySchema.safeParse({ to: "2024-02-29" });
+
+      expectValid(result);
+      expect(result.data.to.toISOString()).toBe("2024-03-01T00:00:00.000Z");
+    });
+
     test("impossible calendar dates are rejected, not normalized", () => {
       expectIssueAt(
         listOrdersQuerySchema.safeParse({ from: "2026-02-30" }),
