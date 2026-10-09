@@ -23,6 +23,11 @@ let accessToken;
 let mainPortfolioId;
 const createdOrderIds = [];
 
+// Second user, used to prove orders are invisible across accounts.
+let userBId;
+let userBAccessToken;
+let userBOrderId;
+
 beforeAll(async () => {
   jest.setTimeout(30000);
 
@@ -46,6 +51,14 @@ beforeAll(async () => {
 afterAll(async () => {
   for (const orderId of createdOrderIds) {
     await prisma.order.delete({ where: { id: orderId } }).catch(() => {});
+  }
+
+  if (userBOrderId) {
+    await prisma.order.delete({ where: { id: userBOrderId } }).catch(() => {});
+  }
+
+  if (userBId) {
+    await prisma.user.delete({ where: { id: userBId } });
   }
 
   if (userId) {
@@ -555,6 +568,178 @@ describe("order creation validation (black-box via POST /orders)", () => {
         expect(response.status).toBe(400);
         expectErrorEnvelope(response.body);
       }
+    });
+  });
+});
+
+describe("order detail endpoint (black-box via GET /orders/:id)", () => {
+  const marketBase = () => ({
+    portfolioId: mainPortfolioId,
+    symbol: "AAPL",
+    assetType: "STOCK",
+    side: "BUY",
+    quantity: "1.5",
+  });
+
+  let detailOrderId;
+  let detailLimitOrderId;
+
+  const serializerKeys = [
+    "id",
+    "portfolioId",
+    "symbol",
+    "assetType",
+    "side",
+    "type",
+    "status",
+    "quantity",
+    "limitPrice",
+    "stopPrice",
+    "executedPrice",
+    "executedAt",
+    "expiresAt",
+    "notes",
+    "source",
+    "createdAt",
+    "updatedAt",
+  ].sort();
+
+  beforeAll(async () => {
+    jest.setTimeout(30000);
+
+    // Set up user B (another account) with one order, for the
+    // cross-account invisibility case.
+    const registerB = await request(app)
+      .post("/api/v1/auth/register")
+      .send({
+        name: "Order Detail User B",
+        email: `order-detail-b-${timestamp}@stox.local`,
+        password: validUser.password,
+      });
+
+    userBId = registerB.body.data.user.id;
+    userBAccessToken = registerB.body.data.accessToken;
+
+    const portfoliosB = await request(app)
+      .get("/api/v1/portfolios")
+      .set("Authorization", `Bearer ${userBAccessToken}`);
+
+    const portfolioB = portfoliosB.body.data.portfolios.find(
+      (portfolio) => portfolio.isDefault,
+    );
+
+    const orderB = await request(app)
+      .post("/api/v1/orders")
+      .set("Authorization", `Bearer ${userBAccessToken}`)
+      .send({ ...marketBase(), portfolioId: portfolioB.id });
+
+    userBOrderId = orderB.body.data.order.id;
+
+    // User A's own orders for the success cases.
+    const market = await postOrder(marketBase());
+    detailOrderId = market.body.data.order.id;
+    createdOrderIds.push(detailOrderId);
+
+    const limit = await postOrder({
+      ...marketBase(),
+      type: "LIMIT",
+      limitPrice: "250.5",
+    });
+    detailLimitOrderId = limit.body.data.order.id;
+    createdOrderIds.push(detailLimitOrderId);
+  });
+
+  describe("middleware chain order (contract: identity before validity)", () => {
+    test("missing token is 401 even with an invalid param", async () => {
+      const response = await request(app).get("/api/v1/orders/not-a-uuid");
+
+      expect(response.status).toBe(401);
+      expectErrorEnvelope(response.body);
+    });
+
+    test("garbage token is 401 even with a valid uuid", async () => {
+      const response = await request(app)
+        .get("/api/v1/orders/8b2c1a4e-3f2d-4c5b-9a8e-7d6c5b4a3f2e")
+        .set("Authorization", "Bearer garbage.token.here");
+
+      expect(response.status).toBe(401);
+      expectErrorEnvelope(response.body);
+    });
+  });
+
+  describe("path parameter validation (contract: 400 VALIDATION_ERROR)", () => {
+    test("invalid uuid is rejected with an issue on 'id'", async () => {
+      const response = await request(app)
+        .get("/api/v1/orders/not-a-uuid")
+        .set("Authorization", `Bearer ${accessToken}`);
+
+      expect(response.status).toBe(400);
+      expectValidationDetails(response.body);
+      expect(pathsOf(response.body)).toContain("id");
+    });
+  });
+
+  describe("not-found contract (missing and foreign orders are indistinguishable)", () => {
+    test("nonexistent but valid uuid is 404 ORDER_NOT_FOUND", async () => {
+      const response = await request(app)
+        .get("/api/v1/orders/8b2c1a4e-3f2d-4c5b-9a8e-7d6c5b4a3f2e")
+        .set("Authorization", `Bearer ${accessToken}`);
+
+      expect(response.status).toBe(404);
+      expectErrorEnvelope(response.body);
+      expect(response.body.error.code).toBe("ORDER_NOT_FOUND");
+    });
+
+    test("another user's order is 404 ORDER_NOT_FOUND (never 403)", async () => {
+      const response = await request(app)
+        .get(`/api/v1/orders/${userBOrderId}`)
+        .set("Authorization", `Bearer ${accessToken}`);
+
+      expect(response.status).toBe(404);
+      expectErrorEnvelope(response.body);
+      expect(response.body.error.code).toBe("ORDER_NOT_FOUND");
+    });
+  });
+
+  describe("success contract (contract: 200 with the full serialized order)", () => {
+    test("returns the authenticated user's own order", async () => {
+      const response = await request(app)
+        .get(`/api/v1/orders/${detailOrderId}`)
+        .set("Authorization", `Bearer ${accessToken}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+
+      const order = response.body.data.order;
+      expect(order.id).toBe(detailOrderId);
+      expect(order.portfolioId).toBe(mainPortfolioId);
+      expect(order.symbol).toBe("AAPL");
+      expect(order.assetType).toBe("STOCK");
+      expect(order.side).toBe("BUY");
+      expect(order.type).toBe("MARKET");
+      expect(order.status).toBe("PENDING");
+      expect(order.quantity).toBe("1.5");
+      expect(order.limitPrice).toBeNull();
+      expect(order.stopPrice).toBeNull();
+      expect(order.executedPrice).toBeNull();
+      expect(order.executedAt).toBeNull();
+      expect(order.source).toBe("MANUAL");
+
+      expect(Object.keys(order).sort()).toEqual(serializerKeys);
+    });
+
+    test("decimal fields are serialized as strings", async () => {
+      const response = await request(app)
+        .get(`/api/v1/orders/${detailLimitOrderId}`)
+        .set("Authorization", `Bearer ${accessToken}`);
+
+      expect(response.status).toBe(200);
+
+      const order = response.body.data.order;
+      expect(order.type).toBe("LIMIT");
+      expect(typeof order.quantity).toBe("string");
+      expect(order.limitPrice).toBe("250.5");
+      expect(order.stopPrice).toBeNull();
     });
   });
 });
