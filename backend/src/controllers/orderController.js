@@ -18,6 +18,25 @@ async function createOrder(req, res, next) {
   }
 }
 
+async function getOrder(req, res, next) {
+  try {
+    const order = await orderService.getOrder({
+      userId: req.user.userId,
+      orderId: req.params.id,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        order,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createOrder,
+  getOrder,
 };
