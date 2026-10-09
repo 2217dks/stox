@@ -108,6 +108,52 @@ async function getOrder({ userId, orderId }) {
   return serializeOrder(order);
 }
 
+// Sorting allowlist: the list endpoint currently pins ordering to
+// createdAt desc. Exposing sort/order query params later means adding
+// entries here (and whitelisting direction), not restructuring the query.
+const ORDER_SORT_FIELDS = ["createdAt"];
+
+const ORDER_LIST_ORDER_BY = [{ createdAt: "desc" }];
+
+// `status` arrives as a validated, deduplicated array from the query schema.
+async function listOrders({ userId, page = 1, limit = 20, status }) {
+  const where = {
+    portfolio: {
+      userId,
+    },
+  };
+
+  if (status) {
+    where.status = {
+      in: status,
+    };
+  }
+
+  const [orders, total] = await Promise.all([
+    prisma.order.findMany({
+      where,
+      select: SERIALIZED_ORDER_FIELDS,
+      orderBy: ORDER_LIST_ORDER_BY,
+      skip: (page - 1) * limit,
+      take: limit,
+    }),
+
+    prisma.order.count({
+      where,
+    }),
+  ]);
+
+  return {
+    orders: orders.map(serializeOrder),
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+    },
+  };
+}
+
 async function createOrder({
   userId,
   portfolioId,
@@ -157,6 +203,7 @@ async function createOrder({
 module.exports = {
   serializeOrder,
   getOrder,
+  listOrders,
   createOrder,
   createMarketOrder: createOrder,
 };
