@@ -159,6 +159,10 @@ async function listOrders({
   }
 
   if (from || to) {
+    // Half-open window [from, to): from is inclusive, to is exclusive.
+    // A date-only `to` was normalized by the validator to midnight of the
+    // following day, so the whole selected day is covered without tying
+    // these comparisons to any timestamp precision.
     where.createdAt = {};
 
     if (from) {
@@ -166,7 +170,7 @@ async function listOrders({
     }
 
     if (to) {
-      where.createdAt.lte = to;
+      where.createdAt.lt = to;
     }
   }
 

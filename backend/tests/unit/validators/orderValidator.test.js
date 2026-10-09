@@ -639,6 +639,73 @@ describe("orderValidator schemas (black-box)", () => {
       expectValid(result);
     });
 
+    test("date-only from is normalized to midnight of that day (UTC, inclusive)", () => {
+      const result = listOrdersQuerySchema.safeParse({ from: "2026-10-01" });
+
+      expectValid(result);
+      expect(result.data.from.toISOString()).toBe(
+        "2026-10-01T00:00:00.000Z",
+      );
+    });
+
+    test("date-only to is normalized to midnight of the following day (UTC, exclusive)", () => {
+      const result = listOrdersQuerySchema.safeParse({ to: "2026-10-09" });
+
+      expectValid(result);
+      expect(result.data.to.toISOString()).toBe("2026-10-10T00:00:00.000Z");
+    });
+
+    test("equal date-only bounds form a valid single-day window", () => {
+      const result = listOrdersQuerySchema.safeParse({
+        from: "2026-10-09",
+        to: "2026-10-09",
+      });
+
+      expectValid(result);
+    });
+
+    test("impossible calendar dates are rejected, not normalized", () => {
+      expectIssueAt(
+        listOrdersQuerySchema.safeParse({ from: "2026-02-30" }),
+        "from",
+      );
+      expectIssueAt(
+        listOrdersQuerySchema.safeParse({ to: "2026-13-45" }),
+        "to",
+      );
+    });
+
+    test("full ISO datetimes pass through without normalization", () => {
+      const result = listOrdersQuerySchema.safeParse({
+        from: "2026-10-01T10:00:00.000Z",
+        to: "2026-10-09T18:30:00.000Z",
+      });
+
+      expectValid(result);
+      expect(result.data.from.toISOString()).toBe("2026-10-01T10:00:00.000Z");
+      expect(result.data.to.toISOString()).toBe("2026-10-09T18:30:00.000Z");
+    });
+
+    test("offset-bearing datetimes normalize to their UTC instant", () => {
+      const result = listOrdersQuerySchema.safeParse({
+        from: "2026-10-10T09:00:00+05:30",
+      });
+
+      expectValid(result);
+      expect(result.data.from.toISOString()).toBe("2026-10-10T03:30:00.000Z");
+    });
+
+    test("timezone-less datetimes are rejected (offset required)", () => {
+      expectIssueAt(
+        listOrdersQuerySchema.safeParse({ from: "2026-10-10T09:00:00" }),
+        "from",
+      );
+      expectIssueAt(
+        listOrdersQuerySchema.safeParse({ to: "2026-10-10T18:00:00.000" }),
+        "to",
+      );
+    });
+
     test("accepts full ISO datetimes", () => {
       const result = listOrdersQuerySchema.safeParse({
         from: "2026-10-01T10:00:00.000Z",

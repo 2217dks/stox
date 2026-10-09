@@ -1128,6 +1128,83 @@ describe("order history filters (black-box via GET /orders filters)", () => {
     expect(pathsOf(response.body)).toContain("from");
   });
 
+  test("timezone-less datetimes are rejected with an issue at the bound", async () => {
+    const response = await request(app)
+      .get("/api/v1/orders")
+      .query({ to: "2026-10-10T18:00:00" })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(response.status).toBe(400);
+    expectValidationDetails(response.body);
+    expect(pathsOf(response.body)).toContain("to");
+  });
+
+  test("date-only to includes orders created later on that day", async () => {
+    const created = await postOrder({
+      portfolioId: mainPortfolioId,
+      symbol: "AAPL",
+      assetType: "STOCK",
+      side: "BUY",
+      quantity: "1",
+    });
+
+    expect(created.status).toBe(201);
+    createdOrderIds.push(created.body.data.order.id);
+
+    const createdAt = created.body.data.order.createdAt; // full ISO datetime
+    const dateOnly = createdAt.slice(0, 10); // "YYYY-MM-DD"
+
+    const response = await request(app)
+      .get("/api/v1/orders")
+      .query({ to: dateOnly, limit: "100" })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.orders.map((o) => o.id)).toContain(
+      created.body.data.order.id,
+    );
+  });
+
+  test("explicit datetime to is exclusive (half-open window)", async () => {
+    const created = await postOrder({
+      portfolioId: mainPortfolioId,
+      symbol: "AAPL",
+      assetType: "STOCK",
+      side: "BUY",
+      quantity: "1",
+    });
+
+    expect(created.status).toBe(201);
+    createdOrderIds.push(created.body.data.order.id);
+
+    const createdAt = created.body.data.order.createdAt;
+
+    // to = the order's exact creation instant must exclude it.
+    const atBoundary = await request(app)
+      .get("/api/v1/orders")
+      .query({ to: createdAt, limit: "100" })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(atBoundary.status).toBe(200);
+    expect(atBoundary.body.data.orders.map((o) => o.id)).not.toContain(
+      created.body.data.order.id,
+    );
+
+    // One millisecond later must include it.
+    const justAfter = new Date(
+      new Date(createdAt).getTime() + 1,
+    ).toISOString();
+    const justAfterBoundary = await request(app)
+      .get("/api/v1/orders")
+      .query({ to: justAfter, limit: "100" })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(justAfterBoundary.status).toBe(200);
+    expect(
+      justAfterBoundary.body.data.orders.map((o) => o.id),
+    ).toContain(created.body.data.order.id);
+  });
+
   test("history view combines status and date range", async () => {
     const response = await request(app)
       .get("/api/v1/orders")
