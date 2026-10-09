@@ -46,6 +46,68 @@ async function getOwnedActivePortfolio(userId, portfolioId) {
 
 // `createMarketOrder` is kept as a backward-compatible alias; the canonical
 // entry point is `createOrder`.
+const SERIALIZED_ORDER_FIELDS = {
+  id: true,
+  portfolioId: true,
+  symbol: true,
+  assetType: true,
+  side: true,
+  type: true,
+  status: true,
+  quantity: true,
+  limitPrice: true,
+  stopPrice: true,
+  executedPrice: true,
+  executedAt: true,
+  expiresAt: true,
+  notes: true,
+  source: true,
+  createdAt: true,
+  updatedAt: true,
+};
+
+function serializeOrder(order) {
+  return {
+    id: order.id,
+    portfolioId: order.portfolioId,
+    symbol: order.symbol,
+    assetType: order.assetType,
+    side: order.side,
+    type: order.type,
+    status: order.status,
+    quantity: order.quantity.toString(),
+    limitPrice: order.limitPrice ? order.limitPrice.toString() : null,
+    stopPrice: order.stopPrice ? order.stopPrice.toString() : null,
+    executedPrice: order.executedPrice ? order.executedPrice.toString() : null,
+    executedAt: order.executedAt,
+    expiresAt: order.expiresAt,
+    notes: order.notes,
+    source: order.source,
+    createdAt: order.createdAt,
+    updatedAt: order.updatedAt,
+  };
+}
+
+// Orders are reached through their portfolio; ownership is enforced at the
+// query level so foreign orders are indistinguishable from missing ones.
+async function getOrder({ userId, orderId }) {
+  const order = await prisma.order.findFirst({
+    where: {
+      id: orderId,
+      portfolio: {
+        userId,
+      },
+    },
+    select: SERIALIZED_ORDER_FIELDS,
+  });
+
+  if (!order) {
+    throw AppError.notFound("Order not found.", "ORDER_NOT_FOUND");
+  }
+
+  return serializeOrder(order);
+}
+
 async function createOrder({
   userId,
   portfolioId,
@@ -89,28 +151,12 @@ async function createOrder({
     },
   });
 
-  return {
-    id: order.id,
-    portfolioId: order.portfolioId,
-    symbol: order.symbol,
-    assetType: order.assetType,
-    side: order.side,
-    type: order.type,
-    status: order.status,
-    quantity: order.quantity.toString(),
-    limitPrice: order.limitPrice ? order.limitPrice.toString() : null,
-    stopPrice: order.stopPrice ? order.stopPrice.toString() : null,
-    executedPrice: order.executedPrice ? order.executedPrice.toString() : null,
-    executedAt: order.executedAt,
-    expiresAt: order.expiresAt,
-    notes: order.notes,
-    source: order.source,
-    createdAt: order.createdAt,
-    updatedAt: order.updatedAt,
-  };
+  return serializeOrder(order);
 }
 
 module.exports = {
+  serializeOrder,
+  getOrder,
   createOrder,
   createMarketOrder: createOrder,
 };
