@@ -30,7 +30,7 @@ router.get(
 router.get(
   "/:id",
   authMiddleware,
-  validate(orderIdParamSchema, "params"),
+  validate(orderIdParamSchema, "params", "validatedParams"),
   orderController.getOrder,
 );
 
@@ -38,7 +38,7 @@ router.delete(
   "/:id",
   authMiddleware,
   orderLimiter,
-  validate(orderIdParamSchema, "params"),
+  validate(orderIdParamSchema, "params", "validatedParams"),
   orderController.cancelOrder,
 );
 

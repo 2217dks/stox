@@ -22,7 +22,7 @@ async function getOrder(req, res, next) {
   try {
     const order = await orderService.getOrder({
       userId: req.user.userId,
-      orderId: req.params.id,
+      orderId: req.validatedParams.id,
     });
 
     return res.status(200).json({
@@ -56,7 +56,7 @@ async function cancelOrder(req, res, next) {
   try {
     const order = await orderService.cancelOrder({
       userId: req.user.userId,
-      orderId: req.params.id,
+      orderId: req.validatedParams.id,
     });
 
     return res.status(200).json({
