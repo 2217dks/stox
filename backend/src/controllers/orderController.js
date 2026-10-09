@@ -36,7 +36,24 @@ async function getOrder(req, res, next) {
   }
 }
 
+async function listOrders(req, res, next) {
+  try {
+    const result = await orderService.listOrders({
+      userId: req.user.userId,
+      ...req.validatedQuery,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createOrder,
   getOrder,
+  listOrders,
 };
