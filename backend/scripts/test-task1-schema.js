@@ -86,15 +86,25 @@ async function main() {
       },
     });
 
-    const alert = await prisma.alert.create({
-      data: {
-        userId: userA.id,
+    const symbol = await prisma.symbol.upsert({
+      where: { symbol: "AAPL" },
+      update: {},
+      create: {
         symbol: "AAPL",
+        name: "Apple Inc.",
         assetType: "STOCK",
-        condition: "PRICE_ABOVE",
-        targetPrice: "250.5",
+        exchange: "NASDAQ",
       },
     });
+
+const alert = await prisma.alert.create({
+  data: {
+    userId: userA.id,
+    symbolId: symbol.id,
+    condition: "PRICE_ABOVE",
+    targetPrice: "250.5",
+  },
+});
 
     await prisma.leaderboardEntry.create({
       data: {
