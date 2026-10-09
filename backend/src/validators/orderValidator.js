@@ -164,6 +164,71 @@ const statusFilter = z
     .transform((statuses) => [...new Set(statuses)]))
   .optional();
 
+const orderIdParamSchema = z.object({
+  id: z.string().uuid("Invalid order ID."),
+});
+
+// ============================================================
+// Date-range contract (UTC, half-open window)
+//
+// `from` is inclusive, `to` is exclusive: the window is [from, to).
+//
+// Accepted bound formats:
+// - "YYYY-MM-DD"                -> date-only; denotes midnight UTC of
+//                                  that date. A date-only `to` therefore
+//                                  normalizes to midnight of the
+//                                  FOLLOWING day so the entire selected
+//                                  day is covered. This keeps
+//                                  comparisons independent of timestamp
+//                                  precision — no "last instant of the
+//                                  day" arithmetic.
+// - ISO datetime WITH an explicit UTC offset ("...Z", "...±HH:MM",
+//   "...±HHMM")                 -> used as the exact instant.
+// - ISO datetime WITHOUT offset -> rejected. JavaScript would interpret
+//                                  it as the server's local time, making
+//                                  results depend on deployment
+//                                  timezone; every instant must name its
+//                                  offset explicitly.
+// ============================================================
+
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const UTC_OFFSET_PATTERN = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+// Parses a date-only string as midnight UTC, shifted by `dayOffset` days.
+// Returns an Invalid Date for impossible calendar dates (2026-02-30,
+// 2026-13-45) so the schema reports a validation issue instead of
+// silently normalizing them.
+function parseDateOnlyUtc(value, dayOffset) {
+  const [year, month, day] = value.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day + dayOffset));
+
+  if (
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== month - 1 ||
+    date.getUTCDate() !== day + dayOffset
+  ) {
+    return new Date(NaN);
+  }
+
+  return date;
+}
+
+function dateBoundSchema(dayOffset) {
+  return z
+    .string()
+    .transform((value) => value.trim())
+    .refine(
+      (value) => DATE_ONLY_PATTERN.test(value) || UTC_OFFSET_PATTERN.test(value),
+      "Must be a date (YYYY-MM-DD) or an ISO datetime with an explicit UTC offset (Z or ±HH:MM).",
+    )
+    .transform((value) =>
+      DATE_ONLY_PATTERN.test(value)
+        ? parseDateOnlyUtc(value, dayOffset)
+        : value,
+    )
+    .pipe(z.coerce.date());
+}
+
 const listOrdersQuerySchema = z
   .object({
     page: z.coerce.number().int().min(1).default(1),
@@ -173,22 +238,18 @@ const listOrdersQuerySchema = z
     side: sideEnum.optional(),
     type: orderTypeEnum.optional(),
     portfolioId: z.string().uuid("Invalid portfolio ID.").optional(),
-    from: z.coerce.date().optional(),
-    to: z.coerce.date().optional(),
+    from: dateBoundSchema(0).optional(),
+    to: dateBoundSchema(1).optional(),
   })
   .superRefine((query, ctx) => {
-    if (query.from && query.to && query.from > query.to) {
+    if (query.from && query.to && query.from >= query.to) {
       ctx.addIssue({
         code: "custom",
         path: ["to"],
-        message: "'to' must not be earlier than 'from'.",
+        message: "'to' must be later than 'from'.",
       });
     }
   });
-
-const orderIdParamSchema = z.object({
-  id: z.string().uuid("Invalid order ID."),
-});
 
 module.exports = {
   createMarketOrderSchema,
