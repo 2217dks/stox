@@ -219,19 +219,48 @@ async function cancelOrder({ userId, orderId }) {
     throw AppError.notFound("Order not found.", "ORDER_NOT_FOUND");
   }
 
-  if (order.status !== "PENDING") {
+  // PENDING -> CANCELLED must be atomic: the status condition lives in the
+  // UPDATE itself, so a concurrent execution between the eligibility check
+  // above and this write cannot be overwritten with CANCELLED. If the
+  // conditional update matches no rows, re-read owner-scoped to tell a
+  // vanished/foreign order (404) apart from one that is no longer
+  // cancellable (400).
+  const transition = await prisma.order.updateMany({
+    where: {
+      id: orderId,
+      status: "PENDING",
+    },
+    data: {
+      status: "CANCELLED",
+    },
+  });
+
+  if (transition.count === 0) {
+    const current = await prisma.order.findFirst({
+      where: {
+        id: orderId,
+        portfolio: {
+          userId,
+        },
+      },
+      select: {
+        status: true,
+      },
+    });
+
+    if (!current) {
+      throw AppError.notFound("Order not found.", "ORDER_NOT_FOUND");
+    }
+
     throw AppError.badRequest(
       "Only pending orders can be cancelled.",
       "ORDER_NOT_CANCELLABLE",
     );
   }
 
-  const updated = await prisma.order.update({
+  const updated = await prisma.order.findUnique({
     where: {
-      id: order.id,
-    },
-    data: {
-      status: "CANCELLED",
+      id: orderId,
     },
     select: SERIALIZED_ORDER_FIELDS,
   });
