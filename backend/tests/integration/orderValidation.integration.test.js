@@ -743,3 +743,559 @@ describe("order detail endpoint (black-box via GET /orders/:id)", () => {
     });
   });
 });
+
+describe("order list endpoint (black-box via GET /orders)", () => {
+  const marketBase = () => ({
+    portfolioId: mainPortfolioId,
+    assetType: "STOCK",
+    side: "BUY",
+    quantity: "1",
+  });
+
+  // Three known-newest pending orders; symbol tags identify them without
+  // relying on the symbol filter (which lands with the history task).
+  let newestOrderId;
+  let secondOrderId;
+  let thirdOrderId;
+
+  async function listOrders(query, token = accessToken) {
+    const request_ = request(app).get("/api/v1/orders");
+
+    if (token) {
+      request_.set("Authorization", `Bearer ${token}`);
+    }
+
+    return request_.query(query);
+  }
+
+  beforeAll(async () => {
+    jest.setTimeout(30000);
+
+    // Newest last-created; created in order third -> second -> newest.
+    for (const [suffix, field] of [
+      ["3", "thirdOrderId"],
+      ["2", "secondOrderId"],
+      ["1", "newestOrderId"],
+    ]) {
+      const response = await postOrder({
+        ...marketBase(),
+        symbol: `L${timestamp}${suffix}`,
+      });
+
+      createdOrderIds.push(response.body.data.order.id);
+
+      if (field === "thirdOrderId") thirdOrderId = response.body.data.order.id;
+      if (field === "secondOrderId") secondOrderId = response.body.data.order.id;
+      if (field === "newestOrderId") newestOrderId = response.body.data.order.id;
+    }
+  });
+
+  describe("middleware chain order (contract: identity before validity)", () => {
+    test("missing token is 401 even with invalid query params", async () => {
+      const response = await listOrders({ page: "0" }, null);
+
+      expect(response.status).toBe(401);
+      expectErrorEnvelope(response.body);
+    });
+
+    test("garbage token is 401", async () => {
+      const response = await request(app)
+        .get("/api/v1/orders")
+        .set("Authorization", "Bearer garbage.token.here");
+
+      expect(response.status).toBe(401);
+      expectErrorEnvelope(response.body);
+    });
+  });
+
+  describe("query validation (contract: 400 VALIDATION_ERROR)", () => {
+    const invalidQueries = [
+      { case: "page zero", query: { page: "0" }, path: "page" },
+      { case: "page non-numeric", query: { page: "abc" }, path: "page" },
+      { case: "page non-integer", query: { page: "1.5" }, path: "page" },
+      { case: "limit zero", query: { limit: "0" }, path: "limit" },
+      { case: "limit over max", query: { limit: "101" }, path: "limit" },
+      { case: "unknown status", query: { status: "FILLED" }, path: "status" },
+      { case: "empty status segment", query: { status: "PENDING," }, path: "status" },
+    ];
+
+    for (const { case: label, query, path } of invalidQueries) {
+      test(label, async () => {
+        const response = await listOrders(query);
+
+        expect(response.status).toBe(400);
+        expectValidationDetails(response.body);
+        expect(pathsOf(response.body).some((p) => p.startsWith(path))).toBe(
+          true,
+        );
+      });
+    }
+
+    test("invalid portfolioId filter is rejected", async () => {
+      const response = await listOrders({ portfolioId: "not-a-uuid" });
+
+      expect(response.status).toBe(400);
+      expectValidationDetails(response.body);
+      expect(pathsOf(response.body)).toContain("portfolioId");
+    });
+  });
+
+  describe("success contract (contract: 200 with orders and pagination)", () => {
+    test("default listing returns the envelope with sane pagination", async () => {
+      const response = await listOrders({});
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      expect(Array.isArray(response.body.data.orders)).toBe(true);
+      expect(response.body.data.pagination).toEqual({
+        page: 1,
+        limit: 20,
+        total: expect.any(Number),
+        totalPages: expect.any(Number),
+      });
+    });
+
+    test("listing is ownership-scoped: other users' orders never appear", async () => {
+      const response = await listOrders({ limit: "100" });
+
+      expect(response.status).toBe(200);
+
+      const ids = response.body.data.orders.map((order) => order.id);
+      expect(ids).not.toContain(userBOrderId);
+      expect(ids).toContain(newestOrderId);
+    });
+
+    test("status=PENDING returns only pending orders and includes known ones", async () => {
+      const response = await listOrders({ status: "PENDING", limit: "100" });
+
+      expect(response.status).toBe(200);
+
+      const orders = response.body.data.orders;
+      expect(orders.length).toBeGreaterThan(0);
+
+      for (const order of orders) {
+        expect(order.status).toBe("PENDING");
+      }
+
+      const ids = orders.map((order) => order.id);
+      expect(ids).toContain(newestOrderId);
+    });
+
+    test("orders are newest-first", async () => {
+      const response = await listOrders({ status: "PENDING", limit: "1" });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.orders[0].id).toBe(newestOrderId);
+      expect(response.body.data.pagination.page).toBe(1);
+      expect(response.body.data.pagination.limit).toBe(1);
+    });
+
+    test("pagination walks the newest-first stream page by page", async () => {
+      const page1 = await listOrders({ status: "PENDING", limit: "1", page: "1" });
+      const page2 = await listOrders({ status: "PENDING", limit: "1", page: "2" });
+
+      expect(page1.status).toBe(200);
+      expect(page2.status).toBe(200);
+      expect(page1.body.data.orders[0].id).toBe(newestOrderId);
+      expect(page2.body.data.orders[0].id).toBe(secondOrderId);
+    });
+
+    test("page beyond the last one is empty, not an error", async () => {
+      const response = await listOrders({ status: "PENDING", page: "5000" });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.orders).toEqual([]);
+      expect(response.body.data.pagination.page).toBe(5000);
+    });
+
+    test("multi-status filter accepts a comma-separated list", async () => {
+      const response = await listOrders({
+        status: "PENDING,EXECUTED",
+        limit: "100",
+      });
+
+      expect(response.status).toBe(200);
+
+      for (const order of response.body.data.orders) {
+        expect(["PENDING", "EXECUTED"]).toContain(order.status);
+      }
+    });
+  });
+
+  describe("unknown query params (contract: stripped, not rejected)", () => {
+    test("unknown params do not break the request", async () => {
+      const response = await listOrders({ page: "1", admin: "true" });
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.pagination.page).toBe(1);
+    });
+  });
+});
+
+describe("order history filters (black-box via GET /orders filters)", () => {
+  const marketBase = () => ({
+    portfolioId: mainPortfolioId,
+    assetType: "STOCK",
+    side: "BUY",
+    quantity: "1",
+  });
+
+  let historyMarketBuyId;
+  let historyMarketSellId;
+  let historyLimitBuyId;
+  let userBPortfolioId;
+
+  beforeAll(async () => {
+    jest.setTimeout(30000);
+
+    const created = [];
+    for (const [suffix, extra] of [
+      ["1", {}],
+      ["2", { side: "SELL" }],
+      ["3", { type: "LIMIT", limitPrice: "10" }],
+    ]) {
+      const response = await postOrder({
+        ...marketBase(),
+        symbol: `H${timestamp}${suffix}`,
+        ...extra,
+      });
+
+      created.push(response.body.data.order.id);
+      createdOrderIds.push(response.body.data.order.id);
+    }
+
+    [historyMarketBuyId, historyMarketSellId, historyLimitBuyId] = created;
+
+    const portfoliosB = await request(app)
+      .get("/api/v1/portfolios")
+      .set("Authorization", `Bearer ${userBAccessToken}`);
+
+    userBPortfolioId = portfoliosB.body.data.portfolios.find(
+      (portfolio) => portfolio.isDefault,
+    ).id;
+  });
+
+  test("symbol filter is an exact match", async () => {
+    const response = await request(app)
+      .get("/api/v1/orders")
+      .query({ symbol: `H${timestamp}1` })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.orders).toHaveLength(1);
+    expect(response.body.data.orders[0].id).toBe(historyMarketBuyId);
+  });
+
+  test("symbol filter normalizes case", async () => {
+    const response = await request(app)
+      .get("/api/v1/orders")
+      .query({ symbol: `h${timestamp}1` })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.orders).toHaveLength(1);
+    expect(response.body.data.orders[0].id).toBe(historyMarketBuyId);
+  });
+
+  test("side filter returns only that side", async () => {
+    const response = await request(app)
+      .get("/api/v1/orders")
+      .query({ side: "SELL", limit: "100" })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(response.status).toBe(200);
+
+    const orders = response.body.data.orders;
+    const ids = orders.map((order) => order.id);
+
+    for (const order of orders) {
+      expect(order.side).toBe("SELL");
+    }
+    expect(ids).toContain(historyMarketSellId);
+    expect(ids).not.toContain(historyMarketBuyId);
+  });
+
+  test("type filter returns only that type", async () => {
+    const response = await request(app)
+      .get("/api/v1/orders")
+      .query({ type: "LIMIT", limit: "100" })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(response.status).toBe(200);
+
+    const orders = response.body.data.orders;
+    const ids = orders.map((order) => order.id);
+
+    for (const order of orders) {
+      expect(order.type).toBe("LIMIT");
+    }
+    expect(ids).toContain(historyLimitBuyId);
+    expect(ids).not.toContain(historyMarketBuyId);
+  });
+
+  test("filters compose (side AND type)", async () => {
+    const response = await request(app)
+      .get("/api/v1/orders")
+      .query({ side: "BUY", type: "LIMIT", limit: "100" })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(response.status).toBe(200);
+
+    const matching = response.body.data.orders.filter(
+      (order) => order.symbol === `H${timestamp}3`,
+    );
+    expect(matching).toHaveLength(1);
+    expect(matching[0].id).toBe(historyLimitBuyId);
+  });
+
+  test("portfolioId filter narrows to that portfolio within ownership scope", async () => {
+    const response = await request(app)
+      .get("/api/v1/orders")
+      .query({ portfolioId: mainPortfolioId, limit: "100" })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(response.status).toBe(200);
+
+    for (const order of response.body.data.orders) {
+      expect(order.portfolioId).toBe(mainPortfolioId);
+    }
+    expect(response.body.data.orders.map((o) => o.id)).toContain(
+      historyMarketBuyId,
+    );
+  });
+
+  test("portfolioId filter cannot cross ownership (empty, not leaked)", async () => {
+    const response = await request(app)
+      .get("/api/v1/orders")
+      .query({ portfolioId: userBPortfolioId, limit: "100" })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.orders).toEqual([]);
+  });
+
+  test("owner sees their orders through the portfolioId filter", async () => {
+    const response = await request(app)
+      .get("/api/v1/orders")
+      .query({ portfolioId: userBPortfolioId, limit: "100" })
+      .set("Authorization", `Bearer ${userBAccessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.orders.map((o) => o.id)).toContain(userBOrderId);
+  });
+
+  test("to in the past yields an empty history, not an error", async () => {
+    const response = await request(app)
+      .get("/api/v1/orders")
+      .query({ to: "2000-01-01T00:00:00.000Z", limit: "100" })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.orders).toEqual([]);
+  });
+
+  test("wide from includes known orders", async () => {
+    const response = await request(app)
+      .get("/api/v1/orders")
+      .query({ from: "2000-01-01T00:00:00.000Z", limit: "100" })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.orders.map((o) => o.id)).toContain(
+      historyMarketBuyId,
+    );
+  });
+
+  test("from after to is rejected with an issue on 'to'", async () => {
+    const response = await request(app)
+      .get("/api/v1/orders")
+      .query({ from: "2026-10-09", to: "2026-10-01" })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(response.status).toBe(400);
+    expectValidationDetails(response.body);
+    expect(pathsOf(response.body)).toContain("to");
+  });
+
+  test("invalid date strings are rejected", async () => {
+    const response = await request(app)
+      .get("/api/v1/orders")
+      .query({ from: "not-a-date" })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(response.status).toBe(400);
+    expectValidationDetails(response.body);
+    expect(pathsOf(response.body)).toContain("from");
+  });
+
+  test("history view combines status and date range", async () => {
+    const response = await request(app)
+      .get("/api/v1/orders")
+      .query({
+        status: "PENDING,CANCELLED,EXECUTED,EXPIRED,REJECTED",
+        from: "2000-01-01T00:00:00.000Z",
+        limit: "100",
+      })
+      .set("Authorization", `Bearer ${accessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.orders.map((o) => o.id)).toContain(
+      historyMarketBuyId,
+    );
+  });
+});
+
+describe("cancel order endpoint (black-box via DELETE /orders/:id)", () => {
+  const marketBase = () => ({
+    portfolioId: mainPortfolioId,
+    symbol: "AAPL",
+    assetType: "STOCK",
+    side: "BUY",
+    quantity: "1",
+  });
+
+  let cancelMarketOrderId;
+  let cancelLimitOrderId;
+  let cancelOrderId;
+
+  async function deleteOrder(orderId, token = accessToken) {
+    const request_ = request(app).delete(`/api/v1/orders/${orderId}`);
+
+    if (token) {
+      request_.set("Authorization", `Bearer ${token}`);
+    }
+
+    return request_;
+  }
+
+  beforeAll(async () => {
+    jest.setTimeout(30000);
+
+    for (const [suffix, extra, assign] of [
+      ["1", {}, (id) => (cancelMarketOrderId = id)],
+      ["2", { type: "LIMIT", limitPrice: "12" }, (id) => (cancelLimitOrderId = id)],
+      ["3", {}, (id) => (cancelOrderId = id)],
+    ]) {
+      const response = await postOrder({
+        ...marketBase(),
+        symbol: `C${timestamp}${suffix}`,
+        ...extra,
+      });
+
+      createdOrderIds.push(response.body.data.order.id);
+      assign(response.body.data.order.id);
+    }
+  });
+
+  describe("middleware chain order (contract: identity before validity)", () => {
+    test("missing token is 401 even with an invalid param", async () => {
+      const response = await deleteOrder("not-a-uuid", null);
+
+      expect(response.status).toBe(401);
+      expectErrorEnvelope(response.body);
+    });
+
+    test("garbage token is 401", async () => {
+      const response = await request(app)
+        .delete("/api/v1/orders/8b2c1a4e-3f2d-4c5b-9a8e-7d6c5b4a3f2e")
+        .set("Authorization", "Bearer garbage.token.here");
+
+      expect(response.status).toBe(401);
+      expectErrorEnvelope(response.body);
+    });
+  });
+
+  describe("request validation (contract: 400 VALIDATION_ERROR)", () => {
+    test("invalid uuid is rejected with an issue on 'id'", async () => {
+      const response = await deleteOrder("not-a-uuid");
+
+      expect(response.status).toBe(400);
+      expectValidationDetails(response.body);
+      expect(pathsOf(response.body)).toContain("id");
+    });
+  });
+
+  describe("not-found contract", () => {
+    test("nonexistent order is 404 ORDER_NOT_FOUND", async () => {
+      const response = await deleteOrder(
+        "8b2c1a4e-3f2d-4c5b-9a8e-7d6c5b4a3f2e",
+      );
+
+      expect(response.status).toBe(404);
+      expect(response.body.error.code).toBe("ORDER_NOT_FOUND");
+    });
+
+    test("another user's order is 404 ORDER_NOT_FOUND (never 403)", async () => {
+      const response = await deleteOrder(userBOrderId);
+
+      expect(response.status).toBe(404);
+      expect(response.body.error.code).toBe("ORDER_NOT_FOUND");
+    });
+  });
+
+  describe("cancellation contract", () => {
+    test("pending MARKET order is cancelled and returned serialized", async () => {
+      const response = await deleteOrder(cancelMarketOrderId);
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+
+      const order = response.body.data.order;
+      expect(order.id).toBe(cancelMarketOrderId);
+      expect(order.status).toBe("CANCELLED");
+      expect(order.symbol).toBe(`C${timestamp}1`);
+      expect(typeof order.quantity).toBe("string");
+    });
+
+    test("pending LIMIT order is cancellable too", async () => {
+      const response = await deleteOrder(cancelLimitOrderId);
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.order.status).toBe("CANCELLED");
+      expect(response.body.data.order.type).toBe("LIMIT");
+    });
+
+    test("already-cancelled order cannot be cancelled again", async () => {
+      const response = await deleteOrder(cancelMarketOrderId);
+
+      expect(response.status).toBe(400);
+      expectErrorEnvelope(response.body);
+      expect(response.body.error.code).toBe("ORDER_NOT_CANCELLABLE");
+    });
+  });
+
+  describe("cross-endpoint consistency after cancellation", () => {
+    test("cancelled order leaves the open view", async () => {
+      const response = await request(app)
+        .get("/api/v1/orders")
+        .query({ status: "PENDING", limit: "100" })
+        .set("Authorization", `Bearer ${accessToken}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.orders.map((o) => o.id)).not.toContain(
+        cancelMarketOrderId,
+      );
+    });
+
+    test("cancelled order appears in the cancelled view", async () => {
+      const response = await request(app)
+        .get("/api/v1/orders")
+        .query({ status: "CANCELLED", limit: "100" })
+        .set("Authorization", `Bearer ${accessToken}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.orders.map((o) => o.id)).toContain(
+        cancelMarketOrderId,
+      );
+    });
+
+    test("cancelled order remains retrievable by id with its final state", async () => {
+      const response = await request(app)
+        .get(`/api/v1/orders/${cancelMarketOrderId}`)
+        .set("Authorization", `Bearer ${accessToken}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.order.status).toBe("CANCELLED");
+    });
+  });
+});
