@@ -287,6 +287,9 @@ model Symbol {
   isActive   Boolean @default(true)
   isTradable Boolean @default(true)
 
+  // Relations
+  alerts Alert[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -374,16 +377,24 @@ model Follow {
 model Alert {
   id String @id @default(uuid())
 
-  userId String
-  symbol String
+  userId   String
+  symbolId String
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user User @relation(
+    fields: [userId],
+    references: [id],
+    onDelete: Cascade
+  )
 
-  assetType AssetType?
+  symbol Symbol @relation(
+    fields: [symbolId],
+    references: [id],
+    onDelete: Cascade
+  )
 
   condition   AlertCondition
-  targetPrice Decimal        @db.Decimal(18, 8)
-  status      AlertStatus    @default(ACTIVE)
+  targetPrice Decimal     @db.Decimal(18, 8)
+  status      AlertStatus @default(ACTIVE)
 
   sendEmail Boolean @default(true)
   sendPush  Boolean @default(false)
@@ -395,7 +406,8 @@ model Alert {
   updatedAt DateTime @updatedAt
 
   @@index([userId, status])
-  @@index([status, symbol])
+  @@index([status, symbolId])
+  @@index([symbolId])
 }
 
 // ============================================================
