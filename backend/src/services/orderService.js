@@ -116,7 +116,18 @@ const ORDER_SORT_FIELDS = ["createdAt"];
 const ORDER_LIST_ORDER_BY = [{ createdAt: "desc" }];
 
 // `status` arrives as a validated, deduplicated array from the query schema.
-async function listOrders({ userId, page = 1, limit = 20, status }) {
+async function listOrders({
+  userId,
+  page = 1,
+  limit = 20,
+  status,
+  symbol,
+  side,
+  type,
+  portfolioId,
+  from,
+  to,
+}) {
   const where = {
     portfolio: {
       userId,
@@ -127,6 +138,36 @@ async function listOrders({ userId, page = 1, limit = 20, status }) {
     where.status = {
       in: status,
     };
+  }
+
+  if (symbol) {
+    where.symbol = symbol;
+  }
+
+  if (side) {
+    where.side = side;
+  }
+
+  if (type) {
+    where.type = type;
+  }
+
+  // Ownership scoping above still applies: a foreign portfolioId simply
+  // yields an empty result instead of another user's orders.
+  if (portfolioId) {
+    where.portfolioId = portfolioId;
+  }
+
+  if (from || to) {
+    where.createdAt = {};
+
+    if (from) {
+      where.createdAt.gte = from;
+    }
+
+    if (to) {
+      where.createdAt.lte = to;
+    }
   }
 
   const [orders, total] = await Promise.all([
