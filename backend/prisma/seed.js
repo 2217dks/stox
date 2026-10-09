@@ -37,10 +37,11 @@ const BCRYPT_SALT_ROUNDS = Number.parseInt(
 //
 // SEED_NAMESPACE is arbitrary but MUST stay fixed: changing it (or
 // any fixture name) changes every fixture id, and existing dev
-// databases would seed a fresh copy alongside the old rows.
+// databases would seed a fresh copy alongside the old rows. It is a
+// valid RFC 4122 v4 UUID — required for v5 namespaces.
 // ============================================================
 
-const SEED_NAMESPACE = "9f8e7d6c-5a4b-3c2d-1e0f-1a2b3c4d5e6f";
+const SEED_NAMESPACE = "7bb496e2-9381-4b10-ae9b-745f3b286923";
 
 function uuidv5(name, namespace) {
   const namespaceBytes = Buffer.from(namespace.replace(/-/g, ""), "hex");
