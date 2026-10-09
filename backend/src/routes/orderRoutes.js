@@ -34,4 +34,12 @@ router.get(
   orderController.getOrder,
 );
 
+router.delete(
+  "/:id",
+  authMiddleware,
+  orderLimiter,
+  validate(orderIdParamSchema, "params"),
+  orderController.cancelOrder,
+);
+
 module.exports = router;

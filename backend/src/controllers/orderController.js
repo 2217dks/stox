@@ -52,8 +52,27 @@ async function listOrders(req, res, next) {
   }
 }
 
+async function cancelOrder(req, res, next) {
+  try {
+    const order = await orderService.cancelOrder({
+      userId: req.user.userId,
+      orderId: req.params.id,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        order,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createOrder,
   getOrder,
   listOrders,
+  cancelOrder,
 };

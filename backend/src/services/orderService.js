@@ -195,6 +195,46 @@ async function listOrders({
   };
 }
 
+async function cancelOrder({ userId, orderId }) {
+  await ensureActiveUser(userId);
+
+  const order = await prisma.order.findFirst({
+    where: {
+      id: orderId,
+      portfolio: {
+        userId,
+      },
+    },
+    select: {
+      id: true,
+      status: true,
+    },
+  });
+
+  if (!order) {
+    throw AppError.notFound("Order not found.", "ORDER_NOT_FOUND");
+  }
+
+  if (order.status !== "PENDING") {
+    throw AppError.badRequest(
+      "Only pending orders can be cancelled.",
+      "ORDER_NOT_CANCELLABLE",
+    );
+  }
+
+  const updated = await prisma.order.update({
+    where: {
+      id: order.id,
+    },
+    data: {
+      status: "CANCELLED",
+    },
+    select: SERIALIZED_ORDER_FIELDS,
+  });
+
+  return serializeOrder(updated);
+}
+
 async function createOrder({
   userId,
   portfolioId,
@@ -245,6 +285,7 @@ module.exports = {
   serializeOrder,
   getOrder,
   listOrders,
+  cancelOrder,
   createOrder,
   createMarketOrder: createOrder,
 };
