@@ -1375,4 +1375,42 @@ describe("cancel order endpoint (black-box via DELETE /orders/:id)", () => {
       expect(response.body.data.order.status).toBe("CANCELLED");
     });
   });
+
+  describe("conditional status transition (execution race guard)", () => {
+    test("order executed between check and update is not overwritten to CANCELLED", async () => {
+      // Simulate the race: another process (the order worker) executes the
+      // order after the cancellation request's ownership/eligibility check
+      // but before its write. The cancel must fail with
+      // ORDER_NOT_CANCELLABLE and must NOT flip EXECUTED -> CANCELLED.
+      const created = await postOrder({
+        portfolioId: mainPortfolioId,
+        symbol: `C${timestamp}RACE`,
+        assetType: "STOCK",
+        side: "BUY",
+        quantity: "1",
+      });
+
+      expect(created.status).toBe(201);
+
+      const orderId = created.body.data.order.id;
+      createdOrderIds.push(orderId);
+
+      await prisma.order.update({
+        where: { id: orderId },
+        data: { status: "EXECUTED", executedAt: new Date() },
+      });
+
+      const response = await deleteOrder(orderId);
+
+      expect(response.status).toBe(400);
+      expectErrorEnvelope(response.body);
+      expect(response.body.error.code).toBe("ORDER_NOT_CANCELLABLE");
+
+      const stored = await prisma.order.findUnique({
+        where: { id: orderId },
+        select: { status: true },
+      });
+      expect(stored.status).toBe("EXECUTED");
+    });
+  });
 });
