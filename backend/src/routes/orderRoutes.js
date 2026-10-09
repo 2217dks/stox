@@ -3,7 +3,11 @@ const express = require("express");
 const authMiddleware = require("../middleware/auth");
 const validate = require("../middleware/validation");
 const { orderLimiter } = require("../middleware/rateLimiter");
-const { createMarketOrderSchema } = require("../validators/orderValidator");
+const {
+  createOrderSchema,
+  listOrdersQuerySchema,
+  orderIdParamSchema,
+} = require("../validators/orderValidator");
 const orderController = require("../controllers/orderController");
 
 const router = express.Router();
@@ -12,8 +16,30 @@ router.post(
   "/",
   authMiddleware,
   orderLimiter,
-  validate(createMarketOrderSchema),
-  orderController.createMarketOrder,
+  validate(createOrderSchema),
+  orderController.createOrder,
+);
+
+router.get(
+  "/",
+  authMiddleware,
+  validate(listOrdersQuerySchema, "query", "validatedQuery"),
+  orderController.listOrders,
+);
+
+router.get(
+  "/:id",
+  authMiddleware,
+  validate(orderIdParamSchema, "params", "validatedParams"),
+  orderController.getOrder,
+);
+
+router.delete(
+  "/:id",
+  authMiddleware,
+  orderLimiter,
+  validate(orderIdParamSchema, "params", "validatedParams"),
+  orderController.cancelOrder,
 );
 
 module.exports = router;
