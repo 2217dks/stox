@@ -380,21 +380,13 @@ model Alert {
   userId   String
   symbolId String
 
-  user User @relation(
-    fields: [userId],
-    references: [id],
-    onDelete: Cascade
-  )
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  symbol Symbol @relation(
-    fields: [symbolId],
-    references: [id],
-    onDelete: Cascade
-  )
+  symbol Symbol @relation(fields: [symbolId], references: [id], onDelete: Cascade)
 
   condition   AlertCondition
-  targetPrice Decimal     @db.Decimal(18, 8)
-  status      AlertStatus @default(ACTIVE)
+  targetPrice Decimal        @db.Decimal(18, 8)
+  status      AlertStatus    @default(ACTIVE)
 
   sendEmail Boolean @default(true)
   sendPush  Boolean @default(false)
