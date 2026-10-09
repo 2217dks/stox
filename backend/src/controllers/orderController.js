@@ -1,8 +1,8 @@
 const orderService = require("../services/orderService");
 
-async function createMarketOrder(req, res, next) {
+async function createOrder(req, res, next) {
   try {
-    const order = await orderService.createMarketOrder({
+    const order = await orderService.createOrder({
       userId: req.user.userId,
       ...req.body,
     });
@@ -19,5 +19,5 @@ async function createMarketOrder(req, res, next) {
 }
 
 module.exports = {
-  createMarketOrder,
+  createOrder,
 };
