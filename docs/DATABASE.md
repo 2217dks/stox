@@ -18,7 +18,8 @@ PostgreSQL is the durable source of truth for:
 - price history
 - alerts
 - notifications
-- social relationships
+- social relationships and posts
+- leaderboard snapshots
 - copy trading
 - achievements
 - leagues
@@ -38,9 +39,11 @@ User
  ├── Sessions
  ├── RefreshTokens
  ├── Portfolios
- ├── Alerts
+ ├── Alerts ───────── Symbol
  ├── Notifications
  ├── Followers / Following
+ ├── Posts
+ ├── LeaderboardEntries
  ├── Copy Trading
  ├── Achievements
  ├── League Memberships
@@ -83,13 +86,15 @@ model User {
   refreshTokens   RefreshToken[]
   alerts          Alert[]
   achievements    UserAchievement[]
-  followers       Follow[]       @relation("Following")
-  following       Follow[]       @relation("Followers")
+  followers       Follow[]       @relation("UserFollowers")
+  following       Follow[]       @relation("UserFollowing")
   copyTraders     CopyTrader[]   @relation("Copier")
   copiedBy        CopyTrader[]   @relation("Copied")
   votes           SentimentVote[]
   leagueMembers   LeagueMember[]
   notifications   Notification[]
+  posts           Post[]
+  leaderboardEntries LeaderboardEntry[]
   sessions        Session[]
 
   createdAt       DateTime @default(now())
@@ -365,8 +370,8 @@ model Alert {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  @@index([userId])
-  @@index([status])
+  @@index([userId, status])
+  @@index([status, symbolId])
   @@index([symbolId])
 }
 ```
@@ -409,14 +414,40 @@ model Follow {
   followerId   String
   followingId  String
 
-  follower     User     @relation("Following", fields: [followerId], references: [id], onDelete: Cascade)
-  following    User     @relation("Followers", fields: [followingId], references: [id], onDelete: Cascade)
+  follower     User     @relation("UserFollowing", fields: [followerId], references: [id], onDelete: Cascade)
+  following    User     @relation("UserFollowers", fields: [followingId], references: [id], onDelete: Cascade)
 
   createdAt    DateTime @default(now())
 
   @@unique([followerId, followingId])
   @@index([followerId])
   @@index([followingId])
+}
+```
+
+## Post
+
+```prisma
+model Post {
+  id String @id @default(uuid())
+
+  authorId String
+  author User @relation(
+    fields: [authorId],
+    references: [id],
+    onDelete: Cascade
+  )
+
+  content  String
+  symbol   String?
+  metadata Json?
+
+  isHidden  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([authorId, createdAt])
+  @@index([createdAt])
 }
 ```
 
@@ -442,6 +473,35 @@ model CopyTrader {
   @@unique([copierId, copiedId])
   @@index([copierId])
   @@index([copiedId])
+}
+```
+
+---
+
+# 🏆 Leaderboards
+
+```prisma
+model LeaderboardEntry {
+  id String @id @default(uuid())
+
+  userId String
+  user User @relation(
+    fields: [userId],
+    references: [id],
+    onDelete: Cascade
+  )
+
+  scope  LeaderboardScope
+  period LeaderboardPeriod
+
+  rank         Int
+  totalValue   Decimal @db.Decimal(18, 8)
+  returnPct    Decimal @db.Decimal(10, 4)
+  snapshotDate DateTime @db.Date
+  createdAt    DateTime @default(now())
+
+  @@unique([scope, period, snapshotDate, userId])
+  @@index([scope, period, snapshotDate, rank])
 }
 ```
 
@@ -686,7 +746,20 @@ enum NotificationType {
   ACHIEVEMENT_UNLOCKED
   COPY_TRADE_EXECUTED
   LEAGUE_UPDATE
+  NEW_FOLLOWER
   SYSTEM
+}
+
+enum LeaderboardScope {
+  GLOBAL
+  FRIENDS
+}
+
+enum LeaderboardPeriod {
+  DAILY
+  WEEKLY
+  MONTHLY
+  ALL_TIME
 }
 
 enum LeagueStatus {
@@ -718,9 +791,11 @@ User
  │    │    └── Trade
  │    └── PerformanceSnapshot
  │
- ├── Alert ─────── Symbol
+ ├── Alert ───── Symbol
  ├── Notification
  ├── Follow
+ ├── Post
+ ├── LeaderboardEntry
  ├── CopyTrader
  ├── UserAchievement ─── Achievement
  ├── LeagueMember ────── League
