@@ -42,8 +42,7 @@ CREATE TABLE "Follow" (
 CREATE TABLE "Alert" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
-    "symbol" TEXT NOT NULL,
-    "assetType" "AssetType",
+    "symbolId" TEXT NOT NULL,
     "condition" "AlertCondition" NOT NULL,
     "targetPrice" DECIMAL(18,8) NOT NULL,
     "status" "AlertStatus" NOT NULL DEFAULT 'ACTIVE',
@@ -105,7 +104,11 @@ CREATE UNIQUE INDEX "Follow_followerId_followingId_key" ON "Follow"("followerId"
 CREATE INDEX "Alert_userId_status_idx" ON "Alert"("userId", "status");
 
 -- CreateIndex
-CREATE INDEX "Alert_status_symbol_idx" ON "Alert"("status", "symbol");
+CREATE INDEX "Alert_status_symbolId_idx"
+ON "Alert"("status", "symbolId");
+
+CREATE INDEX "Alert_symbolId_idx"
+ON "Alert"("symbolId");
 
 -- CreateIndex
 CREATE INDEX "LeaderboardEntry_scope_period_snapshotDate_rank_idx" ON "LeaderboardEntry"("scope", "period", "snapshotDate", "rank");
@@ -137,3 +140,9 @@ ALTER TABLE "LeaderboardEntry" ADD CONSTRAINT "LeaderboardEntry_userId_fkey" FOR
 -- AddForeignKey
 ALTER TABLE "Post" ADD CONSTRAINT "Post_authorId_fkey" FOREIGN KEY ("authorId") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
+ALTER TABLE "Alert"
+ADD CONSTRAINT "Alert_symbolId_fkey"
+FOREIGN KEY ("symbolId")
+REFERENCES "Symbol"("id")
+ON DELETE CASCADE
+ON UPDATE CASCADE;
