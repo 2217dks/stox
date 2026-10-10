@@ -18,6 +18,23 @@ async function getTrade(req, res, next) {
   }
 }
 
+async function listTrades(req, res, next) {
+  try {
+    const result = await tradeService.listTrades({
+      userId: req.user.userId,
+      ...req.validatedQuery,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   getTrade,
+  listTrades,
 };
