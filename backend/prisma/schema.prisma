@@ -49,6 +49,42 @@ enum OrderSource {
   LEAGUE
 }
 
+enum AlertCondition {
+  PRICE_ABOVE
+  PRICE_BELOW
+  PERCENT_CHANGE_UP
+  PERCENT_CHANGE_DOWN
+}
+
+enum AlertStatus {
+  ACTIVE
+  TRIGGERED
+  EXPIRED
+  CANCELLED
+}
+
+enum NotificationType {
+  ORDER_EXECUTED
+  PRICE_ALERT
+  ACHIEVEMENT_UNLOCKED
+  COPY_TRADE_EXECUTED
+  LEAGUE_UPDATE
+  NEW_FOLLOWER
+  SYSTEM
+}
+
+enum LeaderboardScope {
+  GLOBAL
+  FRIENDS
+}
+
+enum LeaderboardPeriod {
+  DAILY
+  WEEKLY
+  MONTHLY
+  ALL_TIME
+}
+
 // ============================================================
 // USER
 // ============================================================
@@ -75,6 +111,16 @@ model User {
   // Relations
   portfolios    Portfolio[]
   refreshTokens RefreshToken[]
+
+  // Social
+  following Follow[] @relation("UserFollowing")
+  followers Follow[] @relation("UserFollowers")
+  posts     Post[]
+
+  // Engagement
+  alerts             Alert[]
+  notifications      Notification[]
+  leaderboardEntries LeaderboardEntry[]
 
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
@@ -274,4 +320,130 @@ model Trade {
   @@index([portfolioId])
   @@index([symbol])
   @@index([executedAt])
+}
+
+// ============================================================
+// NOTIFICATION
+// ============================================================
+
+model Notification {
+  id String @id @default(uuid())
+
+  userId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type    NotificationType
+  title   String
+  message String
+  data    Json?
+
+  isRead Boolean   @default(false)
+  readAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead])
+  @@index([createdAt])
+}
+
+// ============================================================
+// FOLLOW
+// ============================================================
+
+model Follow {
+  id String @id @default(uuid())
+
+  followerId  String
+  followingId String
+
+  follower  User @relation("UserFollowing", fields: [followerId], references: [id], onDelete: Cascade)
+  following User @relation("UserFollowers", fields: [followingId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([followerId, followingId])
+  @@index([followerId])
+  @@index([followingId])
+}
+
+// ============================================================
+// ALERT
+// ============================================================
+
+model Alert {
+  id String @id @default(uuid())
+
+  userId String
+  symbol String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  assetType AssetType?
+
+  condition   AlertCondition
+  targetPrice Decimal        @db.Decimal(18, 8)
+  status      AlertStatus    @default(ACTIVE)
+
+  sendEmail Boolean @default(true)
+  sendPush  Boolean @default(false)
+
+  triggeredAt DateTime?
+  message     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([status, symbol])
+}
+
+// ============================================================
+// LEADERBOARD ENTRY
+// ============================================================
+
+model LeaderboardEntry {
+  id String @id @default(uuid())
+
+  userId String
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  scope  LeaderboardScope
+  period LeaderboardPeriod
+
+  rank       Int
+  totalValue Decimal @db.Decimal(18, 8)
+  returnPct  Decimal @db.Decimal(10, 4)
+
+  snapshotDate DateTime @db.Date
+
+  createdAt DateTime @default(now())
+
+  @@unique([scope, period, snapshotDate, userId])
+  @@index([scope, period, snapshotDate, rank])
+}
+
+// ============================================================
+// POST
+// ============================================================
+
+model Post {
+  id String @id @default(uuid())
+
+  authorId String
+
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  content  String
+  symbol   String?
+  metadata Json?
+
+  isHidden Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([authorId, createdAt])
+  @@index([createdAt])
 }
