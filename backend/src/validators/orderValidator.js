@@ -262,4 +262,11 @@ module.exports = {
   createOrderSchema,
   listOrdersQuerySchema,
   orderIdParamSchema,
+
+  // Shared primitives reused by sibling trading-domain validators so the
+  // decimal/symbol/enum/date-window contracts have a single source of truth.
+  assetTypeEnum,
+  sideEnum,
+  symbolField,
+  dateBoundSchema,
 };
