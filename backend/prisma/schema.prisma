@@ -290,6 +290,8 @@ model Symbol {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  alerts Alert[]
+
   @@index([symbol])
   @@index([assetType])
 }
@@ -374,12 +376,11 @@ model Follow {
 model Alert {
   id String @id @default(uuid())
 
-  userId String
-  symbol String
+  userId   String
+  symbolId String
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  assetType AssetType?
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  symbol Symbol @relation(fields: [symbolId], references: [id], onDelete: Cascade)
 
   condition   AlertCondition
   targetPrice Decimal        @db.Decimal(18, 8)
@@ -395,7 +396,8 @@ model Alert {
   updatedAt DateTime @updatedAt
 
   @@index([userId, status])
-  @@index([status, symbol])
+  @@index([status, symbolId])
+  @@index([symbolId])
 }
 
 // ============================================================
