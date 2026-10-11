@@ -5,6 +5,10 @@ const userRoutes = require("./userRoutes");
 const portfolioRoutes = require("./portfolioRoutes");
 const orderRoutes = require("./orderRoutes");
 const tradeRoutes = require("./tradeRoutes");
+const alertRoutes = require("./alertRoutes");
+const notificationRoutes = require("./notificationRoutes");
+const socialRoutes = require("./socialRoutes");
+const leaderboardRoutes = require("./leaderboardRoutes");
 const adminRoutes = require("./adminRoutes");
 
 const { check: healthCheck } = require("../controllers/healthController");
@@ -17,6 +21,10 @@ router.use("/users", userRoutes);
 router.use("/portfolios", portfolioRoutes);
 router.use("/orders", orderRoutes);
 router.use("/trades", tradeRoutes);
+router.use("/alerts", alertRoutes);
+router.use("/notifications", notificationRoutes);
+router.use("/social", socialRoutes);
+router.use("/leaderboard", leaderboardRoutes);
 router.use("/admin", adminRoutes);
 
 module.exports = router;

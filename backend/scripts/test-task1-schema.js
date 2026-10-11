@@ -34,6 +34,7 @@ async function main() {
   const suffix = Date.now();
   const emailA = `task1-a-${suffix}@stox.test`;
   const emailB = `task1-b-${suffix}@stox.test`;
+  const testSymbol = `TASK1${suffix}${process.pid}`;
 
   // Same calendar day for both leaderboard entries so the (scope, period,
   // snapshotDate, userId) unique constraint is the only thing that can fail.
@@ -41,6 +42,7 @@ async function main() {
 
   let userA;
   let userB;
+  let testSymbolId;
 
   try {
     // ----------------------------------------------------------
@@ -86,25 +88,25 @@ async function main() {
       },
     });
 
-    const symbol = await prisma.symbol.upsert({
-      where: { symbol: "AAPL" },
-      update: {},
-      create: {
-        symbol: "AAPL",
-        name: "Apple Inc.",
+    const symbol = await prisma.symbol.create({
+      data: {
+        symbol: testSymbol,
+        name: "Task 1 Schema Test Instrument",
         assetType: "STOCK",
-        exchange: "NASDAQ",
+        exchange: "TEST",
       },
     });
 
-const alert = await prisma.alert.create({
-  data: {
-    userId: userA.id,
-    symbolId: symbol.id,
-    condition: "PRICE_ABOVE",
-    targetPrice: "250.5",
-  },
-});
+    testSymbolId = symbol.id;
+
+    const alert = await prisma.alert.create({
+      data: {
+        userId: userA.id,
+        symbolId: symbol.id,
+        condition: "PRICE_ABOVE",
+        targetPrice: "250.5",
+      },
+    });
 
     await prisma.leaderboardEntry.create({
       data: {
@@ -141,10 +143,7 @@ const alert = await prisma.alert.create({
       "notification.readAt should default to null",
     );
     assert(alert.status === "ACTIVE", "alert.status should default to ACTIVE");
-    assert(
-      alert.sendEmail === true,
-      "alert.sendEmail should default to true",
-    );
+    assert(alert.sendEmail === true, "alert.sendEmail should default to true");
     assert(alert.sendPush === false, "alert.sendPush should default to false");
     assert(post.isHidden === false, "post.isHidden should default to false");
 
@@ -260,10 +259,15 @@ const alert = await prisma.alert.create({
         userA.id,
       );
     } catch (error) {
-      enumRejected = /invalid input value for enum/i.test(String(error.message));
+      enumRejected = /invalid input value for enum/i.test(
+        String(error.message),
+      );
     }
 
-    assert(enumRejected, "invalid NotificationType must be rejected by the enum");
+    assert(
+      enumRejected,
+      "invalid NotificationType must be rejected by the enum",
+    );
 
     console.log("✓ NotificationType enum enforced at the database level");
 
@@ -308,6 +312,20 @@ const alert = await prisma.alert.create({
 
     if (userB) {
       await prisma.user.delete({ where: { id: userB.id } }).catch(() => {});
+    }
+
+    if (testSymbolId) {
+      await prisma.alert
+        .deleteMany({
+          where: { symbolId: testSymbolId },
+        })
+        .catch(() => {});
+
+      await prisma.symbol
+        .deleteMany({
+          where: { id: testSymbolId },
+        })
+        .catch(() => {});
     }
 
     console.log("✓ Test data cleaned up");
