@@ -11,7 +11,7 @@ const buildUser = (index) => ({
   password: "IntegrationTest#2026",
 });
 
-const snapshotDate = new Date("2026-10-01T00:00:00.000Z");
+let snapshotDate;
 
 let user1Id;
 let user2Id;
@@ -37,6 +37,29 @@ beforeAll(async () => {
   user1AccessToken = registrations[0].accessToken;
   user2Id = registrations[1].user.id;
   user3Id = registrations[2].user.id;
+
+  const latestSnapshot = await prisma.leaderboardEntry.findFirst({
+    where: {
+      scope: "GLOBAL",
+      period: "MONTHLY",
+    },
+    orderBy: {
+      snapshotDate: "desc",
+    },
+    select: {
+      snapshotDate: true,
+    },
+  });
+
+  const baseDate = latestSnapshot?.snapshotDate ?? new Date();
+
+  snapshotDate = new Date(
+    Date.UTC(
+      baseDate.getUTCFullYear(),
+      baseDate.getUTCMonth(),
+      baseDate.getUTCDate() + 1,
+    ),
+  );
 
   await prisma.leaderboardEntry.createMany({
     data: [
