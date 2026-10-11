@@ -293,8 +293,6 @@ model Symbol {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  alerts Alert[]
-
   @@index([symbol])
   @@index([assetType])
 }
