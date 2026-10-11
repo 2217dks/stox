@@ -1,6 +1,11 @@
 const prisma = require("../config/database");
 const { AppError } = require("../utils/errors");
 
+const ALERT_SYMBOL_SELECT = {
+  symbol: true,
+  assetType: true,
+};
+
 async function ensureActiveUser(userId) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -25,8 +30,8 @@ function serializeAlert(alert) {
   return {
     id: alert.id,
     userId: alert.userId,
-    symbol: alert.symbol,
-    assetType: alert.assetType,
+    symbol: alert.symbol?.symbol ?? null,
+    assetType: alert.symbol?.assetType ?? null,
     condition: alert.condition,
     targetPrice: alert.targetPrice.toString(),
     status: alert.status,
@@ -54,7 +59,10 @@ async function getOwnedAlert(userId, alertId) {
   return alert;
 }
 
-async function listAlerts(userId, { page = 1, limit = 20, status, symbol } = {}) {
+async function listAlerts(
+  userId,
+  { page = 1, limit = 20, status, symbol } = {},
+) {
   await ensureActiveUser(userId);
 
   const where = { userId };
@@ -64,7 +72,9 @@ async function listAlerts(userId, { page = 1, limit = 20, status, symbol } = {})
   }
 
   if (symbol !== undefined) {
-    where.symbol = symbol;
+    where.symbol = {
+      is: { symbol },
+    };
   }
 
   const skip = (page - 1) * limit;
@@ -72,6 +82,11 @@ async function listAlerts(userId, { page = 1, limit = 20, status, symbol } = {})
   const [alerts, total] = await Promise.all([
     prisma.alert.findMany({
       where,
+      include: {
+        symbol: {
+          select: ALERT_SYMBOL_SELECT,
+        },
+      },
       orderBy: {
         createdAt: "desc",
       },
@@ -98,15 +113,45 @@ async function listAlerts(userId, { page = 1, limit = 20, status, symbol } = {})
 async function createAlert(userId, payload) {
   await ensureActiveUser(userId);
 
+  const symbolRecord = await prisma.symbol.findUnique({
+    where: {
+      symbol: payload.symbol,
+    },
+    select: {
+      id: true,
+      symbol: true,
+      assetType: true,
+      isActive: true,
+    },
+  });
+
+  if (!symbolRecord || !symbolRecord.isActive) {
+    throw AppError.notFound("Active symbol not found.", "SYMBOL_NOT_FOUND");
+  }
+
+  if (
+    payload.assetType !== undefined &&
+    payload.assetType !== symbolRecord.assetType
+  ) {
+    throw AppError.badRequest(
+      "Asset type does not match the selected symbol.",
+      "ASSET_TYPE_MISMATCH",
+    );
+  }
+
   const alert = await prisma.alert.create({
     data: {
       userId,
-      symbol: payload.symbol,
-      assetType: payload.assetType ?? null,
+      symbolId: symbolRecord.id,
       condition: payload.condition,
       targetPrice: payload.targetPrice,
       sendEmail: payload.sendEmail,
       sendPush: payload.sendPush,
+    },
+    include: {
+      symbol: {
+        select: ALERT_SYMBOL_SELECT,
+      },
     },
   });
 
@@ -131,7 +176,6 @@ async function updateAlert(userId, alertId, payload) {
   if (payload.status !== undefined) {
     data.status = payload.status;
 
-    // Triggering an alert is what records when it fired.
     if (payload.status === "TRIGGERED") {
       data.triggeredAt = new Date();
     }
@@ -148,6 +192,11 @@ async function updateAlert(userId, alertId, payload) {
   const alert = await prisma.alert.update({
     where: { id: alertId },
     data,
+    include: {
+      symbol: {
+        select: ALERT_SYMBOL_SELECT,
+      },
+    },
   });
 
   return serializeAlert(alert);
