@@ -12,6 +12,7 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:studio": "prisma studio",
     "prisma:generate": "prisma generate",
+    "seed": "node prisma/seed.js",
     "test": "jest"
   },
   "jest": {
