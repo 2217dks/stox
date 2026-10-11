@@ -4,6 +4,7 @@ const app = require("../../src/app");
 const prisma = require("../../src/config/database");
 
 const timestamp = Date.now();
+const testSymbol = `AIT${timestamp}`.toUpperCase();
 
 const user1 = {
   name: "Alert Integration User 1",
@@ -22,15 +23,29 @@ let user2Id;
 
 let user1AccessToken;
 let user2AccessToken;
+let symbolId;
 
 beforeAll(async () => {
   jest.setTimeout(15000);
+
+  // Use a unique Symbol fixture so this suite does not depend on seed data.
+  const symbol = await prisma.symbol.create({
+    data: {
+      symbol: testSymbol,
+      name: "Alert Integration Test Symbol",
+      assetType: "STOCK",
+      exchange: "TEST",
+    },
+  });
+
+  symbolId = symbol.id;
 
   const registration1 = await request(app)
     .post("/api/v1/auth/register")
     .send(user1);
 
   expect([200, 201]).toContain(registration1.status);
+
   user1Id = registration1.body.data.user.id;
   user1AccessToken = registration1.body.data.accessToken;
 
@@ -39,20 +54,35 @@ beforeAll(async () => {
     .send(user2);
 
   expect([200, 201]).toContain(registration2.status);
+
   user2Id = registration2.body.data.user.id;
   user2AccessToken = registration2.body.data.accessToken;
 });
 
 afterAll(async () => {
-  await prisma.user.deleteMany({
-    where: {
-      id: {
-        in: [user1Id, user2Id].filter(Boolean),
+  try {
+    // Delete the users and their dependent alerts first.
+    await prisma.user.deleteMany({
+      where: {
+        id: {
+          in: [user1Id, user2Id].filter(Boolean),
+        },
       },
-    },
-  });
+    });
 
-  await prisma.$disconnect();
+    // Remove any remaining alerts belonging to this Symbol fixture.
+    if (symbolId) {
+      await prisma.alert.deleteMany({
+        where: { symbolId },
+      });
+
+      await prisma.symbol.deleteMany({
+        where: { id: symbolId },
+      });
+    }
+  } finally {
+    await prisma.$disconnect();
+  }
 });
 
 describe("Alert integration API", () => {
@@ -66,12 +96,12 @@ describe("Alert integration API", () => {
     expect(response.body.error.code).toBe("UNAUTHORIZED");
   });
 
-  test("creates an alert through the API", async () => {
+  test("creates an alert using the Symbol relation", async () => {
     const response = await request(app)
       .post("/api/v1/alerts")
       .set("Authorization", `Bearer ${user1AccessToken}`)
       .send({
-        symbol: "aapl",
+        symbol: testSymbol.toLowerCase(),
         assetType: "STOCK",
         condition: "PRICE_ABOVE",
         targetPrice: "250.5",
@@ -84,7 +114,7 @@ describe("Alert integration API", () => {
 
     expect(alert).toBeDefined();
     expect(alert.userId).toBe(user1Id);
-    expect(alert.symbol).toBe("AAPL");
+    expect(alert.symbol).toBe(testSymbol);
     expect(alert.assetType).toBe("STOCK");
     expect(alert.condition).toBe("PRICE_ABOVE");
     expect(alert.targetPrice).toBe("250.5");
@@ -94,10 +124,47 @@ describe("Alert integration API", () => {
 
     alertId = alert.id;
 
-    const saved = await prisma.alert.findUnique({ where: { id: alertId } });
+    const saved = await prisma.alert.findUnique({
+      where: { id: alertId },
+    });
 
     expect(saved).not.toBeNull();
     expect(saved.userId).toBe(user1Id);
+    expect(saved.symbolId).toBe(symbolId);
+    expect(saved).not.toHaveProperty("symbol");
+    expect(saved).not.toHaveProperty("assetType");
+  });
+
+  test("rejects an unknown Symbol", async () => {
+    const response = await request(app)
+      .post("/api/v1/alerts")
+      .set("Authorization", `Bearer ${user1AccessToken}`)
+      .send({
+        symbol: `NOPE${timestamp}`,
+        assetType: "STOCK",
+        condition: "PRICE_ABOVE",
+        targetPrice: "100",
+      });
+
+    expect(response.status).toBe(404);
+    expect(response.body.success).toBe(false);
+    expect(response.body.error.code).toBe("SYMBOL_NOT_FOUND");
+  });
+
+  test("rejects an asset type that does not match the Symbol", async () => {
+    const response = await request(app)
+      .post("/api/v1/alerts")
+      .set("Authorization", `Bearer ${user1AccessToken}`)
+      .send({
+        symbol: testSymbol,
+        assetType: "CRYPTO",
+        condition: "PRICE_ABOVE",
+        targetPrice: "250.5",
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.success).toBe(false);
+    expect(response.body.error.code).toBe("ASSET_TYPE_MISMATCH");
   });
 
   test("rejects invalid alert payloads", async () => {
@@ -138,6 +205,7 @@ describe("Alert integration API", () => {
       .get("/api/v1/alerts")
       .set("Authorization", `Bearer ${user2AccessToken}`);
 
+    expect(otherUser.status).toBe(200);
     expect(otherUser.body.data.alerts).toHaveLength(0);
   });
 
@@ -151,6 +219,18 @@ describe("Alert integration API", () => {
     for (const alert of response.body.data.alerts) {
       expect(alert.status).toBe("ACTIVE");
     }
+  });
+
+  test("filters alerts by related Symbol ticker", async () => {
+    const response = await request(app)
+      .get(`/api/v1/alerts?symbol=${testSymbol.toLowerCase()}`)
+      .set("Authorization", `Bearer ${user1AccessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.alerts).toHaveLength(1);
+    expect(response.body.data.alerts[0].id).toBe(alertId);
+    expect(response.body.data.alerts[0].symbol).toBe(testSymbol);
   });
 
   test("updates an alert and triggers it", async () => {
@@ -170,6 +250,8 @@ describe("Alert integration API", () => {
     expect(alert.status).toBe("TRIGGERED");
     expect(alert.targetPrice).toBe("300");
     expect(alert.triggeredAt).not.toBeNull();
+    expect(alert.symbol).toBe(testSymbol);
+    expect(alert.assetType).toBe("STOCK");
   });
 
   test("rejects an empty alert update", async () => {
@@ -211,7 +293,9 @@ describe("Alert integration API", () => {
     expect(response.body.success).toBe(true);
     expect(response.body.data.id).toBe(alertId);
 
-    const saved = await prisma.alert.findUnique({ where: { id: alertId } });
+    const saved = await prisma.alert.findUnique({
+      where: { id: alertId },
+    });
 
     expect(saved).toBeNull();
   });
