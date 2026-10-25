@@ -1,16 +1,11 @@
-function validate(schema) {
+function validate(schema, source = "body", destination = source) {
   return function validateMiddleware(req, res, next) {
-    req.body = schema.parse(req.body);
-    next();
-  };
-}
+    const parsed = schema.parse(req[source]);
 
-function validateParams(schema) {
-  return function validateParamsMiddleware(req, res, next) {
-    req.params = schema.parse(req.params);
+    req[destination] = parsed;
+
     next();
   };
 }
 
 module.exports = validate;
-module.exports.validateParams = validateParams;

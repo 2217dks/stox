@@ -42,7 +42,7 @@ async function createPortfolio(req, res, next) {
 async function getPortfolio(req, res, next) {
   try {
     const userId = req.user.userId;
-    const { portfolioId } = req.params;
+    const { portfolioId } = req.validatedParams;
 
     const portfolio = await portfolioService.getPortfolioById(
       userId,
@@ -63,7 +63,7 @@ async function getPortfolio(req, res, next) {
 async function updatePortfolio(req, res, next) {
   try {
     const userId = req.user.userId;
-    const { portfolioId } = req.params;
+    const { portfolioId } = req.validatedParams;
 
     const portfolio = await portfolioService.updatePortfolio(
       userId,
@@ -85,7 +85,7 @@ async function updatePortfolio(req, res, next) {
 async function deletePortfolio(req, res, next) {
   try {
     const userId = req.user.userId;
-    const { portfolioId } = req.params;
+    const { portfolioId } = req.validatedParams;
 
     const portfolio = await portfolioService.deactivatePortfolio(
       userId,
@@ -106,7 +106,7 @@ async function deletePortfolio(req, res, next) {
 async function getPortfolioHoldings(req, res, next) {
   try {
     const userId = req.user.userId;
-    const { portfolioId } = req.params;
+    const { portfolioId } = req.validatedParams;
 
     const holdings = await portfolioService.listPortfolioHoldings(
       userId,
@@ -128,7 +128,7 @@ async function getPortfolioHoldings(req, res, next) {
 async function getCashBalance(req, res, next) {
   try {
     const userId = req.user.userId;
-    const { portfolioId } = req.params;
+    const { portfolioId } = req.validatedParams;
 
     const result = await portfolioService.getPortfolioCashBalance(
       userId,
