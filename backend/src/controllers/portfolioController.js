@@ -39,10 +39,74 @@ async function createPortfolio(req, res, next) {
   }
 }
 
+async function getPortfolio(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+
+    const portfolio = await portfolioService.getPortfolioById(
+      userId,
+      portfolioId,
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        portfolio,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function updatePortfolio(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+
+    const portfolio = await portfolioService.updatePortfolio(
+      userId,
+      portfolioId,
+      req.body,
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        portfolio,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function deletePortfolio(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+
+    const portfolio = await portfolioService.deactivatePortfolio(
+      userId,
+      portfolioId,
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        portfolio,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getPortfolioHoldings(req, res, next) {
   try {
     const userId = req.user.userId;
-    const { portfolioId } = req.params;
+    const { portfolioId } = req.validatedParams;
 
     const holdings = await portfolioService.listPortfolioHoldings(
       userId,
@@ -64,7 +128,7 @@ async function getPortfolioHoldings(req, res, next) {
 async function getCashBalance(req, res, next) {
   try {
     const userId = req.user.userId;
-    const { portfolioId } = req.params;
+    const { portfolioId } = req.validatedParams;
 
     const result = await portfolioService.getPortfolioCashBalance(
       userId,
@@ -83,6 +147,9 @@ async function getCashBalance(req, res, next) {
 module.exports = {
   listPortfolios,
   createPortfolio,
+  getPortfolio,
+  updatePortfolio,
+  deletePortfolio,
   getPortfolioHoldings,
   getCashBalance,
 };
