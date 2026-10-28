@@ -1,66 +1,131 @@
+
 name: Backend CI
 
 on:
-    push:
-        branches:
-            - main
-    pull_request:
-        branches:
-            - main
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
 
 permissions:
-    contents: read
+  contents: read
+
+defaults:
+  run:
+    working-directory: backend
+
+# These are test-only values, not production credentials.
+env:
+  NODE_ENV: test
+  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/stox_test?schema=public
+  DIRECT_URL: postgresql://postgres:postgres@localhost:5432/stox_test?schema=public
+  JWT_ACCESS_SECRET: ci-test-access-secret-not-for-production-1234567890
+  JWT_REFRESH_SECRET: ci-test-refresh-secret-not-for-production-0987654321
 
 jobs:
-    backend-tests:
-        name: Backend Tests
-        runs-on: ubuntu-latest
+  prisma-validation:
+    name: Prisma Schema Validation
+    runs-on: ubuntu-latest
 
-        services:
-            postgres:
-                image: postgres:16
-                env:
-                    POSTGRES_USER: postgres
-                    POSTGRES_PASSWORD: postgres
-                    POSTGRES_DB: stox_test
-                ports:
-                    - 5432:5432
-                options: >-
-                    --health-cmd "pg_isready -U postgres -d stox_test"
-                    --health-interval 5s
-                    --health-timeout 5s
-                    --health-retries 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-        defaults:
-            run:
-                working-directory: backend
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate Prisma schema
+        run: npx prisma validate
+
+  unit-tests:
+    name: Backend Unit Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
         env:
-          NODE_ENV: test
-          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/stox_test?schema=public
-          DIRECT_URL: postgresql://postgres:postgres@localhost:5432/stox_test?schema=public
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: stox_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d stox_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
 
-        steps:
-            - name: Checkout repository
-              uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-            - name: Set up Node.js
-              uses: actions/setup-node@v4
-              with:
-                  node-version: 26
-                  cache: npm
-                  cache-dependency-path: backend/package-lock.json
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
 
-            - name: Install dependencies
-              run: npm ci
+      - name: Install dependencies
+        run: npm ci
 
-            - name: Validate Prisma schema
-              run: npx prisma validate
+      - name: Generate Prisma client
+        run: npx prisma generate
 
-            - name: Generate Prisma client
-              run: npx prisma generate
+      - name: Apply database migrations
+        run: npx prisma migrate deploy
 
-            - name: Apply database migrations
-              run: npx prisma migrate deploy
+      - name: Run unit tests
+        run: npm test -- --runInBand tests/unit
 
-            - name: Run backend tests
-              run: npm test -- --runInBand
+  integration-tests:
+    name: Backend Integration Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: stox_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d stox_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Apply database migrations
+        run: npx prisma migrate deploy
+
+      - name: Run integration tests
+        run: npm test -- --runInBand tests/integration
