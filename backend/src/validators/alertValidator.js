@@ -58,7 +58,7 @@ const createAlertSchema = z.object({
 });
 
 const updateAlertSchema = z
-  .object({
+  .strictObject({
     condition: alertConditionEnum.optional(),
 
     targetPrice: decimalPrice.optional(),

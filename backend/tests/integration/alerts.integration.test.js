@@ -254,6 +254,20 @@ describe("Alert integration API", () => {
     expect(alert.assetType).toBe("STOCK");
   });
 
+  test("rejects unknown update fields", async () => {
+    const response = await request(app)
+      .patch(`/api/v1/alerts/${alertId}`)
+      .set("Authorization", `Bearer ${user1AccessToken}`)
+      .send({
+        status: "ACTIVE",
+        symbol: testSymbol,
+      });
+
+    expect(response.status).toBe(400);
+    expect(response.body.success).toBe(false);
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
   test("rejects an empty alert update", async () => {
     const response = await request(app)
       .patch(`/api/v1/alerts/${alertId}`)
