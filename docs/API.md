@@ -420,6 +420,71 @@ Mark all notifications as read.
 
 ---
 
+# ⚙️ User Preferences
+
+## `GET /preferences`
+
+Returns the authenticated user's notification preferences.
+
+**Authentication:** Bearer JWT required.
+
+If the user has no preferences record, one is created automatically with both notification settings enabled.
+
+### Response
+
+```json
+{
+    "success": true,
+    "data": {
+        "preferences": {
+            "id": "clxxxxxxxxxxxxxxxxxxxx",
+            "userId": "user-uuid",
+            "emailNotifications": true,
+            "pushNotifications": true,
+            "createdAt": "2026-10-26T06:50:43.000Z",
+            "updatedAt": "2026-10-26T06:50:43.000Z"
+        }
+    }
+}
+```
+
+## `PATCH /preferences`
+
+Updates the authenticated user's notification preferences.
+
+**Authentication:** Bearer JWT required.
+
+### Request
+
+At least one supported field must be supplied. Both fields are optional individually.
+
+```json
+{
+    "emailNotifications": false
+}
+```
+
+Supported fields:
+
+| Field                | Type    | Default |
+| -------------------- | ------- | ------- |
+| `emailNotifications` | Boolean | `true`  |
+| `pushNotifications`  | Boolean | `true`  |
+
+Only the supplied fields are updated. Omitted fields retain their existing values.
+
+### Response
+
+Returns `200 OK` with the updated preferences in the same response structure as `GET /preferences`.
+
+### Validation
+
+Returns `400 Bad Request` with a `VALIDATION_ERROR` response when:
+
+- The request body is empty.
+- A preference value is not a boolean.
+- The request contains unknown fields.
+
 # 🛡️ Admin
 
 ## `GET /admin/users`
