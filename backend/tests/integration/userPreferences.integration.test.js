@@ -222,6 +222,13 @@ describe("user preferences (black-box via /preferences)", () => {
       expect(pathsOf(response.body)).toContain("pushNotifications");
     });
 
+    test("rejects an empty update body", async () => {
+      const response = await patchPreferences({});
+
+      expect(response.status).toBe(400);
+      expectValidationDetails(response.body);
+    });
+
     test("rejects unknown fields", async () => {
       const response = await patchPreferences({ theme: "dark" });
 

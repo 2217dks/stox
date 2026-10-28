@@ -9,7 +9,10 @@ const updatePreferencesSchema = z
 
     pushNotifications: z.boolean().optional(),
   })
-  .strict();
+  .strict()
+  .refine((data) => Object.values(data).some((value) => value !== undefined), {
+    message: "At least one preference field must be provided.",
+  });
 
 module.exports = {
   updatePreferencesSchema,
