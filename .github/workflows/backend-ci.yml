@@ -34,10 +34,10 @@ jobs:
         defaults:
             run:
                 working-directory: backend
-
         env:
-            NODE_ENV: test
-            DATABASE_URL: postgresql://postgres:postgres@localhost:5432/stox_test?schema=public
+          NODE_ENV: test
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/stox_test?schema=public
+          DIRECT_URL: postgresql://postgres:postgres@localhost:5432/stox_test?schema=public
 
         steps:
             - name: Checkout repository
