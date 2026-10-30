@@ -1,131 +1,198 @@
-
 name: Backend CI
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+    push:
+        branches:
+            - main
+    pull_request:
+        branches:
+            - main
 
 permissions:
-  contents: read
+    contents: read
 
 defaults:
-  run:
-    working-directory: backend
+    run:
+        working-directory: backend
 
 # These are test-only values, not production credentials.
 env:
-  NODE_ENV: test
-  DATABASE_URL: postgresql://postgres:postgres@localhost:5432/stox_test?schema=public
-  DIRECT_URL: postgresql://postgres:postgres@localhost:5432/stox_test?schema=public
-  JWT_ACCESS_SECRET: ci-test-access-secret-not-for-production-1234567890
-  JWT_REFRESH_SECRET: ci-test-refresh-secret-not-for-production-0987654321
+    NODE_ENV: test
+    DATABASE_URL: postgresql://postgres:postgres@localhost:5432/stox_test?schema=public
+    DIRECT_URL: postgresql://postgres:postgres@localhost:5432/stox_test?schema=public
+    REDIS_URL: redis://localhost:6379
+    RATE_LIMIT_ENABLED: false
+    JWT_ACCESS_SECRET: ci-test-access-secret-not-for-production-1234567890
+    JWT_REFRESH_SECRET: ci-test-refresh-secret-not-for-production-0987654321
 
 jobs:
-  prisma-validation:
-    name: Prisma Schema Validation
-    runs-on: ubuntu-latest
+    prisma-validation:
+        name: Prisma Schema Validation
+        runs-on: ubuntu-latest
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 26
-          cache: npm
-          cache-dependency-path: backend/package-lock.json
+            - name: Set up Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 26
+                  cache: npm
+                  cache-dependency-path: backend/package-lock.json
 
-      - name: Install dependencies
-        run: npm ci
+            - name: Install dependencies
+              run: npm ci
 
-      - name: Validate Prisma schema
-        run: npx prisma validate
+            - name: Validate Prisma schema
+              run: npx prisma validate
 
-  unit-tests:
-    name: Backend Unit Tests
-    runs-on: ubuntu-latest
+    unit-tests:
+        name: Backend Unit Tests
+        runs-on: ubuntu-latest
 
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: stox_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d stox_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+        services:
+            postgres:
+                image: postgres:16
+                env:
+                    POSTGRES_USER: postgres
+                    POSTGRES_PASSWORD: postgres
+                    POSTGRES_DB: stox_test
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U postgres -d stox_test"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 10
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+            redis:
+                image: redis:7
+                ports:
+                    - 6379:6379
+                options: >-
+                    --health-cmd "redis-cli ping"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 10
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 26
-          cache: npm
-          cache-dependency-path: backend/package-lock.json
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
 
-      - name: Install dependencies
-        run: npm ci
+            - name: Set up Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 26
+                  cache: npm
+                  cache-dependency-path: backend/package-lock.json
 
-      - name: Generate Prisma client
-        run: npx prisma generate
+            - name: Install dependencies
+              run: npm ci
 
-      - name: Apply database migrations
-        run: npx prisma migrate deploy
+            - name: Generate Prisma client
+              run: npx prisma generate
 
-      - name: Run unit tests
-        run: npm test -- --runInBand tests/unit
+            - name: Apply database migrations
+              run: npx prisma migrate deploy
 
-  integration-tests:
-    name: Backend Integration Tests
-    runs-on: ubuntu-latest
+            - name: Verify Redis connection
+              run: |
+                  node - <<'NODE'
+                  const Redis = require("ioredis");
 
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: stox_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U postgres -d stox_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
+                  const redis = new Redis(process.env.REDIS_URL);
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+                  redis
+                    .ping()
+                    .then((result) => {
+                      if (result !== "PONG") {
+                        throw new Error(`Unexpected Redis response: ${result}`);
+                      }
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 26
-          cache: npm
-          cache-dependency-path: backend/package-lock.json
+                      console.log("Redis connection verified");
+                      return redis.quit();
+                    })
+                    .catch((error) => {
+                      console.error(error);
+                      process.exit(1);
+                    });
+                  NODE
 
-      - name: Install dependencies
-        run: npm ci
+            - name: Run unit tests
+              run: npm test -- --runInBand tests/unit
 
-      - name: Generate Prisma client
-        run: npx prisma generate
+    integration-tests:
+        name: Backend Integration Tests
+        runs-on: ubuntu-latest
 
-      - name: Apply database migrations
-        run: npx prisma migrate deploy
+        services:
+            postgres:
+                image: postgres:16
+                env:
+                    POSTGRES_USER: postgres
+                    POSTGRES_PASSWORD: postgres
+                    POSTGRES_DB: stox_test
+                ports:
+                    - 5432:5432
+                options: >-
+                    --health-cmd "pg_isready -U postgres -d stox_test"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 10
 
-      - name: Run integration tests
-        run: npm test -- --runInBand tests/integration
+            redis:
+                image: redis:7
+                ports:
+                    - 6379:6379
+                options: >-
+                    --health-cmd "redis-cli ping"
+                    --health-interval 5s
+                    --health-timeout 5s
+                    --health-retries 10
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@v4
+
+            - name: Set up Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: 26
+                  cache: npm
+                  cache-dependency-path: backend/package-lock.json
+
+            - name: Install dependencies
+              run: npm ci
+
+            - name: Generate Prisma client
+              run: npx prisma generate
+
+            - name: Apply database migrations
+              run: npx prisma migrate deploy
+
+            - name: Verify Redis connection
+              run: |
+                  node - <<'NODE'
+                  const Redis = require("ioredis");
+
+                  const redis = new Redis(process.env.REDIS_URL);
+
+                  redis
+                    .ping()
+                    .then((result) => {
+                      if (result !== "PONG") {
+                        throw new Error(`Unexpected Redis response: ${result}`);
+                      }
+
+                      console.log("Redis connection verified");
+                      return redis.quit();
+                    })
+                    .catch((error) => {
+                      console.error(error);
+                      process.exit(1);
+                    });
+                  NODE
+
+            - name: Run integration tests
+              run: npm test -- --runInBand tests/integration
