@@ -9,6 +9,20 @@ function fakeClient(data) {
   return { get: jest.fn().mockResolvedValue({ data }) };
 }
 
+function finnhubQuoteResponse(overrides = {}) {
+  return {
+    c: 123.45,
+    d: 1.2,
+    dp: 0.98,
+    h: 125,
+    l: 120,
+    o: 121,
+    pc: 122.25,
+    t: 1793577600,
+    ...overrides,
+  };
+}
+
 function binanceQuoteResponse(overrides = {}) {
   return {
     symbol: "BTCUSDT",
@@ -27,16 +41,7 @@ function binanceQuoteResponse(overrides = {}) {
 
 describe("market-data provider adapters", () => {
   test("normalizes a Finnhub quote to decimal-string fields", async () => {
-    const client = fakeClient({
-      c: 123.45,
-      d: 1.2,
-      dp: 0.98,
-      h: 125,
-      l: 120,
-      o: 121,
-      pc: 122.25,
-      t: 1793577600,
-    });
+    const client = fakeClient(finnhubQuoteResponse());
     const provider = createFinnhubMarketDataProvider(
       { apiKey: "test-key", timeoutMs: 5000 },
       { httpClient: client },
@@ -48,7 +53,15 @@ describe("market-data provider adapters", () => {
       symbol: "AAPL",
       assetClass: "STOCK",
       price: "123.45",
+      change: "1.2",
+      changePercent: "0.98",
+      high: "125",
+      low: "120",
+      open: "121",
       previousClose: "122.25",
+      volume: null,
+      currency: "USD",
+      timestamp: "2026-11-02T00:00:00.000Z",
       source: "finnhub",
     });
     expect(client.get).toHaveBeenCalledWith("/quote", {
@@ -239,11 +252,114 @@ describe("market-data provider adapters", () => {
   });
 
   test("returns a domain error when Finnhub credentials are missing", async () => {
-    const provider = createFinnhubMarketDataProvider({ timeoutMs: 5000 });
+    const provider = createFinnhubMarketDataProvider();
 
     await expect(provider.getQuote("AAPL")).rejects.toMatchObject({
       statusCode: 503,
       code: "MARKET_DATA_NOT_CONFIGURED",
+    });
+  });
+
+  test("maps Finnhub's empty quote response to a safe invalid-symbol error", async () => {
+    const provider = createFinnhubMarketDataProvider(
+      { apiKey: "test-key", timeoutMs: 5000 },
+      {
+        httpClient: fakeClient({
+          c: 0,
+          d: 0,
+          dp: 0,
+          h: 0,
+          l: 0,
+          o: 0,
+          pc: 0,
+          t: 0,
+        }),
+      },
+    );
+
+    await expect(provider.getQuote("NOT_A_SYMBOL")).rejects.toMatchObject({
+      statusCode: 404,
+      code: "MARKET_DATA_NOT_FOUND",
+      message: "Market data is unavailable for the requested symbol.",
+    });
+  });
+
+  test.each([401, 403])(
+    "maps Finnhub HTTP %i authentication failures without exposing credentials or provider details",
+    async (status) => {
+      const apiKey = "test-finnhub-secret";
+      const provider = createFinnhubMarketDataProvider(
+        { apiKey, timeoutMs: 5000 },
+        {
+          httpClient: {
+            get: jest.fn().mockRejectedValue({
+              response: {
+                status,
+                data: { error: `invalid token ${apiKey}` },
+              },
+            }),
+          },
+        },
+      );
+
+      await expect(provider.getQuote("AAPL")).rejects.toMatchObject({
+        statusCode: 503,
+        code: "MARKET_DATA_INVALID_CREDENTIALS",
+        message: "Market data provider credentials are invalid or unavailable.",
+      });
+    },
+  );
+
+  test.each([
+    [
+      "rate limit",
+      { response: { status: 429 } },
+      429,
+      "MARKET_DATA_RATE_LIMITED",
+    ],
+    [
+      "request timeout",
+      { code: "ECONNABORTED", message: "timeout" },
+      504,
+      "MARKET_DATA_TIMEOUT",
+    ],
+    [
+      "network failure",
+      { code: "ECONNREFUSED" },
+      503,
+      "MARKET_DATA_PROVIDER_UNAVAILABLE",
+    ],
+  ])(
+    "maps Finnhub %s to the standard safe error",
+    async (_label, error, statusCode, code) => {
+      const provider = createFinnhubMarketDataProvider(
+        { apiKey: "test-key", timeoutMs: 5000 },
+        { httpClient: { get: jest.fn().mockRejectedValue(error) } },
+      );
+
+      await expect(provider.getQuote("AAPL")).rejects.toMatchObject({
+        statusCode,
+        code,
+      });
+    },
+  );
+
+  test.each([
+    ["non-object body", "not-json"],
+    ["missing current price", {}],
+    ["null quote values", { c: null, t: null }],
+    ["invalid current price", finnhubQuoteResponse({ c: "bad" })],
+    ["invalid change field", finnhubQuoteResponse({ d: "NaN" })],
+  ])("rejects a Finnhub quote with %s", async (_label, data) => {
+    const provider = createFinnhubMarketDataProvider(
+      { apiKey: "test-key", timeoutMs: 5000 },
+      { httpClient: fakeClient(data) },
+    );
+
+    await expect(provider.getQuote("AAPL")).rejects.toMatchObject({
+      statusCode: 502,
+      code: "MARKET_DATA_INVALID_RESPONSE",
+      message: "Market data provider returned an invalid response.",
     });
   });
 
@@ -387,28 +503,4 @@ describe("market-data provider adapters", () => {
       );
     },
   );
-
-  test("maps rate limits and malformed provider responses", async () => {
-    const rateLimited = createFinnhubMarketDataProvider(
-      { apiKey: "test-key", timeoutMs: 5000 },
-      {
-        httpClient: {
-          get: jest.fn().mockRejectedValue({ response: { status: 429 } }),
-        },
-      },
-    );
-    const malformed = createFinnhubMarketDataProvider(
-      { apiKey: "test-key", timeoutMs: 5000 },
-      { httpClient: fakeClient({ c: "bad" }) },
-    );
-
-    await expect(rateLimited.getQuote("AAPL")).rejects.toMatchObject({
-      statusCode: 429,
-      code: "MARKET_DATA_RATE_LIMITED",
-    });
-    await expect(malformed.getQuote("AAPL")).rejects.toMatchObject({
-      statusCode: 502,
-      code: "MARKET_DATA_INVALID_RESPONSE",
-    });
-  });
 });
