@@ -1,9 +1,8 @@
 # Market Data Service Layer
 
 This document describes the provider-independent backend service contract.
-`docs/API.md` defines the public crypto quote route and market overview
-response. The quote route currently accepts crypto pairs only. Search remains
-internal until its full contract is agreed.
+`docs/API.md` defines the public stock and crypto quote routes and market
+overview response. Search remains internal until its full contract is agreed.
 
 ## Service construction
 
@@ -113,8 +112,8 @@ is `null`. An all-zero quote with timestamp `0` is treated as an unknown or
 unavailable symbol. HTTP authentication failures, throttling, timeouts, and
 malformed payloads become the corresponding safe market-data domain errors.
 The credential is configured in the environment and is not included in the
-quote result or public error messages. Finnhub remains service-layer-only; the
-public quote route currently accepts crypto pairs only.
+quote result or public error messages. The stock quote route uses this adapter
+through the provider-independent service; controllers do not call Finnhub.
 
 ### Binance quote behavior
 

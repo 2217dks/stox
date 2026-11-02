@@ -278,6 +278,44 @@ formats return HTTP 400 `VALIDATION_ERROR`; unknown Binance pairs return HTTP
 404 `MARKET_DATA_NOT_FOUND`. Provider timeouts, rate limits, and unavailable
 provider errors use the documented market-data domain error codes.
 
+## `GET /market/quote/stock/:symbol`
+
+Get a normalized Finnhub stock quote. This public, read-only endpoint does not
+require authentication and uses the global API rate limit. Tickers are
+case-insensitive and may contain letters, digits, `.` or `-`, with a maximum
+length of 20 characters (for example, `AAPL` or `BRK.B`).
+
+The response uses the same normalized quote DTO and standard envelope as the
+crypto quote route. Finnhub does not return quote volume, so `volume` is
+`null`; optional quote fields are also `null` when absent.
+
+```json
+{
+  "success": true,
+  "data": {
+    "symbol": "AAPL",
+    "assetClass": "STOCK",
+    "price": "226.5",
+    "change": "1.25",
+    "changePercent": "0.55",
+    "high": "228.1",
+    "low": "224.8",
+    "open": "225.3",
+    "previousClose": "225.25",
+    "volume": null,
+    "currency": "USD",
+    "timestamp": "2026-11-02T12:00:00.000Z",
+    "source": "finnhub"
+  }
+}
+```
+
+Malformed ticker formats return HTTP 400 `VALIDATION_ERROR`; unsupported
+symbols return HTTP 404 `MARKET_DATA_NOT_FOUND`. Missing Finnhub configuration,
+provider timeouts, rate limits, and unavailable providers use the standard
+market-data domain errors. API credentials and raw provider payloads are never
+included in response data or error messages.
+
 ## `GET /market/overview`
 
 Get a current overview for one asset class. This public, read-only endpoint
