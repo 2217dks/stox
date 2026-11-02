@@ -32,6 +32,20 @@ async function getStockQuote(req, res, next) {
   }
 }
 
+async function searchMarketSymbols(req, res, next) {
+  try {
+    const { query, ...options } = req.validatedQuery;
+    const results = await marketDataService.searchSymbols(query, options);
+
+    return res.status(200).json({
+      success: true,
+      data: results,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function getHistoricalPrices(req, res, next) {
   try {
     const { symbol } = req.validatedParams;
@@ -68,5 +82,6 @@ module.exports = {
   getCryptoQuote,
   getHistoricalPrices,
   getMarketOverview,
+  searchMarketSymbols,
   getStockQuote,
 };

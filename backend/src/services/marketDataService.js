@@ -198,7 +198,15 @@ function assertSearchResults(value, assetClass) {
       "MARKET_DATA_INVALID_RESPONSE",
     );
   }
-  return value;
+  return value.map((item) => ({
+    symbol: item.symbol.trim().toUpperCase(),
+    name: item.name.trim(),
+    assetClass,
+    exchange: item.exchange?.trim().toUpperCase() || null,
+    currency: item.currency?.trim().toUpperCase() || null,
+    type: item.type?.trim() || null,
+    source: item.source.trim().toLowerCase(),
+  }));
 }
 
 /**

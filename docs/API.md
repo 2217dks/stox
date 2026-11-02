@@ -234,12 +234,50 @@ Get trade details.
 
 ## `GET /market/search`
 
-Search tradable instruments.
+Search supported stocks and crypto pairs through the configured market-data
+providers. This public, read-only endpoint uses the global API rate limit.
+
+Query parameters:
+
+| Name | Required | Contract |
+| --- | --- | --- |
+| `query` | Yes | Trimmed text from 2 to 50 characters |
+| `assetClass` | No | `STOCK` or `CRYPTO`; omitted searches both configured providers |
+| `limit` | No | Integer from 1 to 50; defaults to 20 |
+
+Results are returned in the standard envelope as an array in `data`. Each item
+contains only `symbol`, `name`, `assetClass`, `exchange`, `currency`, `type`,
+and `source`. Symbol and exchange are uppercase; currency is uppercase when
+known. Optional metadata is `null` when unavailable. A query with no matches
+returns HTTP 200 with `data: []`.
+
+When both asset classes are requested, the service combines both provider
+results. If either provider fails, the entire request returns the standard
+market-data error envelope rather than a misleading partial result. Pass
+`assetClass` to search only one provider. Provider timeouts, throttling, and
+unavailability use the standard market-data domain error codes.
 
 Example:
 
 ```text
-?query=apple
+GET /api/v1/market/search?query=apple&assetClass=STOCK&limit=20
+```
+
+```json
+{
+  "success": true,
+  "data": [
+    {
+      "symbol": "AAPL",
+      "name": "Apple Inc.",
+      "assetClass": "STOCK",
+      "exchange": "NASDAQ",
+      "currency": "USD",
+      "type": "Common Stock",
+      "source": "finnhub"
+    }
+  ]
+}
 ```
 
 ## `GET /market/quote/:symbol`
