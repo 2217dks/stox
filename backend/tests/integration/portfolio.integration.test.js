@@ -27,6 +27,22 @@ let user1MainPortfolioId;
 let user1TestPortfolioId;
 let user2MainPortfolioId;
 
+const PORTFOLIO_SUMMARY_KEYS = [
+  "id",
+  "userId",
+  "name",
+  "description",
+  "startingBalance",
+  "cashBalance",
+  "isDefault",
+  "isActive",
+  "holdingsValue",
+  "totalValue",
+  "holdingsCount",
+  "createdAt",
+  "updatedAt",
+];
+
 beforeAll(async () => {
   jest.setTimeout(15000);
 
@@ -232,6 +248,166 @@ describe("Portfolio integration API", () => {
     const response = await request(app)
       .get(`/api/v1/portfolios/${user1MainPortfolioId}/cash-balance`)
       .set("Authorization", `Bearer ${user2AccessToken}`);
+
+    expect(response.status).toBe(404);
+    expect(response.body.success).toBe(false);
+    expect(response.body.error.code).toBe("PORTFOLIO_NOT_FOUND");
+  });
+
+  test("rejects unauthenticated portfolio summary requests", async () => {
+    const response = await request(app).get(
+      `/api/v1/portfolios/${user1MainPortfolioId}/summary`,
+    );
+
+    expect(response.status).toBe(401);
+    expect(response.body.success).toBe(false);
+    expect(response.body.error.code).toBe("UNAUTHORIZED");
+  });
+
+  test("rejects a malformed portfolio id", async () => {
+    const response = await request(app)
+      .get("/api/v1/portfolios/not-a-uuid/summary")
+      .set("Authorization", `Bearer ${user1AccessToken}`);
+
+    expect(response.status).toBe(400);
+    expect(response.body.success).toBe(false);
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
+  });
+
+  test("returns a portfolio summary for the owner", async () => {
+    await prisma.holding.deleteMany({
+      where: {
+        portfolioId: user1TestPortfolioId,
+      },
+    });
+
+    await prisma.holding.createMany({
+      data: [
+        {
+          portfolioId: user1TestPortfolioId,
+          symbol: "AAPL",
+          assetType: "STOCK",
+          quantity: "10",
+          averageBuyPrice: "150",
+          totalInvested: "1500",
+          isShort: false,
+        },
+        {
+          portfolioId: user1TestPortfolioId,
+          symbol: "ETHUSDT",
+          assetType: "CRYPTO",
+          quantity: "2",
+          averageBuyPrice: "2000",
+          totalInvested: "4000",
+          isShort: false,
+        },
+      ],
+    });
+
+    await prisma.portfolio.update({
+      where: {
+        id: user1TestPortfolioId,
+      },
+      data: {
+        cashBalance: "4500.50000000",
+      },
+    });
+
+    const response = await request(app)
+      .get(`/api/v1/portfolios/${user1TestPortfolioId}/summary`)
+      .set("Authorization", `Bearer ${user1AccessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+
+    const portfolio = response.body.data.portfolio;
+
+    expect(Object.keys(portfolio).sort()).toEqual(
+      [...PORTFOLIO_SUMMARY_KEYS].sort(),
+    );
+
+    expect(portfolio.id).toBe(user1TestPortfolioId);
+    expect(portfolio.userId).toBe(user1Id);
+    expect(portfolio.name).toBe("Integration Test Portfolio");
+    expect(portfolio.cashBalance).toBe("4500.5");
+    expect(portfolio.holdingsValue).toBe("5500");
+    expect(portfolio.totalValue).toBe("10000.5");
+    expect(portfolio.holdingsCount).toBe(2);
+  });
+
+  test("returns a stable summary for an empty portfolio", async () => {
+    const response = await request(app)
+      .get(`/api/v1/portfolios/${user2MainPortfolioId}/summary`)
+      .set("Authorization", `Bearer ${user2AccessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+
+    const portfolio = response.body.data.portfolio;
+
+    expect(Object.keys(portfolio).sort()).toEqual(
+      [...PORTFOLIO_SUMMARY_KEYS].sort(),
+    );
+
+    expect(portfolio.userId).toBe(user2Id);
+    expect(portfolio.holdingsCount).toBe(0);
+    expect(portfolio.holdingsValue).toBe("0");
+    expect(portfolio.totalValue).toBe(portfolio.cashBalance);
+  });
+
+  test("preserves decimal precision when adding cash and invested value", async () => {
+    await prisma.holding.deleteMany({
+      where: {
+        portfolioId: user1TestPortfolioId,
+      },
+    });
+
+    await prisma.holding.create({
+      data: {
+        portfolioId: user1TestPortfolioId,
+        symbol: "AAPL",
+        assetType: "STOCK",
+        quantity: "0.00000001",
+        averageBuyPrice: "0.20000002",
+        totalInvested: "0.20000002",
+        isShort: false,
+      },
+    });
+
+    await prisma.portfolio.update({
+      where: {
+        id: user1TestPortfolioId,
+      },
+      data: {
+        cashBalance: "0.10000001",
+      },
+    });
+
+    const response = await request(app)
+      .get(`/api/v1/portfolios/${user1TestPortfolioId}/summary`)
+      .set("Authorization", `Bearer ${user1AccessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.portfolio.cashBalance).toBe("0.10000001");
+    expect(response.body.data.portfolio.holdingsValue).toBe("0.20000002");
+    expect(response.body.data.portfolio.totalValue).toBe("0.30000003");
+  });
+
+  test("enforces ownership isolation on the portfolio summary", async () => {
+    const response = await request(app)
+      .get(`/api/v1/portfolios/${user1MainPortfolioId}/summary`)
+      .set("Authorization", `Bearer ${user2AccessToken}`);
+
+    expect(response.status).toBe(404);
+    expect(response.body.success).toBe(false);
+    expect(response.body.error.code).toBe("PORTFOLIO_NOT_FOUND");
+  });
+
+  test("returns 404 for a nonexistent portfolio summary", async () => {
+    const response = await request(app)
+      .get("/api/v1/portfolios/00000000-0000-0000-0000-000000000000/summary")
+      .set("Authorization", `Bearer ${user1AccessToken}`);
 
     expect(response.status).toBe(404);
     expect(response.body.success).toBe(false);
