@@ -163,6 +163,7 @@ describe("market-data provider adapters", () => {
       isOpen: true,
       exchange: "US",
     });
+    expect(overview.movers).toBeNull();
     expect(symbols[0]).toMatchObject({
       symbol: "AAPL",
       name: "Apple Inc.",
