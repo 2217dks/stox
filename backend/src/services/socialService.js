@@ -205,6 +205,137 @@ async function createPost(userId, { content, symbol, metadata }) {
   return serializePost(post);
 }
 
+function serializePostEngagement(postId, likesCount, likedByViewer) {
+  return {
+    postId,
+    likesCount,
+    likedByViewer,
+  };
+}
+
+async function getPostEngagement(userId, postId) {
+  await ensureActiveUser(userId);
+
+  const post = await prisma.post.findFirst({
+    where: {
+      id: postId,
+      isHidden: false,
+    },
+    select: {
+      id: true,
+      _count: {
+        select: {
+          likes: true,
+        },
+      },
+      likes: {
+        where: {
+          userId,
+        },
+        select: {
+          id: true,
+        },
+        take: 1,
+      },
+    },
+  });
+
+  if (!post) {
+    throw AppError.notFound("Post not found.", "POST_NOT_FOUND");
+  }
+
+  return serializePostEngagement(
+    post.id,
+    post._count.likes,
+    post.likes.length > 0,
+  );
+}
+
+async function likePost(userId, postId) {
+  await ensureActiveUser(userId);
+
+  try {
+    return await prisma.$transaction(async (transaction) => {
+      const post = await transaction.post.findFirst({
+        where: {
+          id: postId,
+          isHidden: false,
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      if (!post) {
+        throw AppError.notFound("Post not found.", "POST_NOT_FOUND");
+      }
+
+      await transaction.postLike.create({
+        data: {
+          postId,
+          userId,
+        },
+      });
+
+      const likesCount = await transaction.postLike.count({
+        where: { postId },
+      });
+
+      return serializePostEngagement(postId, likesCount, true);
+    });
+  } catch (error) {
+    if (error?.code === "P2002") {
+      throw AppError.conflict("You already liked this post.", "ALREADY_LIKED");
+    }
+
+    if (error?.code === "P2003") {
+      throw AppError.notFound("Post not found.", "POST_NOT_FOUND");
+    }
+
+    throw error;
+  }
+}
+
+async function unlikePost(userId, postId) {
+  await ensureActiveUser(userId);
+
+  return prisma.$transaction(async (transaction) => {
+    const post = await transaction.post.findFirst({
+      where: {
+        id: postId,
+        isHidden: false,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!post) {
+      throw AppError.notFound("Post not found.", "POST_NOT_FOUND");
+    }
+
+    const result = await transaction.postLike.deleteMany({
+      where: {
+        postId,
+        userId,
+      },
+    });
+
+    if (result.count === 0) {
+      throw AppError.notFound(
+        "You have not liked this post.",
+        "POST_NOT_LIKED",
+      );
+    }
+
+    const likesCount = await transaction.postLike.count({
+      where: { postId },
+    });
+
+    return serializePostEngagement(postId, likesCount, false);
+  });
+}
+
 module.exports = {
   followUser,
   unfollowUser,
@@ -212,4 +343,7 @@ module.exports = {
   listFollowing,
   getFeed,
   createPost,
+  getPostEngagement,
+  likePost,
+  unlikePost,
 };

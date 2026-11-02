@@ -113,9 +113,10 @@ model User {
   refreshTokens RefreshToken[]
 
   // Social
-  following Follow[] @relation("UserFollowing")
-  followers Follow[] @relation("UserFollowers")
+  following Follow[]   @relation("UserFollowing")
+  followers Follow[]   @relation("UserFollowers")
   posts     Post[]
+  postLikes PostLike[]
 
   // Engagement
   alerts             Alert[]
@@ -447,11 +448,30 @@ model Post {
 
   isHidden Boolean @default(false)
 
+  likes PostLike[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([authorId, createdAt])
   @@index([createdAt])
+}
+
+// A user can like each post at most once. Other engagement types are not part
+// of the current social API contract.
+model PostLike {
+  id String @id @default(uuid())
+
+  postId String
+  userId String
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([postId, userId])
+  @@index([userId, createdAt])
 }
 
 // ============================================================
