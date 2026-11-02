@@ -205,6 +205,26 @@ async function createPost(userId, { content, symbol, metadata }) {
   return serializePost(post);
 }
 
+async function deletePost(userId, postId) {
+  await ensureActiveUser(userId);
+
+  const result = await prisma.post.deleteMany({
+    where: {
+      id: postId,
+      authorId: userId,
+    },
+  });
+
+  if (result.count === 0) {
+    throw AppError.notFound("Post not found.", "POST_NOT_FOUND");
+  }
+
+  return {
+    postId,
+    deleted: true,
+  };
+}
+
 function serializePostEngagement(postId, likesCount, likedByViewer) {
   return {
     postId,
@@ -343,6 +363,7 @@ module.exports = {
   listFollowing,
   getFeed,
   createPost,
+  deletePost,
   getPostEngagement,
   likePost,
   unlikePost,

@@ -5,6 +5,7 @@ const {
   listFollowing,
   getFeed,
   createPost,
+  deletePost,
   getPostEngagement,
   likePost,
   unlikePost,
@@ -100,6 +101,19 @@ async function addPost(req, res, next) {
   }
 }
 
+async function removePost(req, res, next) {
+  try {
+    const result = await deletePost(req.user.userId, req.params.postId);
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function getEngagement(req, res, next) {
   try {
     const engagement = await getPostEngagement(
@@ -149,6 +163,7 @@ module.exports = {
   getFollowing,
   listFeed,
   addPost,
+  deletePost: removePost,
   getPostEngagement: getEngagement,
   likePost: like,
   unlikePost: unlike,
