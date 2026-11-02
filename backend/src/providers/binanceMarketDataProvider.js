@@ -7,6 +7,7 @@ const {
   assertObject,
 } = require("./marketDataHttp");
 const { createMarketDataError } = require("./marketDataErrors");
+const { mapBinanceQuote } = require("./marketQuoteMappers");
 
 const BINANCE_INTERVALS = new Set([
   "1m",
@@ -41,21 +42,6 @@ function normalizeBinanceSymbol(symbol) {
   return normalized;
 }
 
-function binanceDecimal(value) {
-  if (typeof value !== "string" || !/^-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value)) {
-    return undefined;
-  }
-  return decimalString(value);
-}
-
-function isPositiveDecimal(value) {
-  return value !== undefined && !value.startsWith("-") && /[1-9]/.test(value);
-}
-
-function isNonNegativeDecimal(value) {
-  return value !== undefined && !value.startsWith("-");
-}
-
 function createBinanceMarketDataProvider(config, { httpClient } = {}) {
   const client =
     httpClient ||
@@ -67,62 +53,10 @@ function createBinanceMarketDataProvider(config, { httpClient } = {}) {
 
     async getQuote(symbol) {
       const providerSymbol = normalizeBinanceSymbol(symbol);
-      const data = assertObject(
-        await getData(client, "/api/v3/ticker/24hr", {
-          symbol: providerSymbol,
-        }),
-      );
-      const price = binanceDecimal(data.lastPrice);
-      if (!isPositiveDecimal(price)) throw invalidProviderResponse();
-
-      if (
-        typeof data.symbol !== "string" ||
-        data.symbol.toUpperCase() !== providerSymbol
-      ) {
-        throw invalidProviderResponse();
-      }
-
-      const change = binanceDecimal(data.priceChange);
-      const changePercent = binanceDecimal(data.priceChangePercent);
-      const high = binanceDecimal(data.highPrice);
-      const low = binanceDecimal(data.lowPrice);
-      const open = binanceDecimal(data.openPrice);
-      const previousClose = binanceDecimal(data.prevClosePrice);
-      const volume = binanceDecimal(data.volume);
-      const timestamp = isoTimestamp(data.closeTime);
-      if (
-        [change, changePercent, high, low, open, previousClose, volume].some(
-          (value) => value === undefined,
-        ) ||
-        !isPositiveDecimal(high) ||
-        !isPositiveDecimal(low) ||
-        !isPositiveDecimal(open) ||
-        !isPositiveDecimal(previousClose) ||
-        !isNonNegativeDecimal(volume) ||
-        !timestamp
-      ) {
-        throw invalidProviderResponse();
-      }
-
-      const quoteAsset = ["USDT", "BTC", "ETH"].find((asset) =>
-        providerSymbol.endsWith(asset),
-      );
-
-      return {
-        symbol: `BINANCE:${providerSymbol}`,
-        assetClass: "CRYPTO",
-        price,
-        change,
-        changePercent,
-        high,
-        low,
-        open,
-        previousClose,
-        volume,
-        currency: quoteAsset || null,
-        timestamp,
-        source: "binance",
-      };
+      const payload = await getData(client, "/api/v3/ticker/24hr", {
+        symbol: providerSymbol,
+      });
+      return mapBinanceQuote(payload, providerSymbol);
     },
 
     async getHistoricalPrices(symbol, { interval, from, to, limit = 500 }) {
