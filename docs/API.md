@@ -310,6 +310,12 @@ liked it.
 Like a visible post. A user can like a post once; repeated likes return a
 conflict response.
 
+## `DELETE /social/posts/:postId`
+
+Delete the authenticated user's own post. Missing posts and posts owned by
+another user return the same not-found response. Related likes are deleted by
+the database cascade.
+
 ## `DELETE /social/posts/:postId/likes`
 
 Remove the authenticated user's like from a visible post.
