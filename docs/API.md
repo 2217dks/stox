@@ -300,6 +300,15 @@ Delete alert.
 
 Get social feed.
 
+## `POST /social/posts`
+
+Create a social post.
+
+## `GET /social/posts/:postId`
+
+Get a visible post and its public author profile. Hidden or nonexistent posts
+return the same not-found response.
+
 ## `POST /social/follow/:userId`
 
 Follow user.
