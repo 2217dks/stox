@@ -34,6 +34,7 @@ function createBinanceMarketDataProvider(config, { httpClient } = {}) {
 
   return {
     id: "binance",
+    assetClasses: ["CRYPTO"],
 
     async getQuote(symbol) {
       const providerSymbol = stripBinancePrefix(symbol);

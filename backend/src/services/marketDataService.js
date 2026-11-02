@@ -22,9 +22,15 @@ function invalidRequest(message) {
 }
 
 function normalizeAssetClass(value, symbol) {
+  const normalizedSymbol = String(symbol || "")
+    .trim()
+    .toUpperCase();
+  const inferredCrypto =
+    normalizedSymbol.startsWith("BINANCE:") ||
+    /(?:USDT|BTC|ETH)$/.test(normalizedSymbol);
   const assetClass = value
     ? String(value).trim().toUpperCase()
-    : /^BINANCE:/i.test(symbol || "")
+    : inferredCrypto
       ? "CRYPTO"
       : "STOCK";
   if (!ASSET_CLASSES.has(assetClass)) {
@@ -52,16 +58,39 @@ function isValidIsoTimestamp(value) {
   return typeof value === "string" && !Number.isNaN(Date.parse(value));
 }
 
+function isDecimalString(value) {
+  return (
+    typeof value === "string" &&
+    value.trim() !== "" &&
+    Number.isFinite(Number(value))
+  );
+}
+
+function isNullableDecimalString(value) {
+  return value === null || isDecimalString(value);
+}
+
 function assertQuote(value, symbol, assetClass) {
   if (
     !value ||
     typeof value !== "object" ||
     typeof value.symbol !== "string" ||
+    !value.symbol.trim() ||
     value.assetClass !== assetClass ||
-    typeof value.price !== "string" ||
-    !Number.isFinite(Number(value.price)) ||
+    !isDecimalString(value.price) ||
     typeof value.source !== "string" ||
-    (value.timestamp !== null && !isValidIsoTimestamp(value.timestamp))
+    !value.source.trim() ||
+    (value.timestamp !== null && !isValidIsoTimestamp(value.timestamp)) ||
+    [
+      "change",
+      "changePercent",
+      "high",
+      "low",
+      "open",
+      "previousClose",
+      "volume",
+    ].some((key) => !isNullableDecimalString(value[key])) ||
+    (value.currency !== null && typeof value.currency !== "string")
   ) {
     throw createMarketDataError(
       "Market data provider returned an invalid response.",
@@ -91,9 +120,7 @@ function assertHistoricalPrices(value, symbol, assetClass, interval) {
       !candle ||
       !isValidIsoTimestamp(candle.timestamp) ||
       ["open", "high", "low", "close", "volume"].some(
-        (key) =>
-          typeof candle[key] !== "string" ||
-          !Number.isFinite(Number(candle[key])),
+        (key) => !isDecimalString(candle[key]),
       )
     ) {
       throw createMarketDataError(
@@ -115,15 +142,18 @@ function assertOverview(value, assetClass) {
     !value.marketStatus ||
     typeof value.marketStatus !== "object" ||
     Array.isArray(value.marketStatus) ||
+    typeof value.marketStatus.isOpen !== "boolean" ||
     !Array.isArray(value.movers) ||
     typeof value.source !== "string" ||
+    !value.source.trim() ||
     value.movers.some(
       (mover) =>
         !mover ||
         typeof mover !== "object" ||
         typeof mover.symbol !== "string" ||
-        typeof mover.price !== "string" ||
-        typeof mover.changePercent !== "string",
+        !mover.symbol.trim() ||
+        !isDecimalString(mover.price) ||
+        !isDecimalString(mover.changePercent),
     )
   ) {
     throw createMarketDataError(
@@ -142,9 +172,12 @@ function assertSearchResults(value, assetClass) {
       (item) =>
         !item ||
         typeof item.symbol !== "string" ||
+        !item.symbol.trim() ||
         typeof item.name !== "string" ||
+        !item.name.trim() ||
         item.assetClass !== assetClass ||
         typeof item.source !== "string" ||
+        !item.source.trim() ||
         (item.exchange !== null && typeof item.exchange !== "string") ||
         (item.currency !== null && typeof item.currency !== "string") ||
         (item.type !== null && typeof item.type !== "string"),
@@ -189,6 +222,16 @@ function createMarketDataService({ config, providers } = {}) {
         "MARKET_DATA_PROVIDER_UNAVAILABLE",
       );
     }
+    if (
+      Array.isArray(adapter.assetClasses) &&
+      !adapter.assetClasses.includes(assetClass)
+    ) {
+      throw createMarketDataError(
+        "The configured market-data provider does not support this asset class.",
+        503,
+        "MARKET_DATA_PROVIDER_UNAVAILABLE",
+      );
+    }
     return adapter;
   }
 
@@ -203,8 +246,9 @@ function createMarketDataService({ config, providers } = {}) {
   return {
     /**
      * Get one current quote. `options.assetClass` may be STOCK or CRYPTO;
-     * otherwise BINANCE-prefixed symbols are treated as crypto and other
-     * symbols as stocks. Prices and changes are decimal strings.
+     * otherwise BINANCE-prefixed symbols and symbols ending in USDT, BTC, or
+     * ETH are treated as crypto and other symbols as stocks. Prices and
+     * changes are decimal strings.
      */
     async getQuote(symbol, options = {}) {
       const assetClass = normalizeAssetClass(options.assetClass, symbol);
