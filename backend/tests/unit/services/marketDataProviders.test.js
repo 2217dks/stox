@@ -9,6 +9,22 @@ function fakeClient(data) {
   return { get: jest.fn().mockResolvedValue({ data }) };
 }
 
+function binanceQuoteResponse(overrides = {}) {
+  return {
+    symbol: "BTCUSDT",
+    lastPrice: "100.12",
+    priceChange: "2.00",
+    priceChangePercent: "2.03",
+    highPrice: "101.00",
+    lowPrice: "98.00",
+    openPrice: "98.12",
+    prevClosePrice: "98.12",
+    volume: "1000",
+    closeTime: 1793577600000,
+    ...overrides,
+  };
+}
+
 describe("market-data provider adapters", () => {
   test("normalizes a Finnhub quote to decimal-string fields", async () => {
     const client = fakeClient({
@@ -127,18 +143,7 @@ describe("market-data provider adapters", () => {
       get: jest
         .fn()
         .mockResolvedValueOnce({
-          data: {
-            symbol: "BTCUSDT",
-            lastPrice: "100.12",
-            priceChange: "2.00",
-            priceChangePercent: "2.03",
-            highPrice: "101.00",
-            lowPrice: "98.00",
-            openPrice: "98.12",
-            prevClosePrice: "98.12",
-            volume: "1000",
-            closeTime: 1793577600000,
-          },
+          data: binanceQuoteResponse(),
         })
         .mockResolvedValueOnce({
           data: [[1793491200000, "1", "2", "0.5", "1.5", "10"]],
@@ -149,7 +154,7 @@ describe("market-data provider adapters", () => {
       { httpClient: client },
     );
 
-    const quote = await provider.getQuote("BINANCE:BTCUSDT");
+    const quote = await provider.getQuote("BTCUSDT");
     const history = await provider.getHistoricalPrices("BTCUSDT", {
       interval: "1d",
       from: 1793491200000,
@@ -160,7 +165,15 @@ describe("market-data provider adapters", () => {
       symbol: "BINANCE:BTCUSDT",
       assetClass: "CRYPTO",
       price: "100.12",
+      change: "2.00",
+      changePercent: "2.03",
+      high: "101.00",
+      low: "98.00",
+      open: "98.12",
+      previousClose: "98.12",
+      volume: "1000",
       currency: "USDT",
+      timestamp: "2026-11-02T00:00:00.000Z",
       source: "binance",
     });
     expect(history.prices[0].close).toBe("1.5");
@@ -233,6 +246,147 @@ describe("market-data provider adapters", () => {
       code: "MARKET_DATA_NOT_CONFIGURED",
     });
   });
+
+  test("accepts the documented Binance prefix and slash pair forms", async () => {
+    const client = fakeClient(binanceQuoteResponse());
+    const provider = createBinanceMarketDataProvider(
+      { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+      { httpClient: client },
+    );
+
+    await provider.getQuote("BINANCE:BTC/USDT");
+
+    expect(client.get).toHaveBeenCalledWith("/api/v3/ticker/24hr", {
+      params: { symbol: "BTCUSDT" },
+    });
+
+    const btcQuotedProvider = createBinanceMarketDataProvider(
+      { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+      { httpClient: fakeClient(binanceQuoteResponse({ symbol: "ETHBTC" })) },
+    );
+    await expect(btcQuotedProvider.getQuote("ETHBTC")).resolves.toMatchObject({
+      currency: "BTC",
+    });
+  });
+
+  test("preserves Binance decimal precision as provider strings", async () => {
+    const precise = binanceQuoteResponse({
+      lastPrice: "0.000000000000000001",
+      priceChange: "-0.000000000000000009",
+    });
+    const provider = createBinanceMarketDataProvider(
+      { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+      { httpClient: fakeClient(precise) },
+    );
+
+    const quote = await provider.getQuote("BTCUSDT");
+
+    expect(quote.price).toBe("0.000000000000000001");
+    expect(quote.change).toBe("-0.000000000000000009");
+  });
+
+  test.each(["AAPL", "BTC////USDT", "BINANCE:BINANCE:BTCUSDT"])(
+    "rejects unsupported crypto symbol format %s before making a Binance request",
+    async (symbol) => {
+      const client = fakeClient(binanceQuoteResponse());
+      const provider = createBinanceMarketDataProvider(
+        { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+        { httpClient: client },
+      );
+
+      await expect(provider.getQuote(symbol)).rejects.toMatchObject({
+        statusCode: 400,
+        code: "MARKET_DATA_INVALID_REQUEST",
+      });
+      expect(client.get).not.toHaveBeenCalled();
+    },
+  );
+
+  test("maps an unknown Binance pair to not found", async () => {
+    const provider = createBinanceMarketDataProvider(
+      { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+      {
+        httpClient: {
+          get: jest.fn().mockRejectedValue({
+            response: {
+              status: 400,
+              data: { code: -1121, msg: "Invalid symbol." },
+            },
+          }),
+        },
+      },
+    );
+
+    await expect(provider.getQuote("NOTAREALCOINUSDT")).rejects.toMatchObject({
+      statusCode: 404,
+      code: "MARKET_DATA_NOT_FOUND",
+      message: "Market data is unavailable for the requested symbol or range.",
+    });
+  });
+
+  test.each([
+    ["malformed payload", "not-json"],
+    ["missing response field", binanceQuoteResponse({ volume: undefined })],
+    ["non-decimal price", binanceQuoteResponse({ lastPrice: "0x10" })],
+    ["negative volume", binanceQuoteResponse({ volume: "-1" })],
+    ["provider symbol mismatch", binanceQuoteResponse({ symbol: "ETHUSDT" })],
+    ["invalid timestamp", binanceQuoteResponse({ closeTime: "bad" })],
+  ])("rejects a Binance %s", async (_description, data) => {
+    const provider = createBinanceMarketDataProvider(
+      { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+      { httpClient: fakeClient(data) },
+    );
+
+    await expect(provider.getQuote("BTCUSDT")).rejects.toMatchObject({
+      statusCode: 502,
+      code: "MARKET_DATA_INVALID_RESPONSE",
+      message: "Market data provider returned an invalid response.",
+    });
+  });
+
+  test.each([
+    [
+      "timeout",
+      { code: "ECONNABORTED", message: "timeout of 5000ms exceeded" },
+      504,
+      "MARKET_DATA_TIMEOUT",
+    ],
+    [
+      "rate limit",
+      { response: { status: 429 } },
+      429,
+      "MARKET_DATA_RATE_LIMITED",
+    ],
+    [
+      "network failure",
+      { code: "ECONNREFUSED" },
+      503,
+      "MARKET_DATA_PROVIDER_UNAVAILABLE",
+    ],
+    [
+      "unexpected provider failure",
+      new Error("private provider detail"),
+      503,
+      "MARKET_DATA_PROVIDER_UNAVAILABLE",
+    ],
+  ])(
+    "maps Binance %s to a safe domain error",
+    async (_description, error, statusCode, code) => {
+      const provider = createBinanceMarketDataProvider(
+        { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+        { httpClient: { get: jest.fn().mockRejectedValue(error) } },
+      );
+
+      await expect(provider.getQuote("BTCUSDT")).rejects.toMatchObject({
+        statusCode,
+        code,
+      });
+      await expect(provider.getQuote("BTCUSDT")).rejects.not.toHaveProperty(
+        "message",
+        "private provider detail",
+      );
+    },
+  );
 
   test("maps rate limits and malformed provider responses", async () => {
     const rateLimited = createFinnhubMarketDataProvider(

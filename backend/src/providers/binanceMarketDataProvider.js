@@ -21,10 +21,39 @@ const BINANCE_INTERVALS = new Set([
 ]);
 
 function stripBinancePrefix(symbol) {
-  return symbol
-    .replace(/^BINANCE:/i, "")
-    .replaceAll("/", "")
-    .toUpperCase();
+  return symbol.replace(/^BINANCE:/i, "").toUpperCase();
+}
+
+function normalizeBinanceSymbol(symbol) {
+  const value = stripBinancePrefix(symbol);
+  const slashPair = /^([A-Z0-9]{2,20})\/(USDT|BTC|ETH)$/.exec(value);
+  const normalized = slashPair ? `${slashPair[1]}${slashPair[2]}` : value;
+  // These quote assets match the conventions currently documented by Stox.
+  // The exchange remains authoritative for whether a syntactically valid pair
+  // is listed and trading.
+  if (!/^[A-Z0-9]{2,20}(?:USDT|BTC|ETH)$/.test(normalized)) {
+    throw createMarketDataError(
+      "The cryptocurrency symbol format is invalid.",
+      400,
+      "MARKET_DATA_INVALID_REQUEST",
+    );
+  }
+  return normalized;
+}
+
+function binanceDecimal(value) {
+  if (typeof value !== "string" || !/^-?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value)) {
+    return undefined;
+  }
+  return decimalString(value);
+}
+
+function isPositiveDecimal(value) {
+  return value !== undefined && !value.startsWith("-") && /[1-9]/.test(value);
+}
+
+function isNonNegativeDecimal(value) {
+  return value !== undefined && !value.startsWith("-");
 }
 
 function createBinanceMarketDataProvider(config, { httpClient } = {}) {
@@ -37,53 +66,61 @@ function createBinanceMarketDataProvider(config, { httpClient } = {}) {
     assetClasses: ["CRYPTO"],
 
     async getQuote(symbol) {
-      const providerSymbol = stripBinancePrefix(symbol);
+      const providerSymbol = normalizeBinanceSymbol(symbol);
       const data = assertObject(
         await getData(client, "/api/v3/ticker/24hr", {
           symbol: providerSymbol,
         }),
       );
-      const price = decimalString(data.lastPrice);
-      if (price === undefined || Number(price) <= 0)
-        throw invalidProviderResponse();
+      const price = binanceDecimal(data.lastPrice);
+      if (!isPositiveDecimal(price)) throw invalidProviderResponse();
 
-      const optional = [
-        data.priceChange,
-        data.priceChangePercent,
-        data.highPrice,
-        data.lowPrice,
-        data.openPrice,
-        data.prevClosePrice,
-        data.volume,
-      ];
       if (
-        optional.some(
-          (value) => decimalString(value, { nullable: true }) === undefined,
-        )
+        typeof data.symbol !== "string" ||
+        data.symbol.toUpperCase() !== providerSymbol
       ) {
         throw invalidProviderResponse();
       }
 
-      const quoteAsset =
-        typeof data.symbol === "string" && /USDT$/i.test(data.symbol)
-          ? "USDT"
-          : null;
+      const change = binanceDecimal(data.priceChange);
+      const changePercent = binanceDecimal(data.priceChangePercent);
+      const high = binanceDecimal(data.highPrice);
+      const low = binanceDecimal(data.lowPrice);
+      const open = binanceDecimal(data.openPrice);
+      const previousClose = binanceDecimal(data.prevClosePrice);
+      const volume = binanceDecimal(data.volume);
+      const timestamp = isoTimestamp(data.closeTime);
+      if (
+        [change, changePercent, high, low, open, previousClose, volume].some(
+          (value) => value === undefined,
+        ) ||
+        !isPositiveDecimal(high) ||
+        !isPositiveDecimal(low) ||
+        !isPositiveDecimal(open) ||
+        !isPositiveDecimal(previousClose) ||
+        !isNonNegativeDecimal(volume) ||
+        !timestamp
+      ) {
+        throw invalidProviderResponse();
+      }
+
+      const quoteAsset = ["USDT", "BTC", "ETH"].find((asset) =>
+        providerSymbol.endsWith(asset),
+      );
 
       return {
         symbol: `BINANCE:${providerSymbol}`,
         assetClass: "CRYPTO",
         price,
-        change: decimalString(data.priceChange, { nullable: true }),
-        changePercent: decimalString(data.priceChangePercent, {
-          nullable: true,
-        }),
-        high: decimalString(data.highPrice, { nullable: true }),
-        low: decimalString(data.lowPrice, { nullable: true }),
-        open: decimalString(data.openPrice, { nullable: true }),
-        previousClose: decimalString(data.prevClosePrice, { nullable: true }),
-        volume: decimalString(data.volume, { nullable: true }),
-        currency: quoteAsset,
-        timestamp: isoTimestamp(data.closeTime),
+        change,
+        changePercent,
+        high,
+        low,
+        open,
+        previousClose,
+        volume,
+        currency: quoteAsset || null,
+        timestamp,
         source: "binance",
       };
     },
@@ -97,7 +134,7 @@ function createBinanceMarketDataProvider(config, { httpClient } = {}) {
         );
       }
       const data = await getData(client, "/api/v3/klines", {
-        symbol: stripBinancePrefix(symbol),
+        symbol: normalizeBinanceSymbol(symbol),
         interval,
         startTime: from,
         endTime: to,
@@ -126,7 +163,7 @@ function createBinanceMarketDataProvider(config, { httpClient } = {}) {
       });
 
       return {
-        symbol: `BINANCE:${stripBinancePrefix(symbol)}`,
+        symbol: `BINANCE:${normalizeBinanceSymbol(symbol)}`,
         assetClass: "CRYPTO",
         interval,
         prices,
