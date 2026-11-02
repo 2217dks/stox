@@ -87,6 +87,26 @@ The repository's market-data documentation names Finnhub for stocks and
 Binance for crypto. Those are the default adapter selections. The service
 itself does not import either provider implementation.
 
+### Binance quote behavior
+
+The Binance adapter requests the public `/api/v3/ticker/24hr` endpoint using
+the configured `BINANCE_API_URL` and shared request timeout. It accepts the
+Stox crypto pair conventions `BTCUSDT`, `ETHBTC`, and `BINANCE:BTCUSDT`; a
+slash form such as `BTC/USDT` is also normalized to `BTCUSDT`. Pair suffixes
+currently supported by the adapter are `USDT`, `BTC`, and `ETH`. This is
+syntax validation only; Binance determines whether a pair exists and is
+trading. Stock-shaped values such as `AAPL` are rejected before an adapter
+request is sent.
+
+The returned internal quote maps Binance `lastPrice`, `priceChange`,
+`priceChangePercent`, `highPrice`, `lowPrice`, `openPrice`, `prevClosePrice`,
+`volume`, and `closeTime` to the normalized Stox quote fields. Numeric values
+remain decimal strings. The adapter requires all those values, a positive
+price, and a response symbol matching the requested pair; incomplete,
+malformed, or mismatched payloads become `MARKET_DATA_INVALID_RESPONSE`.
+Unknown Binance pairs become `MARKET_DATA_NOT_FOUND`. This is service-layer
+functionality; it does not add or expose a public HTTP quote endpoint.
+
 ## Configuration
 
 Configuration is environment-based. `backend/.env.example` contains only
@@ -147,5 +167,5 @@ npm test -- --runInBand tests/unit/services/marketDataService.test.js tests/unit
 
 The tests cover success for all four operations, configuration defaults and
 overrides, missing credentials/provider selection, provider swapping,
-timeouts, rate limits, malformed payloads, and network failures. They do not
-need credentials, a database, or external API access.
+timeouts, rate limits, malformed payloads, symbol validation, and network
+failures. They do not need credentials, a database, or external API access.
