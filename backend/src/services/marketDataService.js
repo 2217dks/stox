@@ -150,18 +150,20 @@ function assertOverview(value, assetClass) {
     typeof value.marketStatus !== "object" ||
     Array.isArray(value.marketStatus) ||
     typeof value.marketStatus.isOpen !== "boolean" ||
-    !Array.isArray(value.movers) ||
+    !(value.movers === null || Array.isArray(value.movers)) ||
     typeof value.source !== "string" ||
     !value.source.trim() ||
-    value.movers.some(
-      (mover) =>
-        !mover ||
-        typeof mover !== "object" ||
-        typeof mover.symbol !== "string" ||
-        !mover.symbol.trim() ||
-        !isDecimalString(mover.price) ||
-        !isDecimalString(mover.changePercent),
-    )
+    (Array.isArray(value.movers) &&
+      value.movers.some(
+        (mover) =>
+          !mover ||
+          typeof mover !== "object" ||
+          typeof mover.symbol !== "string" ||
+          !mover.symbol.trim() ||
+          !isDecimalString(mover.price) ||
+          !isDecimalString(mover.changePercent) ||
+          (mover.quoteVolume !== null && !isDecimalString(mover.quoteVolume)),
+      ))
   ) {
     throw createMarketDataError(
       "Market data provider returned an invalid response.",
@@ -319,7 +321,7 @@ function createMarketDataService({ config, providers } = {}) {
 
     /**
      * Get an asset-class overview. `assetClass` is required because the API
-     * contract has not yet defined a cross-market stock/crypto overview.
+     * contract exposes an asset-class-specific overview.
      */
     async getMarketOverview(options = {}) {
       if (!options.assetClass) {

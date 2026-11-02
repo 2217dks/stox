@@ -278,6 +278,60 @@ formats return HTTP 400 `VALIDATION_ERROR`; unknown Binance pairs return HTTP
 404 `MARKET_DATA_NOT_FOUND`. Provider timeouts, rate limits, and unavailable
 provider errors use the documented market-data domain error codes.
 
+## `GET /market/overview`
+
+Get a current overview for one asset class. This public, read-only endpoint
+uses the global API rate limit and does not cache responses. `assetClass` is
+required and must be `STOCK` or `CRYPTO`; `limit` is optional, defaults to 10,
+and must be an integer from 1 to 100.
+
+The response uses the standard envelope. `data` contains `assetClass`,
+`asOf`, `marketStatus`, `movers`, and `source`. `asOf` is an ISO 8601 UTC
+timestamp for the provider's market-status data when supplied; otherwise it is
+the retrieval time. `marketStatus` contains `isOpen` and provider-normalized
+session metadata. Crypto movers contain `symbol`, `price`, `changePercent`,
+and `quoteVolume`; decimal values are strings and `quoteVolume` may be `null`
+if the provider omits it.
+
+The stock provider currently supplies US market status but no mover feed, so
+`movers` is `null` to signal that the field is unavailable. For a provider
+that supports movers, an empty array means the feed was available but returned
+no movers. If the selected provider is unavailable or returns malformed data,
+the whole request returns the standard market-data error envelope; missing
+values are not fabricated. Responses are provider-fresh and are not cached.
+
+Invalid or missing query parameters return HTTP 400 `VALIDATION_ERROR`.
+Provider timeouts, rate limits, and unavailable providers use
+`MARKET_DATA_TIMEOUT`, `MARKET_DATA_RATE_LIMITED`, and
+`MARKET_DATA_PROVIDER_UNAVAILABLE` respectively.
+
+Example: `GET /api/v1/market/overview?assetClass=CRYPTO&limit=10`
+
+```json
+{
+  "success": true,
+  "data": {
+    "assetClass": "CRYPTO",
+    "asOf": "2026-11-02T12:00:00.000Z",
+    "marketStatus": {
+      "isOpen": true,
+      "session": "24/7",
+      "exchange": "BINANCE",
+      "timezone": "UTC"
+    },
+    "movers": [
+      {
+        "symbol": "BINANCE:BTCUSDT",
+        "price": "67123.45",
+        "changePercent": "2.5",
+        "quoteVolume": "1234567.89"
+      }
+    ],
+    "source": "binance"
+  }
+}
+```
+
 ## `GET /market/history/:symbol`
 
 Get normalized historical OHLCV data. This read-only endpoint is public and

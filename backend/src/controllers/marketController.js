@@ -33,4 +33,19 @@ async function getHistoricalPrices(req, res, next) {
   }
 }
 
-module.exports = { getCryptoQuote, getHistoricalPrices };
+async function getMarketOverview(req, res, next) {
+  try {
+    const overview = await marketDataService.getMarketOverview(
+      req.validatedQuery,
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: overview,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+module.exports = { getCryptoQuote, getHistoricalPrices, getMarketOverview };
