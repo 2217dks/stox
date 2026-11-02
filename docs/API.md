@@ -697,6 +697,36 @@ Returns `400 Bad Request` with a `VALIDATION_ERROR` response when:
 
 # 🛡️ Admin
 
+## `GET /admin/portfolios`
+
+List portfolios across all users. Requires a valid Bearer token with the
+`ADMIN` role. Query parameters:
+
+| Name | Required | Contract |
+| --- | --- | --- |
+| `page` | No | 1-based integer from 1 to 100,000; defaults to 1 |
+| `limit` | No | Integer from 1 to 100; defaults to 20 |
+| `userId` | No | UUID of the portfolio owner |
+| `isActive` | No | `true` or `false` |
+| `search` | No | Case-insensitive match on portfolio name, owner name, or owner email |
+
+Returns `{ "success": true, "data": { "portfolios": [...], "pagination": { "page", "limit", "total", "totalPages" } } }`.
+Portfolio fields are explicitly selected: `id`, `userId`, `name`,
+`description`, `startingBalance`, `cashBalance`, `isDefault`, `isActive`,
+`createdAt`, `updatedAt`, and minimal `owner` details (`id`, `name`, `email`).
+Balance values are decimal strings to preserve precision.
+
+## `GET /admin/portfolios/:portfolioId`
+
+Inspect one portfolio across users. Requires a valid Bearer token with the
+`ADMIN` role and a UUID portfolio ID. Returns the selected portfolio fields
+under `data.portfolio`; a missing portfolio returns HTTP 404
+`PORTFOLIO_NOT_FOUND`. Admin inspection does not change ordinary owner-scoped
+portfolio access.
+
+Both endpoints return 401 for unauthenticated requests, 403 for non-admin
+users, and 400 `VALIDATION_ERROR` for invalid filters or IDs.
+
 ## `GET /admin/users`
 
 List users.
