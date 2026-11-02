@@ -20,17 +20,18 @@ const FINNHUB_RESOLUTIONS = Object.freeze({
   "1M": "M",
 });
 
-function createFinnhubMarketDataProvider(config, { httpClient } = {}) {
+function createFinnhubMarketDataProvider(config = {}, { httpClient } = {}) {
+  const apiKey = typeof config.apiKey === "string" ? config.apiKey.trim() : "";
   const client =
     httpClient ||
     createHttpClient({
       baseURL: config.baseUrl,
       timeoutMs: config.timeoutMs,
-      headers: config.apiKey ? { "X-Finnhub-Token": config.apiKey } : {},
+      headers: apiKey ? { "X-Finnhub-Token": apiKey } : {},
     });
 
   function requireApiKey() {
-    if (!config.apiKey) {
+    if (!apiKey) {
       throw createMarketDataError(
         "Finnhub credentials are not configured.",
         503,
@@ -48,7 +49,8 @@ function createFinnhubMarketDataProvider(config, { httpClient } = {}) {
       const data = assertObject(await getData(client, "/quote", { symbol }));
       const price = decimalString(data.c);
       if (price === undefined || Number(price) <= 0) {
-        if (data.c === 0 && data.t === 0) {
+        const isZero = (value) => value === 0 || value === "0";
+        if (isZero(data.c) && isZero(data.t)) {
           throw createMarketDataError(
             "Market data is unavailable for the requested symbol.",
             404,

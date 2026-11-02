@@ -87,6 +87,20 @@ The repository's market-data documentation names Finnhub for stocks and
 Binance for crypto. Those are the default adapter selections. The service
 itself does not import either provider implementation.
 
+### Finnhub stock quotes
+
+The Finnhub adapter requests `/quote` with the normalized stock symbol and
+sends `FINNHUB_API_KEY` in the `X-Finnhub-Token` header. It maps Finnhub's
+`c`, `d`, `dp`, `h`, `l`, `o`, `pc`, and `t` fields to the Stox quote's price,
+change, percentage change, high, low, open, previous close, and ISO timestamp.
+Finnhub's quote response does not include volume, so the normalized `volume`
+is `null`. An all-zero quote with timestamp `0` is treated as an unknown or
+unavailable symbol. HTTP authentication failures, throttling, timeouts, and
+malformed payloads become the corresponding safe market-data domain errors.
+The credential is configured in the environment and is not included in the
+quote result or public error messages. This is service-layer functionality;
+it does not add a public HTTP quote endpoint.
+
 ### Binance quote behavior
 
 The Binance adapter requests the public `/api/v3/ticker/24hr` endpoint using
@@ -167,5 +181,6 @@ npm test -- --runInBand tests/unit/services/marketDataService.test.js tests/unit
 
 The tests cover success for all four operations, configuration defaults and
 overrides, missing credentials/provider selection, provider swapping,
-timeouts, rate limits, malformed payloads, symbol validation, and network
-failures. They do not need credentials, a database, or external API access.
+Finnhub invalid symbols and authentication failures, timeouts, rate limits,
+malformed payloads, Binance symbol validation, and network failures. They do
+not need credentials, a database, or external API access.
