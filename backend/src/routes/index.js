@@ -11,6 +11,7 @@ const notificationRoutes = require("./notificationRoutes");
 const socialRoutes = require("./socialRoutes");
 const leaderboardRoutes = require("./leaderboardRoutes");
 const adminRoutes = require("./adminRoutes");
+const marketRoutes = require("./marketRoutes");
 
 const { check: healthCheck } = require("../controllers/healthController");
 
@@ -28,5 +29,6 @@ router.use("/notifications", notificationRoutes);
 router.use("/social", socialRoutes);
 router.use("/leaderboard", leaderboardRoutes);
 router.use("/admin", adminRoutes);
+router.use("/market", marketRoutes);
 
 module.exports = router;

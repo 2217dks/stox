@@ -244,7 +244,39 @@ Example:
 
 ## `GET /market/quote/:symbol`
 
-Get current market quote.
+Get a normalized Binance crypto quote. This public, read-only endpoint does not
+require authentication and uses the global API rate limit. Supported symbol
+forms include `BTCUSDT`, `BINANCE:BTCUSDT`, and `BTC/USDT`; quote assets follow
+the market-data service conventions (`USDT`, `BTC`, or `ETH`).
+
+The response uses the standard envelope, with the normalized quote DTO in
+`data`:
+
+```json
+{
+    "success": true,
+    "data": {
+        "symbol": "BINANCE:BTCUSDT",
+        "assetClass": "CRYPTO",
+        "price": "67123.45",
+        "change": "123.45",
+        "changePercent": "0.18",
+        "high": "68000",
+        "low": "66000",
+        "open": "67000",
+        "previousClose": "67000",
+        "volume": "1234.56",
+        "currency": "USDT",
+        "timestamp": "2026-11-02T12:00:00.000Z",
+        "source": "binance"
+    }
+}
+```
+
+Prices and volume are canonical decimal strings. Unsupported or invalid symbol
+formats return HTTP 400 `VALIDATION_ERROR`; unknown Binance pairs return HTTP
+404 `MARKET_DATA_NOT_FOUND`. Provider timeouts, rate limits, and unavailable
+provider errors use the documented market-data domain error codes.
 
 ## `GET /market/history/:symbol`
 
