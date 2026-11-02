@@ -50,11 +50,14 @@ open, previousClose, volume, currency, timestamp, source }`.
 `options` requires `interval`, `from`, and `to`. `from` and `to` are inclusive
 Unix epoch milliseconds with `to > from`. Intervals are `1m`, `5m`, `15m`,
 `30m`, `1h`, `4h`, `1d`, `1w`, or `1M`. `limit` defaults to 500 and must be
-from 1 to 1000. `assetClass` follows the quote rules.
+from 1 to 1000. The end time cannot be in the future, and the requested range
+cannot exceed `limit` interval periods (a month is bounded to 31 days for this
+check). `assetClass` follows the quote rules.
 
 Returns `{ symbol, assetClass, interval, prices }`. Each price is
 `{ timestamp, open, high, low, close, volume }`; timestamps are ISO 8601 and
-decimal values are strings. No data for a valid range returns an empty array.
+decimal values are canonical strings. Results are ordered by ascending
+timestamp. No data for a valid range returns an empty array.
 
 ### `getMarketOverview({ assetClass, limit? })`
 
