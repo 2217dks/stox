@@ -1,5 +1,13 @@
 const { loadMarketDataConfig } = require("../config/marketDataConfig");
-const { createMarketQuoteDto } = require("../dtos/marketQuoteDto");
+const {
+  createMarketQuoteDto,
+  normalizeQuoteDecimal,
+  normalizeQuoteTimestamp,
+} = require("../dtos/marketQuoteDto");
+const {
+  DEFAULT_HISTORICAL_LIMIT,
+  isValidHistoricalRange,
+} = require("../utils/historicalRange");
 const {
   createMarketDataError,
   mapProviderError,
@@ -55,16 +63,16 @@ function normalizeSymbol(symbol) {
   return value;
 }
 
-function isValidIsoTimestamp(value) {
-  return typeof value === "string" && !Number.isNaN(Date.parse(value));
-}
-
 function isDecimalString(value) {
   return (
     typeof value === "string" &&
     value.trim() !== "" &&
     Number.isFinite(Number(value))
   );
+}
+
+function isValidIsoTimestamp(value) {
+  return typeof value === "string" && !Number.isNaN(Date.parse(value));
 }
 
 function assertQuote(value, assetClass) {
@@ -100,13 +108,23 @@ function assertHistoricalPrices(value, symbol, assetClass, interval) {
       "MARKET_DATA_INVALID_RESPONSE",
     );
   }
-  for (const candle of value.prices) {
+  const prices = value.prices.map((candle) => {
+    const timestamp = normalizeQuoteTimestamp(candle?.timestamp);
+    const normalized = Object.fromEntries(
+      ["open", "high", "low", "close", "volume"].map((key) => [
+        key,
+        normalizeQuoteDecimal(candle?.[key]),
+      ]),
+    );
     if (
       !candle ||
-      !isValidIsoTimestamp(candle.timestamp) ||
-      ["open", "high", "low", "close", "volume"].some(
-        (key) => !isDecimalString(candle[key]),
-      )
+      timestamp === undefined ||
+      timestamp === null ||
+      Object.values(normalized).some((number) => number === undefined) ||
+      ["open", "high", "low", "close"].some(
+        (key) => normalized[key] === "0" || normalized[key].startsWith("-"),
+      ) ||
+      normalized.volume.startsWith("-")
     ) {
       throw createMarketDataError(
         "Market data provider returned an invalid response.",
@@ -114,8 +132,12 @@ function assertHistoricalPrices(value, symbol, assetClass, interval) {
         "MARKET_DATA_INVALID_RESPONSE",
       );
     }
-  }
-  return { ...value, symbol };
+    return { timestamp, ...normalized };
+  });
+  prices.sort(
+    (left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp),
+  );
+  return { symbol, assetClass, interval, prices };
 }
 
 function assertOverview(value, assetClass) {
@@ -248,27 +270,32 @@ function createMarketDataService({ config, providers } = {}) {
     /**
      * Get OHLCV history. `from` and `to` are inclusive Unix epoch
      * milliseconds, `interval` is one of 1m/5m/15m/30m/1h/4h/1d/1w/1M,
-     * and `limit` defaults to 500 (maximum 1000).
+     * and `limit` defaults to 500 (maximum 1000). Future end dates and ranges
+     * longer than `limit` interval periods are rejected.
      */
     async getHistoricalPrices(symbol, options = {}) {
       const assetClass = normalizeAssetClass(options.assetClass, symbol);
       const normalizedSymbol = normalizeSymbol(symbol);
-      const { interval, from, to } = options;
+      const { interval } = options;
+      const from = Number(options.from);
+      const to = Number(options.to);
       const numericFrom = Number(from);
       const numericTo = Number(to);
-      const limit = options.limit === undefined ? 500 : Number(options.limit);
+      const limit =
+        options.limit === undefined
+          ? DEFAULT_HISTORICAL_LIMIT
+          : Number(options.limit);
       if (
         !HISTORICAL_INTERVALS.has(interval) ||
-        !Number.isSafeInteger(numericFrom) ||
-        !Number.isSafeInteger(numericTo) ||
-        numericFrom < 0 ||
-        numericTo <= numericFrom ||
-        !Number.isInteger(limit) ||
-        limit < 1 ||
-        limit > 1000
+        !isValidHistoricalRange({
+          interval,
+          from: numericFrom,
+          to: numericTo,
+          limit,
+        })
       ) {
         throw invalidRequest(
-          "Historical range, interval, or limit is invalid.",
+          "Historical range, interval, or limit is invalid or exceeds the supported window.",
         );
       }
 
