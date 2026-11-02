@@ -5,6 +5,7 @@ const {
   getCryptoQuote,
   getHistoricalPrices,
   getMarketOverview,
+  searchMarketSymbols,
   getStockQuote,
 } = require("../controllers/marketController");
 const {
@@ -12,10 +13,17 @@ const {
   historicalPricesParamsSchema,
   historicalPricesQuerySchema,
   marketOverviewQuerySchema,
+  marketSearchQuerySchema,
   stockQuoteParamsSchema,
 } = require("../validators/marketValidator");
 
 const router = express.Router();
+
+router.get(
+  "/search",
+  validate(marketSearchQuerySchema, "query", "validatedQuery"),
+  searchMarketSymbols,
+);
 
 router.get(
   "/quote/:symbol",

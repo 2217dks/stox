@@ -82,10 +82,22 @@ const marketOverviewQuerySchema = z
   })
   .strict();
 
+const marketSearchQuerySchema = z
+  .object({
+    query: z.string().trim().min(2).max(50),
+    assetClass: z.enum(["STOCK", "CRYPTO"]).optional(),
+    limit: z.preprocess(
+      (value) => (value === undefined ? 20 : queryInteger(value)),
+      z.number().int().min(1).max(50),
+    ),
+  })
+  .strict();
+
 module.exports = {
   cryptoQuoteParamsSchema,
   stockQuoteParamsSchema,
   historicalPricesParamsSchema,
   historicalPricesQuerySchema,
   marketOverviewQuerySchema,
+  marketSearchQuerySchema,
 };
