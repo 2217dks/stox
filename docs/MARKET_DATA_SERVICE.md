@@ -25,8 +25,10 @@ and do not make external requests.
 ### `getQuote(symbol, { assetClass? })`
 
 - `symbol`: nonempty string, up to 30 characters. It is trimmed and uppercased.
-- `assetClass`: `STOCK` or `CRYPTO`. If omitted, `BINANCE:` symbols are
-  crypto and other symbols are treated as stocks.
+- `assetClass`: `STOCK` or `CRYPTO`. If omitted, `BINANCE:` symbols and
+  symbols ending in `USDT`, `BTC`, or `ETH` are treated as crypto, matching the
+  repository's symbol normalization guidance; other symbols are treated as
+  stocks.
 - Returns `{ symbol, assetClass, price, change, changePercent, high, low,
 open, previousClose, volume, currency, timestamp, source }`.
 - Monetary and volume values are decimal strings. Optional values may be
@@ -66,6 +68,7 @@ Provider adapters are registry entries keyed by a provider id. Each implements:
 ```js
 {
   id: "provider-id",
+  assetClasses: ["STOCK"],
   getQuote(symbol),
   getHistoricalPrices(symbol, { interval, from, to, limit }),
   getMarketOverview({ assetClass, limit }),
@@ -139,7 +142,7 @@ interval/range conventions.
 Run the mocked, offline market-data unit tests from `backend/`:
 
 ```sh
-npm test -- --runInBand tests/unit/services/marketDataService.test.js tests/unit/services/marketDataProviders.test.js tests/unit/config/marketDataConfig.test.js
+npm test -- --runInBand tests/unit/services/marketDataService.test.js tests/unit/services/marketDataProviders.test.js tests/unit/services/marketDataHttp.test.js tests/unit/config/marketDataConfig.test.js
 ```
 
 The tests cover success for all four operations, configuration defaults and

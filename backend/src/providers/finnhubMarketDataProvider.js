@@ -41,6 +41,7 @@ function createFinnhubMarketDataProvider(config, { httpClient } = {}) {
 
   return {
     id: "finnhub",
+    assetClasses: ["STOCK"],
 
     async getQuote(symbol) {
       requireApiKey();

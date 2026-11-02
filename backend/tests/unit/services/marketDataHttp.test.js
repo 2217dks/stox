@@ -50,4 +50,21 @@ describe("market data HTTP boundary", () => {
       message: "Market data provider credentials are invalid or unavailable.",
     });
   });
+
+  test("maps invalid provider symbols to the standard not-found error", async () => {
+    const client = {
+      get: jest.fn().mockRejectedValue({
+        response: {
+          status: 400,
+          data: { code: -1121, msg: "Invalid symbol. internal details" },
+        },
+      }),
+    };
+
+    await expect(getData(client, "/quote", {})).rejects.toMatchObject({
+      statusCode: 404,
+      code: "MARKET_DATA_NOT_FOUND",
+      message: "Market data is unavailable for the requested symbol or range.",
+    });
+  });
 });

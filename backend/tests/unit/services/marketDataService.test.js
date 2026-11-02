@@ -1,4 +1,3 @@
-const { AppError } = require("../../../src/utils/errors");
 const {
   createMarketDataService,
 } = require("../../../src/services/marketDataService");
@@ -121,6 +120,19 @@ describe("marketDataService provider-independent interface", () => {
     expect(stockProvider.getQuote).toHaveBeenCalledWith("AAPL");
   });
 
+  test("infers crypto for the project's unprefixed crypto symbols", async () => {
+    const cryptoProvider = createProvider({
+      getQuote: jest.fn(async (symbol) => quote(`BINANCE:${symbol}`, "CRYPTO")),
+    });
+    const service = createService({ cryptoProvider });
+
+    const result = await service.getQuote("btcusdt");
+
+    expect(result.assetClass).toBe("CRYPTO");
+    expect(result.symbol).toBe("BINANCE:BTCUSDT");
+    expect(cryptoProvider.getQuote).toHaveBeenCalledWith("BTCUSDT");
+  });
+
   test("gets OHLCV history with validated inputs", async () => {
     const stockProvider = createProvider();
     const service = createService({ stockProvider });
@@ -166,6 +178,20 @@ describe("marketDataService provider-independent interface", () => {
     const service = createMarketDataService({
       config: { providerByAssetClass: { STOCK: "missing", CRYPTO: "crypto" } },
       providers: { crypto: createProvider() },
+    });
+
+    await expect(service.getQuote("AAPL")).rejects.toMatchObject({
+      statusCode: 503,
+      code: "MARKET_DATA_PROVIDER_UNAVAILABLE",
+    });
+  });
+
+  test("does not route an asset class to an incompatible provider", async () => {
+    const service = createMarketDataService({
+      config: { providerByAssetClass: { STOCK: "crypto", CRYPTO: "crypto" } },
+      providers: {
+        crypto: createProvider({ assetClasses: ["CRYPTO"] }),
+      },
     });
 
     await expect(service.getQuote("AAPL")).rejects.toMatchObject({
@@ -220,6 +246,21 @@ describe("marketDataService provider-independent interface", () => {
   test("rejects malformed normalized provider results", async () => {
     const provider = createProvider({
       getQuote: jest.fn().mockResolvedValue({ symbol: "AAPL", price: 123 }),
+    });
+    const service = createService({ stockProvider: provider });
+
+    await expect(service.getQuote("AAPL")).rejects.toMatchObject({
+      statusCode: 502,
+      code: "MARKET_DATA_INVALID_RESPONSE",
+    });
+  });
+
+  test("rejects malformed optional fields from a swapped provider", async () => {
+    const provider = createProvider({
+      getQuote: jest.fn(async (symbol) => ({
+        ...quote(symbol, "STOCK"),
+        change: 1.25,
+      })),
     });
     const service = createService({ stockProvider: provider });
 
