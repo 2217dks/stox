@@ -16,6 +16,22 @@ async function getCryptoQuote(req, res, next) {
   }
 }
 
+async function getStockQuote(req, res, next) {
+  try {
+    const { symbol } = req.validatedParams;
+    const quote = await marketDataService.getQuote(symbol, {
+      assetClass: "STOCK",
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: quote,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function getHistoricalPrices(req, res, next) {
   try {
     const { symbol } = req.validatedParams;
@@ -48,4 +64,9 @@ async function getMarketOverview(req, res, next) {
   }
 }
 
-module.exports = { getCryptoQuote, getHistoricalPrices, getMarketOverview };
+module.exports = {
+  getCryptoQuote,
+  getHistoricalPrices,
+  getMarketOverview,
+  getStockQuote,
+};
