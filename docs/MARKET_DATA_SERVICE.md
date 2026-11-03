@@ -1,9 +1,9 @@
 # Market Data Service Layer
 
-This document describes the provider-independent backend service contract. It
-does not add or finalize public HTTP response schemas. The public API spec lists
-market search, quote, and history routes, but does not define their response
-fields or a market-overview route.
+This document describes the provider-independent backend service contract.
+`docs/API.md` defines the public crypto quote route and its response envelope;
+the route currently accepts crypto pairs only. Search, history, and market
+overview response schemas remain internal/provisional.
 
 ## Service construction
 
@@ -109,8 +109,8 @@ is `null`. An all-zero quote with timestamp `0` is treated as an unknown or
 unavailable symbol. HTTP authentication failures, throttling, timeouts, and
 malformed payloads become the corresponding safe market-data domain errors.
 The credential is configured in the environment and is not included in the
-quote result or public error messages. This is service-layer functionality;
-it does not add a public HTTP quote endpoint.
+quote result or public error messages. Finnhub remains service-layer-only; the
+public quote route currently accepts crypto pairs only.
 
 ### Binance quote behavior
 
@@ -129,8 +129,9 @@ The returned internal quote maps Binance `lastPrice`, `priceChange`,
 remain decimal strings. The adapter requires all those values, a positive
 price, and a response symbol matching the requested pair; incomplete,
 malformed, or mismatched payloads become `MARKET_DATA_INVALID_RESPONSE`.
-Unknown Binance pairs become `MARKET_DATA_NOT_FOUND`. This is service-layer
-functionality; it does not add or expose a public HTTP quote endpoint.
+Unknown Binance pairs become `MARKET_DATA_NOT_FOUND`. The public API exposes
+this normalized crypto quote through `GET /market/quote/:symbol` as documented
+in `docs/API.md`.
 
 ## Configuration
 
@@ -183,14 +184,13 @@ contract is defined.
 
 ## Contract questions and assumptions
 
-`docs/API.md` identifies `/market/search`, `/market/quote/:symbol`, and
-`/market/history/:symbol`, but does not give query parameters or response
-schemas. It does not define market overview at all. The internal service
-therefore uses decimal strings, ISO timestamps, common quote/candle/search
-fields, and an asset-class-specific overview as a provisional adapter
-contract. Before a public controller/route is added, the maintainer should
-confirm response field names, stock/crypto overview semantics, and historical
-interval/range conventions.
+`docs/API.md` now defines the crypto quote response. It still does not define
+search/history query parameters or response schemas, or a market overview
+route. The internal service uses decimal strings, ISO timestamps, common
+quote/candle/search fields, and an asset-class-specific overview; only the
+crypto quote shape is currently public. Before exposing other market-data
+operations, the maintainer should confirm their response fields, stock/crypto
+overview semantics, and historical interval/range conventions.
 
 ## Tests
 
