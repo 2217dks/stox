@@ -143,7 +143,7 @@ describe("marketDataService provider-independent interface", () => {
       to: 1793577600000,
     });
 
-    expect(result.prices[0].close).toBe("1.50");
+    expect(result.prices[0].close).toBe("1.5");
     expect(stockProvider.getHistoricalPrices).toHaveBeenCalledWith("AAPL", {
       interval: "1d",
       from: 1793491200000,
@@ -302,5 +302,78 @@ describe("marketDataService provider-independent interface", () => {
       }),
     ).rejects.toMatchObject({ code: "MARKET_DATA_INVALID_REQUEST" });
     expect(stockProvider.getHistoricalPrices).not.toHaveBeenCalled();
+  });
+
+  test("rejects future and over-limit historical windows before provider access", async () => {
+    const stockProvider = createProvider();
+    const service = createService({ stockProvider });
+    const now = Date.now();
+
+    for (const range of [
+      { from: now - 86_400_000, to: now + 1 },
+      { from: now - 3 * 86_400_000, to: now - 86_400_000 },
+    ]) {
+      await expect(
+        service.getHistoricalPrices("AAPL", {
+          interval: "1d",
+          limit: 1,
+          ...range,
+        }),
+      ).rejects.toMatchObject({ code: "MARKET_DATA_INVALID_REQUEST" });
+    }
+    expect(stockProvider.getHistoricalPrices).not.toHaveBeenCalled();
+  });
+
+  test("normalizes timestamps and canonical decimals and orders candles", async () => {
+    const stockProvider = createProvider({
+      getHistoricalPrices: jest.fn(async (_symbol, options) => ({
+        assetClass: "STOCK",
+        interval: options.interval,
+        prices: [
+          {
+            timestamp: "2026-10-31T00:00:00-04:00",
+            open: "1.5000",
+            high: "2.00",
+            low: "1.0",
+            close: "1.2500",
+            volume: "10.00",
+          },
+          {
+            timestamp: "2026-10-30T00:00:00Z",
+            open: "1e0",
+            high: "2",
+            low: "0.5",
+            close: "1.5",
+            volume: "0",
+          },
+        ],
+      })),
+    });
+    const service = createService({ stockProvider });
+
+    const result = await service.getHistoricalPrices("AAPL", {
+      interval: "1d",
+      from: Date.parse("2026-10-29T00:00:00Z"),
+      to: Date.parse("2026-11-01T00:00:00Z"),
+    });
+
+    expect(result.prices).toEqual([
+      {
+        timestamp: "2026-10-30T00:00:00.000Z",
+        open: "1",
+        high: "2",
+        low: "0.5",
+        close: "1.5",
+        volume: "0",
+      },
+      {
+        timestamp: "2026-10-31T04:00:00.000Z",
+        open: "1.5",
+        high: "2",
+        low: "1",
+        close: "1.25",
+        volume: "10",
+      },
+    ]);
   });
 });

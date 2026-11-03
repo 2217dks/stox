@@ -280,7 +280,55 @@ provider errors use the documented market-data domain error codes.
 
 ## `GET /market/history/:symbol`
 
-Get historical OHLCV data.
+Get normalized historical OHLCV data. This read-only endpoint is public and
+uses the configured provider for the requested asset class.
+
+Query parameters:
+
+| Name | Required | Contract |
+| --- | --- | --- |
+| `interval` | Yes | `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1d`, `1w`, or `1M` |
+| `from` | Yes | Inclusive Unix epoch timestamp in milliseconds |
+| `to` | Yes | Inclusive Unix epoch timestamp in milliseconds; must be after `from` and no later than the current time |
+| `limit` | No | Integer from 1 to 1000; defaults to 500 |
+| `assetClass` | No | `STOCK` or `CRYPTO`; omitted values use the market-data service's symbol inference |
+
+The range cannot exceed `limit` intervals (for `1M`, each interval is bounded
+as 31 days). Symbols may contain letters, digits, `.`, `_`, `:`, `/`, or `-`.
+Both Finnhub stocks and Binance crypto support the listed intervals. The
+provider adapter normalizes timestamps to ISO 8601 UTC and OHLCV values to
+canonical decimal strings; returned points are in ascending timestamp order.
+
+Successful responses use `{ "success": true, "data": { "symbol", "assetClass", "interval", "prices": [...] } }`.
+Each point contains `timestamp`, `open`, `high`, `low`, `close`, and `volume`.
+A valid range with no data returns `"prices": []`. Invalid query parameters or
+symbols return HTTP 400 `VALIDATION_ERROR`; provider errors use the standard
+market-data codes, including `MARKET_DATA_NOT_FOUND`,
+`MARKET_DATA_RATE_LIMITED`, `MARKET_DATA_TIMEOUT`, and
+`MARKET_DATA_PROVIDER_UNAVAILABLE`.
+
+Example: `GET /api/v1/market/history/AAPL?interval=1d&from=1793318400000&to=1793404800000&limit=100`
+
+```json
+{
+  "success": true,
+  "data": {
+    "symbol": "AAPL",
+    "assetClass": "STOCK",
+    "interval": "1d",
+    "prices": [
+      {
+        "timestamp": "2026-10-30T00:00:00.000Z",
+        "open": "100",
+        "high": "105",
+        "low": "99",
+        "close": "103.5",
+        "volume": "1000"
+      }
+    ]
+  }
+}
+```
 
 ## `GET /market/news/:symbol`
 
