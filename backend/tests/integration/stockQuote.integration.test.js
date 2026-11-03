@@ -124,4 +124,24 @@ describe("stock quote API integration", () => {
     expect(JSON.stringify(response.body)).not.toContain("FINNHUB_API_KEY");
     expect(JSON.stringify(response.body)).not.toContain("rawProviderPayload");
   });
+
+  test("maps a provider timeout to the standard timeout error", async () => {
+    marketDataService.getQuote.mockRejectedValue(
+      new AppError("Market data provider request timed out.", {
+        statusCode: 504,
+        code: "MARKET_DATA_TIMEOUT",
+      }),
+    );
+
+    const response = await request(app).get("/api/v1/market/quote/stock/AAPL");
+
+    expect(response.status).toBe(504);
+    expect(response.body).toEqual({
+      success: false,
+      error: {
+        code: "MARKET_DATA_TIMEOUT",
+        message: "Market data provider request timed out.",
+      },
+    });
+  });
 });
