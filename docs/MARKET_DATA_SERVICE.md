@@ -1,9 +1,9 @@
 # Market Data Service Layer
 
 This document describes the provider-independent backend service contract.
-`docs/API.md` defines the public crypto quote route and its response envelope;
-the route currently accepts crypto pairs only. Search, history, and market
-overview response schemas remain internal/provisional.
+`docs/API.md` defines the public crypto quote route and market overview
+response. The quote route currently accepts crypto pairs only. Search remains
+internal until its full contract is agreed.
 
 ## Service construction
 
@@ -63,11 +63,12 @@ timestamp. No data for a valid range returns an empty array.
 
 `assetClass` is required (`STOCK` or `CRYPTO`). `limit` defaults to 10 and is
 from 1 to 100. Returns `{ assetClass, asOf, marketStatus, movers, source }`.
-`marketStatus` is provider-normalized and `movers` is an array; the initial
-Finnhub adapter reports US session status with an empty movers list, while the
-Binance adapter returns up to `limit` highest-percentage crypto movers. This
-asset-class-specific overview is a provisional internal contract, not a public
-API commitment.
+`marketStatus` is provider-normalized. `movers` is `null` when unavailable or
+an array when supported; an empty array means the available feed returned no
+movers. The Finnhub adapter reports US session status and has no mover feed.
+The Binance adapter returns up to `limit` highest-percentage crypto movers.
+`asOf` is the provider data timestamp where available, otherwise retrieval
+time. See `docs/API.md` for the public route contract.
 
 ### `searchSymbols(query, { assetClass?, limit? })`
 
@@ -187,13 +188,10 @@ contract is defined.
 
 ## Contract questions and assumptions
 
-`docs/API.md` now defines the crypto quote response. It still does not define
-search/history query parameters or response schemas, or a market overview
-route. The internal service uses decimal strings, ISO timestamps, common
-quote/candle/search fields, and an asset-class-specific overview; only the
-crypto quote shape is currently public. Before exposing other market-data
-operations, the maintainer should confirm their response fields, stock/crypto
-overview semantics, and historical interval/range conventions.
+`docs/API.md` defines the crypto quote and asset-class-specific market overview
+responses. Search still lacks a public query/response contract. History has a
+documented API contract added with its route; its interval/range constraints
+are shared with the internal service.
 
 ## Tests
 

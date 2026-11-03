@@ -127,7 +127,8 @@ function createFinnhubMarketDataProvider(config = {}, { httpClient } = {}) {
           exchange: typeof data.exchange === "string" ? data.exchange : "US",
           timezone: typeof data.timezone === "string" ? data.timezone : null,
         },
-        movers: [],
+        // Finnhub's market-status endpoint does not provide a mover list.
+        movers: null,
         source: "finnhub",
       };
     },
