@@ -158,18 +158,28 @@ envelope through the standard error middleware.
 
 | Code                                  | HTTP status | Behavior                                               |
 | ------------------------------------- | ----------: | ------------------------------------------------------ |
-| `MARKET_DATA_INVALID_REQUEST`         |         400 | Invalid symbol, range, interval, or limit              |
-| `MARKET_DATA_NOT_FOUND`               |         404 | Symbol or requested data is unavailable                |
+| `MARKET_DATA_INVALID_REQUEST`         |         400 | Invalid input or provider-rejected request syntax      |
+| `MARKET_DATA_NOT_FOUND`               |         404 | Invalid/unsupported symbol or unavailable market data  |
 | `MARKET_DATA_UNSUPPORTED_ASSET_CLASS` |         422 | Asset class is outside stock/crypto scope              |
 | `MARKET_DATA_NOT_CONFIGURED`          |         503 | Required provider selection or credentials are missing |
 | `MARKET_DATA_INVALID_CREDENTIALS`     |         503 | Provider rejects configured credentials                |
 | `MARKET_DATA_RATE_LIMITED`            |         429 | Provider returns HTTP 429 or 418                       |
-| `MARKET_DATA_TIMEOUT`                 |         504 | Provider request times out                             |
+| `MARKET_DATA_TIMEOUT`                 |         504 | Request times out or provider returns HTTP 408/504     |
 | `MARKET_DATA_INVALID_RESPONSE`        |         502 | Provider payload does not match its adapter contract   |
-| `MARKET_DATA_PROVIDER_UNAVAILABLE`    |         503 | Network or provider service failure                    |
+| `MARKET_DATA_PROVIDER_UNAVAILABLE`    |         503 | Network, provider 5xx, or unexpected provider failure  |
 
-Provider response bodies, credential values, and raw network errors are not
-included in public messages.
+`marketDataErrors.js` maps HTTP statuses, provider symbol errors, and common
+timeout/network failures to these codes. Known market-data `AppError` values
+are rebuilt from a fixed code/message allowlist; unknown adapter errors become
+`MARKET_DATA_PROVIDER_UNAVAILABLE`. Raw provider messages, response bodies,
+error details, credentials, and upstream stacks are not copied to the API
+response or the error-handler log. The standard error middleware returns the
+usual `{ success: false, error: { code, message } }` envelope.
+
+Requests use the configured bounded timeout (`100` to `30000` ms, default
+`5000` ms). The service does not automatically retry provider calls: retries
+could amplify throttling and return stale data, and no provider-specific retry
+contract is defined.
 
 ## Contract questions and assumptions
 
