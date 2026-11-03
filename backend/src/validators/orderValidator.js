@@ -267,6 +267,8 @@ module.exports = {
   // decimal/symbol/enum/date-window contracts have a single source of truth.
   assetTypeEnum,
   sideEnum,
+  orderTypeEnum,
   symbolField,
+  statusFilter,
   dateBoundSchema,
 };

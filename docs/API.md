@@ -487,6 +487,106 @@ Returns `400 Bad Request` with a `VALIDATION_ERROR` response when:
 
 # 🛡️ Admin
 
+## `GET /admin/orders`
+
+List orders across all users and portfolios. Read-only: only `GET` is exposed on
+this path.
+
+**Authentication:** Bearer JWT required.
+
+**Authorization:** `ADMIN` role required.
+
+### Query parameters
+
+| Parameter     | Type    | Required | Default | Description                                                    |
+| ------------- | ------- | -------: | ------: | -------------------------------------------------------------- |
+| `page`        | integer |       No |     `1` | Page number (`>= 1`)                                           |
+| `limit`       | integer |       No |    `20` | Page size (`1..100`)                                           |
+| `status`      | enum    |       No |       — | One or more statuses, comma-separated                          |
+| `symbol`      | string  |       No |       — | Exact symbol match; trimmed and normalized to uppercase        |
+| `side`        | enum    |       No |       — | `BUY` or `SELL`                                                |
+| `type`        | enum    |       No |       — | `MARKET`, `LIMIT`, `STOP_LOSS`, or `TAKE_PROFIT`               |
+| `portfolioId` | uuid    |       No |       — | Restrict to a single portfolio                                 |
+| `userId`      | uuid    |       No |       — | Restrict to the portfolios owned by a single user              |
+| `from`        | date    |       No |       — | Inclusive lower bound on `createdAt`                           |
+| `to`          | date    |       No |       — | Exclusive upper bound on `createdAt`                           |
+
+Filters combine with **AND**: supplying `userId` and `portfolioId` together
+returns only orders that satisfy both. Unknown query parameters are ignored.
+
+`from` / `to` accept `YYYY-MM-DD` (interpreted as a UTC day) or an ISO datetime
+with an explicit UTC offset (`Z` or `±HH:MM`). Datetimes without an offset are
+rejected. A date-only `to` covers the whole selected day.
+
+### Ordering
+
+Newest first by `createdAt`. Orders that share a `createdAt` are ordered
+deterministically, so walking consecutive pages never duplicates or skips a row.
+
+### Errors
+
+| Status | Code                   | When                                                    |
+| ------ | ---------------------- | ------------------------------------------------------- |
+| 401    | `UNAUTHORIZED`         | No credentials supplied                                 |
+| 401    | `INVALID_ACCESS_TOKEN` | Malformed or expired access token                       |
+| 403    | `FORBIDDEN`            | Authenticated, but the caller is not an `ADMIN`         |
+| 400    | `VALIDATION_ERROR`     | Invalid query parameter; `details` lists `{ path, message }` |
+
+Authentication and authorization run before query validation, so a request
+without a valid admin token never reports validation errors.
+
+### Response
+
+```json
+{
+    "success": true,
+    "data": {
+        "orders": [
+            {
+                "id": "uuid",
+                "portfolioId": "uuid",
+                "symbol": "AAPL",
+                "assetType": "STOCK",
+                "side": "BUY",
+                "type": "LIMIT",
+                "status": "PENDING",
+                "quantity": "10",
+                "limitPrice": "250.5",
+                "stopPrice": null,
+                "executedPrice": null,
+                "executedAt": null,
+                "expiresAt": null,
+                "notes": null,
+                "source": "MANUAL",
+                "createdAt": "2026-10-09T10:00:00.000Z",
+                "updatedAt": "2026-10-09T10:00:00.000Z",
+                "portfolio": {
+                    "id": "uuid",
+                    "name": "Main Portfolio",
+                    "isActive": true
+                },
+                "owner": {
+                    "id": "uuid",
+                    "name": "John Trader",
+                    "email": "john@example.com"
+                }
+            }
+        ],
+        "pagination": {
+            "page": 1,
+            "limit": 20,
+            "total": 1,
+            "totalPages": 1
+        }
+    }
+}
+```
+
+Decimal fields are serialized as strings. Only the order fields above, the
+portfolio identity/flags, and the owner's `id`, `name`, and `email` are
+exposed; credentials, tokens, and unrelated private user data are never
+included.
+
 ## `GET /admin/users`
 
 List users.

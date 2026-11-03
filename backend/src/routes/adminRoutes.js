@@ -8,10 +8,22 @@ const {
   adminUserListQuerySchema,
   adminUserParamsSchema,
 } = require("../validators/adminUserValidator");
+const {
+  adminOrderListQuerySchema,
+} = require("../validators/adminOrderValidator");
 
 const adminUserController = require("../controllers/adminUserController");
+const adminOrderController = require("../controllers/adminOrderController");
 
 const router = express.Router();
+
+router.get(
+  "/orders",
+  authMiddleware,
+  requireRole("ADMIN"),
+  validate(adminOrderListQuerySchema, "query", "validatedQuery"),
+  adminOrderController.listOrders,
+);
 
 router.get(
   "/users",
