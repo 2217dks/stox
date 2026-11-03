@@ -17,8 +17,12 @@ checks normalized results, and converts provider/network failures into Stox
 `backend/src/services/marketData.js` creates the default runtime service. The
 composition code is in `backend/src/providers/createMarketDataProviders.js`;
 provider-specific HTTP requests and response parsing live in the adapter
-files. Tests can inject fake adapters directly into `createMarketDataService`
-and do not make external requests.
+files. Quote wire formats are mapped by
+`backend/src/providers/marketQuoteMappers.js` into the shared
+`backend/src/dtos/marketQuoteDto.js` contract. The service validates and
+normalizes quotes through the same DTO before returning them. Tests can inject
+fake adapters directly into `createMarketDataService` and do not make external
+requests.
 
 ## Methods and normalized results
 
@@ -31,8 +35,15 @@ and do not make external requests.
   stocks.
 - Returns `{ symbol, assetClass, price, change, changePercent, high, low,
 open, previousClose, volume, currency, timestamp, source }`.
-- Monetary and volume values are decimal strings. Optional values may be
-  `null`; `timestamp` is an ISO 8601 string or `null` if the provider omits it.
+- This exact object is the internal `MarketQuoteDto`. `symbol` and
+  `assetClass` are uppercase, `source` and `currency` are lowercase and
+  uppercase respectively. `price` is required and positive.
+- Monetary and volume values are canonical decimal strings. The DTO expands
+  exponent notation and removes insignificant zeros without rounding or
+  floating-point arithmetic; negative zero becomes `"0"`.
+- Optional numeric values, `currency`, and `timestamp` are always present and
+  use `null` when the provider omits them. A non-null timestamp is normalized
+  to an ISO 8601 UTC string. Invalid non-null values reject the provider result.
 
 ### `getHistoricalPrices(symbol, options)`
 

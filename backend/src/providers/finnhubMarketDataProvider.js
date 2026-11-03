@@ -7,6 +7,7 @@ const {
   assertObject,
 } = require("./marketDataHttp");
 const { createMarketDataError } = require("./marketDataErrors");
+const { mapFinnhubQuote } = require("./marketQuoteMappers");
 
 const FINNHUB_RESOLUTIONS = Object.freeze({
   "1m": "1",
@@ -46,44 +47,8 @@ function createFinnhubMarketDataProvider(config = {}, { httpClient } = {}) {
 
     async getQuote(symbol) {
       requireApiKey();
-      const data = assertObject(await getData(client, "/quote", { symbol }));
-      const price = decimalString(data.c);
-      if (price === undefined || Number(price) <= 0) {
-        const isZero = (value) => value === 0 || value === "0";
-        if (isZero(data.c) && isZero(data.t)) {
-          throw createMarketDataError(
-            "Market data is unavailable for the requested symbol.",
-            404,
-            "MARKET_DATA_NOT_FOUND",
-          );
-        }
-        throw invalidProviderResponse();
-      }
-
-      const optional = [data.d, data.dp, data.h, data.l, data.o, data.pc];
-      if (
-        optional.some(
-          (value) => decimalString(value, { nullable: true }) === undefined,
-        )
-      ) {
-        throw invalidProviderResponse();
-      }
-
-      return {
-        symbol,
-        assetClass: "STOCK",
-        price,
-        change: decimalString(data.d, { nullable: true }),
-        changePercent: decimalString(data.dp, { nullable: true }),
-        high: decimalString(data.h, { nullable: true }),
-        low: decimalString(data.l, { nullable: true }),
-        open: decimalString(data.o, { nullable: true }),
-        previousClose: decimalString(data.pc, { nullable: true }),
-        volume: null,
-        currency: "USD",
-        timestamp: isoTimestamp(data.t, { unit: "seconds" }),
-        source: "finnhub",
-      };
+      const payload = await getData(client, "/quote", { symbol });
+      return mapFinnhubQuote(payload, symbol);
     },
 
     async getHistoricalPrices(symbol, { interval, from, to }) {

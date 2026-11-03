@@ -1,4 +1,5 @@
 const { loadMarketDataConfig } = require("../config/marketDataConfig");
+const { createMarketQuoteDto } = require("../dtos/marketQuoteDto");
 const {
   createMarketDataError,
   mapProviderError,
@@ -66,39 +67,23 @@ function isDecimalString(value) {
   );
 }
 
-function isNullableDecimalString(value) {
-  return value === null || isDecimalString(value);
-}
-
-function assertQuote(value, symbol, assetClass) {
-  if (
-    !value ||
-    typeof value !== "object" ||
-    typeof value.symbol !== "string" ||
-    !value.symbol.trim() ||
-    value.assetClass !== assetClass ||
-    !isDecimalString(value.price) ||
-    typeof value.source !== "string" ||
-    !value.source.trim() ||
-    (value.timestamp !== null && !isValidIsoTimestamp(value.timestamp)) ||
-    [
-      "change",
-      "changePercent",
-      "high",
-      "low",
-      "open",
-      "previousClose",
-      "volume",
-    ].some((key) => !isNullableDecimalString(value[key])) ||
-    (value.currency !== null && typeof value.currency !== "string")
-  ) {
+function assertQuote(value, assetClass) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw createMarketDataError(
       "Market data provider returned an invalid response.",
       502,
       "MARKET_DATA_INVALID_RESPONSE",
     );
   }
-  return { ...value, symbol: value.symbol || symbol };
+  const normalized = createMarketQuoteDto(value);
+  if (normalized.assetClass !== assetClass) {
+    throw createMarketDataError(
+      "Market data provider returned an invalid response.",
+      502,
+      "MARKET_DATA_INVALID_RESPONSE",
+    );
+  }
+  return normalized;
 }
 
 function assertHistoricalPrices(value, symbol, assetClass, interval) {
@@ -257,7 +242,7 @@ function createMarketDataService({ config, providers } = {}) {
       const result = await callAdapter(() =>
         provider.getQuote(normalizedSymbol),
       );
-      return assertQuote(result, normalizedSymbol, assetClass);
+      return assertQuote(result, assetClass);
     },
 
     /**
