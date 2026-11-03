@@ -31,6 +31,19 @@ const cryptoQuoteParamsSchema = z.object({
     ),
 });
 
+const stockQuoteParamsSchema = z.object({
+  symbol: z
+    .string()
+    .trim()
+    .toUpperCase()
+    .min(1)
+    .max(20)
+    .regex(
+      /^[A-Z0-9]+(?:[.-][A-Z0-9]+)*$/,
+      "A valid stock ticker symbol is required.",
+    ),
+});
+
 const historicalPricesParamsSchema = z.object({
   symbol: historicalSymbolSchema,
 });
@@ -71,6 +84,7 @@ const marketOverviewQuerySchema = z
 
 module.exports = {
   cryptoQuoteParamsSchema,
+  stockQuoteParamsSchema,
   historicalPricesParamsSchema,
   historicalPricesQuerySchema,
   marketOverviewQuerySchema,
