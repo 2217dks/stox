@@ -69,6 +69,25 @@ describe("market-data provider adapters", () => {
     });
   });
 
+  test("maps omitted Finnhub quote details to explicit nulls", async () => {
+    const provider = createFinnhubMarketDataProvider(
+      { apiKey: "test-key", timeoutMs: 5000 },
+      { httpClient: fakeClient({ c: 10, t: 1793577600 }) },
+    );
+
+    await expect(provider.getQuote("AAPL")).resolves.toMatchObject({
+      price: "10",
+      change: null,
+      changePercent: null,
+      high: null,
+      low: null,
+      open: null,
+      previousClose: null,
+      volume: null,
+      timestamp: "2026-11-02T00:00:00.000Z",
+    });
+  });
+
   test("normalizes Finnhub historical candles", async () => {
     const client = fakeClient({
       s: "ok",
@@ -178,10 +197,10 @@ describe("market-data provider adapters", () => {
       symbol: "BINANCE:BTCUSDT",
       assetClass: "CRYPTO",
       price: "100.12",
-      change: "2.00",
+      change: "2",
       changePercent: "2.03",
-      high: "101.00",
-      low: "98.00",
+      high: "101",
+      low: "98",
       open: "98.12",
       previousClose: "98.12",
       volume: "1000",
@@ -193,6 +212,60 @@ describe("market-data provider adapters", () => {
     expect(client.get).toHaveBeenNthCalledWith(1, "/api/v3/ticker/24hr", {
       params: { symbol: "BTCUSDT" },
     });
+  });
+
+  test("Finnhub and Binance quotes share one canonical DTO shape", async () => {
+    const stockProvider = createFinnhubMarketDataProvider(
+      { apiKey: "test-key", timeoutMs: 5000 },
+      {
+        httpClient: fakeClient(
+          finnhubQuoteResponse({
+            c: 100.12,
+            d: 2,
+            dp: 2.03,
+            h: 101,
+            l: 98,
+            o: 98.12,
+            pc: 98.12,
+          }),
+        ),
+      },
+    );
+    const cryptoProvider = createBinanceMarketDataProvider(
+      { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+      {
+        httpClient: fakeClient(
+          binanceQuoteResponse({
+            lastPrice: "100.1200",
+            priceChange: "2.00",
+            priceChangePercent: "2.0300",
+            highPrice: "101.000",
+            lowPrice: "98.00",
+            openPrice: "98.1200",
+            prevClosePrice: "98.12",
+          }),
+        ),
+      },
+    );
+
+    const stockQuote = await stockProvider.getQuote("AAPL");
+    const cryptoQuote = await cryptoProvider.getQuote("BTCUSDT");
+
+    expect(Object.keys(stockQuote).sort()).toEqual(
+      Object.keys(cryptoQuote).sort(),
+    );
+    for (const field of [
+      "price",
+      "change",
+      "changePercent",
+      "high",
+      "low",
+      "open",
+      "previousClose",
+      "timestamp",
+    ]) {
+      expect(stockQuote[field]).toBe(cryptoQuote[field]);
+    }
   });
 
   test("normalizes Binance overview and symbol search", async () => {

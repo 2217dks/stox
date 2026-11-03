@@ -255,11 +255,11 @@ describe("marketDataService provider-independent interface", () => {
     });
   });
 
-  test("rejects malformed optional fields from a swapped provider", async () => {
+  test("rejects malformed optional decimals from a swapped provider", async () => {
     const provider = createProvider({
       getQuote: jest.fn(async (symbol) => ({
         ...quote(symbol, "STOCK"),
-        change: 1.25,
+        change: "not-a-decimal",
       })),
     });
     const service = createService({ stockProvider: provider });
