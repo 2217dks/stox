@@ -16,4 +16,21 @@ async function getCryptoQuote(req, res, next) {
   }
 }
 
-module.exports = { getCryptoQuote };
+async function getHistoricalPrices(req, res, next) {
+  try {
+    const { symbol } = req.validatedParams;
+    const prices = await marketDataService.getHistoricalPrices(
+      symbol,
+      req.validatedQuery,
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: prices,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+module.exports = { getCryptoQuote, getHistoricalPrices };
