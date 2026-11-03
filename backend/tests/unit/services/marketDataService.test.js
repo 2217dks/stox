@@ -165,6 +165,23 @@ describe("marketDataService provider-independent interface", () => {
     });
   });
 
+  test("preserves unavailable mover data as null rather than an empty feed", async () => {
+    const stockProvider = createProvider({
+      getMarketOverview: jest.fn(async () => ({
+        assetClass: "STOCK",
+        asOf: "2026-11-02T00:00:00.000Z",
+        marketStatus: { isOpen: true },
+        movers: null,
+        source: "mock",
+      })),
+    });
+    const service = createService({ stockProvider });
+
+    const result = await service.getMarketOverview({ assetClass: "STOCK" });
+
+    expect(result.movers).toBeNull();
+  });
+
   test("searches configured asset classes and combines normalized results", async () => {
     const service = createService();
 

@@ -59,8 +59,19 @@ const historicalPricesQuerySchema = z
     }
   });
 
+const marketOverviewQuerySchema = z
+  .object({
+    assetClass: z.enum(["STOCK", "CRYPTO"]),
+    limit: z.preprocess(
+      (value) => (value === undefined ? 10 : queryInteger(value)),
+      z.number().int().min(1).max(100),
+    ),
+  })
+  .strict();
+
 module.exports = {
   cryptoQuoteParamsSchema,
   historicalPricesParamsSchema,
   historicalPricesQuerySchema,
+  marketOverviewQuerySchema,
 };
