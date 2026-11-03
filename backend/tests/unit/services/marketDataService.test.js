@@ -191,6 +191,42 @@ describe("marketDataService provider-independent interface", () => {
     expect(result[1].symbol).toBe("BINANCE:BTCUSDT");
   });
 
+  test("normalizes search metadata and returns only the documented fields", async () => {
+    const stockProvider = createProvider({
+      searchSymbols: jest.fn(async () => [
+        {
+          symbol: " aapl ",
+          name: " Apple Inc. ",
+          assetClass: "STOCK",
+          exchange: " nasdaq ",
+          currency: "usd",
+          type: " Common Stock ",
+          source: " FINNHUB ",
+          providerPayload: { secret: "must-not-escape" },
+        },
+      ]),
+    });
+    const service = createService({ stockProvider });
+
+    const result = await service.searchSymbols(" apple ", {
+      assetClass: "STOCK",
+      limit: 5,
+    });
+
+    expect(result).toEqual([
+      {
+        symbol: "AAPL",
+        name: "Apple Inc.",
+        assetClass: "STOCK",
+        exchange: "NASDAQ",
+        currency: "USD",
+        type: "Common Stock",
+        source: "finnhub",
+      },
+    ]);
+    expect(stockProvider.searchSymbols).toHaveBeenCalledWith("apple");
+  });
+
   test("returns a predictable error when a selected provider is not configured", async () => {
     const service = createMarketDataService({
       config: { providerByAssetClass: { STOCK: "missing", CRYPTO: "crypto" } },

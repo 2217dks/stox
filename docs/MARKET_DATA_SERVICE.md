@@ -72,8 +72,11 @@ time. See `docs/API.md` for the public route contract.
 ### `searchSymbols(query, { assetClass?, limit? })`
 
 `query` is a nonempty string. If `assetClass` is omitted, results from both
-configured asset classes are combined. `limit`, when present, is from 1 to 100. Each result is `{ symbol, name, assetClass, exchange, currency, type,
-source }`; optional provider metadata is `null` where unavailable.
+configured asset classes are combined. `limit`, when present, is from 1 to 100.
+Each result is normalized to exactly `{ symbol, name, assetClass, exchange,
+currency, type, source }`; optional provider metadata is `null` where
+unavailable. The public endpoint narrows query length and result limit as
+documented in `docs/API.md`.
 
 ## Provider adapter contract
 
