@@ -136,6 +136,7 @@ describe("market-data provider adapters", () => {
             isOpen: true,
             session: "regular",
             timezone: "America/New_York",
+            t: 1793773398,
           },
         })
         .mockResolvedValueOnce({
@@ -163,6 +164,7 @@ describe("market-data provider adapters", () => {
       isOpen: true,
       exchange: "US",
     });
+    expect(overview.asOf).toBe("2026-11-04T06:23:18.000Z");
     expect(overview.movers).toBeNull();
     expect(symbols[0]).toMatchObject({
       symbol: "AAPL",
