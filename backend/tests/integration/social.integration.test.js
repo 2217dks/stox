@@ -18,6 +18,7 @@ const user2 = {
 };
 
 const MISSING_USER_ID = "00000000-0000-4000-8000-000000000000";
+const MISSING_POST_ID = "00000000-0000-4000-8000-000000000001";
 
 let user1Id;
 let user2Id;
@@ -63,6 +64,16 @@ describe("Social integration API", () => {
 
   test("rejects unauthenticated feed requests", async () => {
     const response = await request(app).get("/api/v1/social/feed");
+
+    expect(response.status).toBe(401);
+    expect(response.body.success).toBe(false);
+    expect(response.body.error.code).toBe("UNAUTHORIZED");
+  });
+
+  test("rejects unauthenticated post-detail requests", async () => {
+    const response = await request(app).get(
+      `/api/v1/social/posts/${MISSING_POST_ID}`,
+    );
 
     expect(response.status).toBe(401);
     expect(response.body.success).toBe(false);
@@ -161,6 +172,11 @@ describe("Social integration API", () => {
     expect(post.content).toBe("Opened a new position.");
     expect(post.symbol).toBe("BTCUSDT");
     expect(post.author.id).toBe(user2Id);
+    expect(post.author).toEqual({
+      id: user2Id,
+      name: user2.name,
+      avatarUrl: null,
+    });
 
     postId = post.id;
 
@@ -244,6 +260,61 @@ describe("Social integration API", () => {
     expect(missing.status).toBe(404);
     expect(missing.body.success).toBe(false);
     expect(missing.body.error.code).toBe("USER_NOT_FOUND");
+  });
+
+  test("returns a visible post with safe author fields", async () => {
+    const response = await request(app)
+      .get(`/api/v1/social/posts/${postId}`)
+      .set("Authorization", `Bearer ${user1AccessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.post).toMatchObject({
+      id: postId,
+      authorId: user2Id,
+      content: "Opened a new position.",
+      symbol: "BTCUSDT",
+      metadata: { kind: "trade" },
+      author: {
+        id: user2Id,
+        name: user2.name,
+        avatarUrl: null,
+      },
+    });
+
+    expect(Object.keys(response.body.data.post.author).sort()).toEqual([
+      "avatarUrl",
+      "id",
+      "name",
+    ]);
+    expect(response.body.data.post.author).not.toHaveProperty("email");
+    expect(response.body.data.post.author).not.toHaveProperty("passwordHash");
+  });
+
+  test("returns the same not-found response for missing and hidden posts", async () => {
+    const missing = await request(app)
+      .get(`/api/v1/social/posts/${MISSING_POST_ID}`)
+      .set("Authorization", `Bearer ${user1AccessToken}`);
+
+    const hidden = await request(app)
+      .get(`/api/v1/social/posts/${hiddenPostId}`)
+      .set("Authorization", `Bearer ${user1AccessToken}`);
+
+    expect(missing.status).toBe(404);
+    expect(hidden.status).toBe(404);
+    expect(missing.body).toEqual(hidden.body);
+    expect(missing.body.success).toBe(false);
+    expect(missing.body.error.code).toBe("POST_NOT_FOUND");
+  });
+
+  test("rejects a malformed post ID", async () => {
+    const response = await request(app)
+      .get("/api/v1/social/posts/not-a-uuid")
+      .set("Authorization", `Bearer ${user1AccessToken}`);
+
+    expect(response.status).toBe(400);
+    expect(response.body.success).toBe(false);
+    expect(response.body.error.code).toBe("VALIDATION_ERROR");
   });
 
   test("unfollows a user", async () => {

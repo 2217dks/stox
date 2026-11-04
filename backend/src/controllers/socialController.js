@@ -5,6 +5,7 @@ const {
   listFollowing,
   getFeed,
   createPost,
+  getPostById,
 } = require("../services/socialService");
 
 async function follow(req, res, next) {
@@ -97,6 +98,21 @@ async function addPost(req, res, next) {
   }
 }
 
+async function getPost(req, res, next) {
+  try {
+    const post = await getPostById(req.params.postId);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        post,
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   follow,
   unfollow,
@@ -104,4 +120,5 @@ module.exports = {
   getFollowing,
   listFeed,
   addPost,
+  getPost,
 };
