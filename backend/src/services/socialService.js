@@ -8,6 +8,20 @@ const PUBLIC_USER_SELECT = {
   avatarUrl: true,
 };
 
+const POST_SELECT = {
+  id: true,
+  authorId: true,
+  content: true,
+  symbol: true,
+  metadata: true,
+  isHidden: true,
+  createdAt: true,
+  updatedAt: true,
+  author: {
+    select: PUBLIC_USER_SELECT,
+  },
+};
+
 async function ensureActiveUser(userId) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -157,11 +171,7 @@ async function getFeed({ page = 1, limit = 20 } = {}) {
   const [posts, total] = await Promise.all([
     prisma.post.findMany({
       where,
-      include: {
-        author: {
-          select: PUBLIC_USER_SELECT,
-        },
-      },
+      select: POST_SELECT,
       orderBy: {
         createdAt: "desc",
       },
@@ -183,6 +193,22 @@ async function getFeed({ page = 1, limit = 20 } = {}) {
       totalPages: Math.ceil(total / limit),
     },
   };
+}
+
+async function getPostById(postId) {
+  const post = await prisma.post.findFirst({
+    where: {
+      id: postId,
+      isHidden: false,
+    },
+    select: POST_SELECT,
+  });
+
+  if (!post) {
+    throw AppError.notFound("Post not found.", "POST_NOT_FOUND");
+  }
+
+  return serializePost(post);
 }
 
 async function createPost(userId, { content, symbol, metadata }) {
@@ -212,4 +238,5 @@ module.exports = {
   listFollowing,
   getFeed,
   createPost,
+  getPostById,
 };
