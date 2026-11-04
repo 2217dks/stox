@@ -123,7 +123,10 @@ Updates profile information.
 
 ## `GET /users/:id`
 
-Get public user profile.
+Get a public profile containing the user's ID, name, avatar URL, follower,
+following, and visible-post counts. Authenticated viewers also receive
+`isFollowing`; anonymous viewers receive `null`. Private account fields are
+never included.
 
 ## `GET /users/:id/portfolio`
 

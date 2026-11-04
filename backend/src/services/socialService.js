@@ -195,6 +195,55 @@ async function getFeed({ page = 1, limit = 20 } = {}) {
   };
 }
 
+async function getPublicProfile(userId, viewerId = null) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      ...PUBLIC_USER_SELECT,
+      _count: {
+        select: {
+          followers: true,
+          following: true,
+          posts: {
+            where: {
+              isHidden: false,
+            },
+          },
+        },
+      },
+      ...(viewerId
+        ? {
+            followers: {
+              where: {
+                followerId: viewerId,
+              },
+              select: {
+                id: true,
+              },
+              take: 1,
+            },
+          }
+        : {}),
+    },
+  });
+
+  if (!user) {
+    throw AppError.notFound("User not found.", "USER_NOT_FOUND");
+  }
+
+  return {
+    id: user.id,
+    name: user.name,
+    avatarUrl: user.avatarUrl,
+    counts: {
+      followers: user._count.followers,
+      following: user._count.following,
+      posts: user._count.posts,
+    },
+    isFollowing: viewerId ? user.followers.length > 0 : null,
+  };
+}
+
 async function getPostById(postId) {
   const post = await prisma.post.findFirst({
     where: {
@@ -237,6 +286,7 @@ module.exports = {
   listFollowers,
   listFollowing,
   getFeed,
+  getPublicProfile,
   createPost,
   getPostById,
 };
