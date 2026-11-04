@@ -216,6 +216,52 @@ describe("Social integration API", () => {
     expect(posts.some((post) => post.id === hiddenPostId)).toBe(false);
   });
 
+  test("returns a public profile with accurate counts and safe fields", async () => {
+    const response = await request(app)
+      .get(`/api/v1/users/${user2Id}`)
+      .set("Authorization", `Bearer ${user1AccessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.user).toEqual({
+      id: user2Id,
+      name: user2.name,
+      avatarUrl: null,
+      counts: {
+        followers: 1,
+        following: 0,
+        posts: 1,
+      },
+      isFollowing: true,
+    });
+  });
+
+  test("allows anonymous profile reads and returns authenticated relationship state", async () => {
+    const anonymous = await request(app).get(`/api/v1/users/${user2Id}`);
+
+    expect(anonymous.status).toBe(200);
+    expect(anonymous.body.data.user.isFollowing).toBeNull();
+
+    const nonFollower = await request(app)
+      .get(`/api/v1/users/${user1Id}`)
+      .set("Authorization", `Bearer ${user2AccessToken}`);
+
+    expect(nonFollower.status).toBe(200);
+    expect(nonFollower.body.data.user.isFollowing).toBe(false);
+  });
+
+  test("rejects invalid and missing public-profile IDs", async () => {
+    const invalid = await request(app).get("/api/v1/users/not-a-uuid");
+    const missing = await request(app).get(`/api/v1/users/${MISSING_USER_ID}`);
+
+    expect(invalid.status).toBe(400);
+    expect(invalid.body.success).toBe(false);
+    expect(invalid.body.error.code).toBe("VALIDATION_ERROR");
+    expect(missing.status).toBe(404);
+    expect(missing.body.success).toBe(false);
+    expect(missing.body.error.code).toBe("USER_NOT_FOUND");
+  });
+
   test("returns a visible post with safe author fields", async () => {
     const response = await request(app)
       .get(`/api/v1/social/posts/${postId}`)
@@ -235,6 +281,7 @@ describe("Social integration API", () => {
         avatarUrl: null,
       },
     });
+
     expect(Object.keys(response.body.data.post.author).sort()).toEqual([
       "avatarUrl",
       "id",
