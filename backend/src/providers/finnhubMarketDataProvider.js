@@ -119,7 +119,7 @@ function createFinnhubMarketDataProvider(config = {}, { httpClient } = {}) {
       if (typeof data.isOpen !== "boolean") throw invalidProviderResponse();
       return {
         assetClass: "STOCK",
-        asOf: isoTimestamp(data.t) || new Date().toISOString(),
+        asOf: isoTimestamp(data.t, { unit: "seconds" }) || new Date().toISOString(),
         marketStatus: {
           isOpen: data.isOpen,
           session: typeof data.session === "string" ? data.session : null,
