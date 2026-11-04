@@ -300,6 +300,18 @@ Delete alert.
 
 Get social feed.
 
+## `GET /social/posts/:postId`
+
+Get a visible post, its public author details, and the authenticated viewer's
+like state. Hidden or missing posts return `404 POST_NOT_FOUND`.
+
+## `GET /social/users/:userId`
+
+Get a user's public social profile and a paginated list of their visible posts.
+The profile includes follower, following, and post counts, plus whether the
+authenticated caller follows that user. Email and other private account fields
+are not included. Suspended or missing users return `404 USER_NOT_FOUND`.
+
 ## `GET /social/posts/:postId/engagement`
 
 Get the visible post's like count and whether the authenticated viewer has

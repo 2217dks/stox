@@ -185,6 +185,115 @@ async function getFeed({ page = 1, limit = 20 } = {}) {
   };
 }
 
+async function getPost(userId, postId) {
+  await ensureActiveUser(userId);
+
+  const post = await prisma.post.findFirst({
+    where: {
+      id: postId,
+      isHidden: false,
+    },
+    include: {
+      author: {
+        select: PUBLIC_USER_SELECT,
+      },
+      _count: {
+        select: {
+          likes: true,
+        },
+      },
+      likes: {
+        where: { userId },
+        select: { id: true },
+        take: 1,
+      },
+    },
+  });
+
+  if (!post) {
+    throw AppError.notFound("Post not found.", "POST_NOT_FOUND");
+  }
+
+  return {
+    post: serializePost(post),
+    engagement: serializePostEngagement(
+      post.id,
+      post._count.likes,
+      post.likes.length > 0,
+    ),
+  };
+}
+
+async function getSocialProfile(viewerId, profileUserId, { page = 1, limit = 20 } = {}) {
+  await ensureActiveUser(viewerId);
+
+  const profileUser = await prisma.user.findFirst({
+    where: {
+      id: profileUserId,
+      isSuspended: false,
+    },
+    select: {
+      ...PUBLIC_USER_SELECT,
+      createdAt: true,
+    },
+  });
+
+  if (!profileUser) {
+    throw AppError.notFound("User not found.", "USER_NOT_FOUND");
+  }
+
+  const postWhere = {
+    authorId: profileUserId,
+    isHidden: false,
+  };
+
+  const [followersCount, followingCount, postsCount, viewerFollow, posts] =
+    await Promise.all([
+      prisma.follow.count({ where: { followingId: profileUserId } }),
+      prisma.follow.count({ where: { followerId: profileUserId } }),
+      prisma.post.count({ where: postWhere }),
+      viewerId === profileUserId
+        ? null
+        : prisma.follow.findUnique({
+            where: {
+              followerId_followingId: {
+                followerId: viewerId,
+                followingId: profileUserId,
+              },
+            },
+            select: { id: true },
+          }),
+      prisma.post.findMany({
+        where: postWhere,
+        include: {
+          author: {
+            select: PUBLIC_USER_SELECT,
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        skip: (page - 1) * limit,
+        take: limit,
+      }),
+    ]);
+
+  return {
+    profile: {
+      ...profileUser,
+      followersCount,
+      followingCount,
+      postsCount,
+      followedByViewer: Boolean(viewerFollow),
+    },
+    posts: posts.map(serializePost),
+    pagination: {
+      page,
+      limit,
+      total: postsCount,
+      totalPages: Math.ceil(postsCount / limit),
+    },
+  };
+}
+
 async function createPost(userId, { content, symbol, metadata }) {
   await ensureActiveUser(userId);
 
@@ -362,6 +471,8 @@ module.exports = {
   listFollowers,
   listFollowing,
   getFeed,
+  getPost,
+  getSocialProfile,
   createPost,
   deletePost,
   getPostEngagement,
