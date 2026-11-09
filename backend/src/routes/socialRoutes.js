@@ -5,6 +5,7 @@ const validate = require("../middleware/validation");
 
 const {
   followParamsSchema,
+  postIdParamsSchema,
   postParamsSchema,
   feedQuerySchema,
   createPostSchema,
@@ -26,6 +27,27 @@ router.post(
   authMiddleware,
   validate(createPostSchema),
   socialController.addPost,
+);
+
+router.get(
+  "/posts/:postId/engagement",
+  authMiddleware,
+  validate(postIdParamsSchema, "params"),
+  socialController.getPostEngagement,
+);
+
+router.post(
+  "/posts/:postId/likes",
+  authMiddleware,
+  validate(postIdParamsSchema, "params"),
+  socialController.likePost,
+);
+
+router.delete(
+  "/posts/:postId/likes",
+  authMiddleware,
+  validate(postIdParamsSchema, "params"),
+  socialController.unlikePost,
 );
 
 router.get(

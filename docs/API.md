@@ -513,6 +513,19 @@ Delete alert.
 
 Get social feed.
 
+## `GET /social/posts/:postId/engagement`
+
+Get the visible post's like count and whether the authenticated viewer has
+liked it.
+
+## `POST /social/posts/:postId/likes`
+
+Like a visible post. A user can like a post once; repeated likes return a
+conflict response.
+
+## `DELETE /social/posts/:postId/likes`
+
+Remove the authenticated user's like from a visible post.
 ## `POST /social/posts`
 
 Create a social post.
