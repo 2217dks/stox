@@ -29,6 +29,13 @@ router.post(
   socialController.addPost,
 );
 
+router.delete(
+  "/posts/:postId",
+  authMiddleware,
+  validate(postIdParamsSchema, "params"),
+  socialController.deletePost,
+);
+
 router.get(
   "/posts/:postId/engagement",
   authMiddleware,
