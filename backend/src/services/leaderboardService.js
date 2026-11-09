@@ -56,7 +56,11 @@ async function resolveSnapshotDate(scope, period) {
   return latest?.snapshotDate ?? null;
 }
 
-async function getGlobalLeaderboard({ period = DEFAULT_PERIOD, page = 1, limit = 20 } = {}) {
+async function getGlobalLeaderboard({
+  period = DEFAULT_PERIOD,
+  page = 1,
+  limit = 20,
+} = {}) {
   const snapshotDate = await resolveSnapshotDate("GLOBAL", period);
 
   if (!snapshotDate) {
@@ -102,7 +106,10 @@ async function getGlobalLeaderboard({ period = DEFAULT_PERIOD, page = 1, limit =
   };
 }
 
-async function getFriendsLeaderboard(userId, { period = DEFAULT_PERIOD, page = 1, limit = 20 } = {}) {
+async function getFriendsLeaderboard(
+  userId,
+  { period = DEFAULT_PERIOD, page = 1, limit = 20 } = {},
+) {
   const snapshotDate = await resolveSnapshotDate("GLOBAL", period);
 
   if (!snapshotDate) {
@@ -172,7 +179,11 @@ function normalizeSnapshotDate(date = new Date()) {
   }
 
   return new Date(
-    Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate()),
+    Date.UTC(
+      parsed.getUTCFullYear(),
+      parsed.getUTCMonth(),
+      parsed.getUTCDate(),
+    ),
   );
 }
 
@@ -227,9 +238,7 @@ function rankLeaderboard(totalsByUser, periodPnlByUser = new Map()) {
     }
 
     const profitOrLoss = periodPnlByUser.get(userId) ?? ZERO;
-    const returnPct = profitOrLoss
-      .div(totals.startingBalance)
-      .mul(100);
+    const returnPct = profitOrLoss.div(totals.startingBalance).mul(100);
 
     ranked.push({
       userId,
@@ -380,4 +389,10 @@ module.exports = {
   getGlobalLeaderboard,
   getFriendsLeaderboard,
   generateLeaderboardSnapshots,
+
+  // Exported for isolated unit testing
+  normalizeSnapshotDate,
+  getPeriodStart,
+  addPortfolioToTotals,
+  rankLeaderboard,
 };
