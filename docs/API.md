@@ -609,6 +609,14 @@ Global leaderboard.
 
 Leaderboard of followed users/friends.
 
+Global leaderboard entries are calculated and saved as daily snapshots. To
+generate or refresh today's `DAILY`, `WEEKLY`, `MONTHLY`, and `ALL_TIME`
+snapshots, run `npm run leaderboard:snapshot` from `backend/`. Rankings use return
+percentage, then total value as a tiebreaker. Period returns use realized trade
+P&L in the UTC period; all-time return compares current portfolio value with
+starting balances. Portfolio value is cash plus the recorded invested basis of
+open holdings.
+
 ---
 
 # 🏟️ Leagues
