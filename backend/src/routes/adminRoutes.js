@@ -8,15 +8,29 @@ const {
   adminUserListQuerySchema,
   adminUserParamsSchema,
 } = require("../validators/adminUserValidator");
+
+const {
+  adminOrderListQuerySchema,
+} = require("../validators/adminOrderValidator");
+
 const {
   adminPortfolioListQuerySchema,
   adminPortfolioParamsSchema,
 } = require("../validators/adminPortfolioValidator");
 
 const adminUserController = require("../controllers/adminUserController");
+const adminOrderController = require("../controllers/adminOrderController");
 const adminPortfolioController = require("../controllers/adminPortfolioController");
 
 const router = express.Router();
+
+router.get(
+  "/orders",
+  authMiddleware,
+  requireRole("ADMIN"),
+  validate(adminOrderListQuerySchema, "query", "validatedQuery"),
+  adminOrderController.listOrders,
+);
 
 router.get(
   "/portfolios",

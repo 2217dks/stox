@@ -315,6 +315,7 @@ async function createOrder({
 }
 
 module.exports = {
+  SERIALIZED_ORDER_FIELDS,
   serializeOrder,
   getOrder,
   listOrders,
