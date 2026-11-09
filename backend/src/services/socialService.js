@@ -8,6 +8,20 @@ const PUBLIC_USER_SELECT = {
   avatarUrl: true,
 };
 
+const POST_SELECT = {
+  id: true,
+  authorId: true,
+  content: true,
+  symbol: true,
+  metadata: true,
+  isHidden: true,
+  createdAt: true,
+  updatedAt: true,
+  author: {
+    select: PUBLIC_USER_SELECT,
+  },
+};
+
 async function ensureActiveUser(userId) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
@@ -157,11 +171,7 @@ async function getFeed({ page = 1, limit = 20 } = {}) {
   const [posts, total] = await Promise.all([
     prisma.post.findMany({
       where,
-      include: {
-        author: {
-          select: PUBLIC_USER_SELECT,
-        },
-      },
+      select: POST_SELECT,
       orderBy: {
         createdAt: "desc",
       },
@@ -183,6 +193,71 @@ async function getFeed({ page = 1, limit = 20 } = {}) {
       totalPages: Math.ceil(total / limit),
     },
   };
+}
+
+async function getPublicProfile(userId, viewerId = null) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: {
+      ...PUBLIC_USER_SELECT,
+      _count: {
+        select: {
+          followers: true,
+          following: true,
+          posts: {
+            where: {
+              isHidden: false,
+            },
+          },
+        },
+      },
+      ...(viewerId
+        ? {
+            followers: {
+              where: {
+                followerId: viewerId,
+              },
+              select: {
+                id: true,
+              },
+              take: 1,
+            },
+          }
+        : {}),
+    },
+  });
+
+  if (!user) {
+    throw AppError.notFound("User not found.", "USER_NOT_FOUND");
+  }
+
+  return {
+    id: user.id,
+    name: user.name,
+    avatarUrl: user.avatarUrl,
+    counts: {
+      followers: user._count.followers,
+      following: user._count.following,
+      posts: user._count.posts,
+    },
+    isFollowing: viewerId ? user.followers.length > 0 : null,
+  };
+}
+
+async function getPostById(postId) {
+  const post = await prisma.post.findFirst({
+    where: {
+      id: postId,
+      isHidden: false,
+    },
+    select: POST_SELECT,
+  });
+
+  if (!post) {
+    throw AppError.notFound("Post not found.", "POST_NOT_FOUND");
+  }
+
+  return serializePost(post);
 }
 
 async function createPost(userId, { content, symbol, metadata }) {
@@ -342,8 +417,10 @@ module.exports = {
   listFollowers,
   listFollowing,
   getFeed,
+  getPublicProfile,
   createPost,
   getPostEngagement,
   likePost,
   unlikePost,
+  getPostById,
 };
