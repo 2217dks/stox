@@ -4,6 +4,10 @@ const followParamsSchema = z.object({
   userId: z.string().uuid("Invalid user ID."),
 });
 
+const postIdParamsSchema = z.object({
+  postId: z.string().uuid("Invalid post ID."),
+});
+
 const postParamsSchema = z.object({
   postId: z.string().uuid("Invalid post ID."),
 });
@@ -34,6 +38,7 @@ const createPostSchema = z.object({
 
 module.exports = {
   followParamsSchema,
+  postIdParamsSchema,
   postParamsSchema,
   feedQuerySchema,
   createPostSchema,
