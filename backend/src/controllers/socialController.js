@@ -4,8 +4,6 @@ const {
   listFollowers,
   listFollowing,
   getFeed,
-  getPost,
-  getSocialProfile,
   createPost,
   deletePost,
   getPostEngagement,
@@ -79,36 +77,6 @@ async function getFollowing(req, res, next) {
 async function listFeed(req, res, next) {
   try {
     const result = await getFeed(req.validatedQuery);
-
-    return res.status(200).json({
-      success: true,
-      data: result,
-    });
-  } catch (error) {
-    return next(error);
-  }
-}
-
-async function getPostDetail(req, res, next) {
-  try {
-    const result = await getPost(req.user.userId, req.params.postId);
-
-    return res.status(200).json({
-      success: true,
-      data: result,
-    });
-  } catch (error) {
-    return next(error);
-  }
-}
-
-async function getProfile(req, res, next) {
-  try {
-    const result = await getSocialProfile(
-      req.user.userId,
-      req.params.userId,
-      req.validatedQuery,
-    );
 
     return res.status(200).json({
       success: true,
@@ -210,8 +178,6 @@ module.exports = {
   getFollowers,
   getFollowing,
   listFeed,
-  getPostDetail,
-  getProfile,
   addPost,
   deletePost: removePost,
   getPostEngagement: getEngagement,
