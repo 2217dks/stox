@@ -165,7 +165,6 @@ async function listFollowing(userId) {
 
 async function getFeed({ page = 1, limit = 20 } = {}) {
   const where = { isHidden: false };
-
   const skip = (page - 1) * limit;
 
   const [posts, total] = await Promise.all([
@@ -278,6 +277,26 @@ async function createPost(userId, { content, symbol, metadata }) {
   });
 
   return serializePost(post);
+}
+
+async function deletePost(userId, postId) {
+  await ensureActiveUser(userId);
+
+  const result = await prisma.post.deleteMany({
+    where: {
+      id: postId,
+      authorId: userId,
+    },
+  });
+
+  if (result.count === 0) {
+    throw AppError.notFound("Post not found.", "POST_NOT_FOUND");
+  }
+
+  return {
+    postId,
+    deleted: true,
+  };
 }
 
 function serializePostEngagement(postId, likesCount, likedByViewer) {
@@ -419,6 +438,7 @@ module.exports = {
   getFeed,
   getPublicProfile,
   createPost,
+  deletePost,
   getPostEngagement,
   likePost,
   unlikePost,
