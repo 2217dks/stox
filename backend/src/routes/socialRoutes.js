@@ -6,7 +6,6 @@ const validate = require("../middleware/validation");
 const {
   followParamsSchema,
   postIdParamsSchema,
-  socialProfileParamsSchema,
   postParamsSchema,
   feedQuerySchema,
   createPostSchema,
@@ -21,21 +20,6 @@ router.get(
   authMiddleware,
   validate(feedQuerySchema, "query", "validatedQuery"),
   socialController.listFeed,
-);
-
-router.get(
-  "/users/:userId",
-  authMiddleware,
-  validate(socialProfileParamsSchema, "params"),
-  validate(feedQuerySchema, "query", "validatedQuery"),
-  socialController.getProfile,
-);
-
-router.get(
-  "/posts/:postId",
-  authMiddleware,
-  validate(postIdParamsSchema, "params"),
-  socialController.getPostDetail,
 );
 
 router.post(
