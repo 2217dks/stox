@@ -150,6 +150,9 @@ async function getFriendsLeaderboard(
       {
         totalValue: "desc",
       },
+      {
+        userId: "asc",
+      },
     ],
   });
 

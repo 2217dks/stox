@@ -180,4 +180,34 @@ describe("Leaderboard integration API", () => {
     expect(leaderboard[0].userId).toBe(user1Id);
     expect(leaderboard[0].rank).toBe(1);
   });
+
+  test("uses user ID as a deterministic tie-breaker for equal friends", async () => {
+    await prisma.leaderboardEntry.updateMany({
+      where: {
+        scope: "GLOBAL",
+        period: "MONTHLY",
+        snapshotDate,
+        userId: {
+          in: [user1Id, user2Id],
+        },
+      },
+      data: {
+        returnPct: "5.25",
+        totalValue: "10525",
+      },
+    });
+
+    const response = await request(app)
+      .get("/api/v1/leaderboard/friends?period=MONTHLY")
+      .set("Authorization", `Bearer ${user1AccessToken}`);
+
+    expect(response.status).toBe(200);
+
+    const leaderboard = response.body.data.leaderboard;
+
+    const expectedOrder = [user1Id, user2Id].sort((a, b) => a.localeCompare(b));
+
+    expect(leaderboard.map((entry) => entry.userId)).toEqual(expectedOrder);
+    expect(leaderboard.map((entry) => entry.rank)).toEqual([1, 2]);
+  });
 });
