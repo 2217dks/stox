@@ -125,6 +125,27 @@ async function getPortfolioHoldings(req, res, next) {
   }
 }
 
+async function getPortfolioSummary(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+
+    const portfolio = await portfolioService.getPortfolioSummary(
+      userId,
+      portfolioId,
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        portfolio,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getCashBalance(req, res, next) {
   try {
     const userId = req.user.userId;
@@ -152,4 +173,5 @@ module.exports = {
   deletePortfolio,
   getPortfolioHoldings,
   getCashBalance,
+  getPortfolioSummary,
 };
