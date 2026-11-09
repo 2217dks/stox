@@ -113,9 +113,10 @@ model User {
   refreshTokens RefreshToken[]
 
   // Social
-  following Follow[] @relation("UserFollowing")
-  followers Follow[] @relation("UserFollowers")
+  following Follow[]   @relation("UserFollowing")
+  followers Follow[]   @relation("UserFollowers")
   posts     Post[]
+  postLikes PostLike[]
 
   // Engagement
   alerts             Alert[]
@@ -408,6 +409,22 @@ model Alert {
 // LEADERBOARD ENTRY
 // ============================================================
 
+model LeaderboardSnapshot {
+  id String @id @default(uuid())
+
+  scope  LeaderboardScope
+  period LeaderboardPeriod
+
+  snapshotDate DateTime @db.Date
+
+  createdAt DateTime @default(now())
+
+  entries LeaderboardEntry[]
+
+  @@unique([scope, period, snapshotDate])
+  @@index([scope, period, snapshotDate])
+}
+
 model LeaderboardEntry {
   id String @id @default(uuid())
 
@@ -426,8 +443,13 @@ model LeaderboardEntry {
 
   createdAt DateTime @default(now())
 
+  snapshotId String
+
+  snapshot LeaderboardSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
   @@unique([scope, period, snapshotDate, userId])
   @@index([scope, period, snapshotDate, rank])
+  @@index([snapshotId])
 }
 
 // ============================================================
@@ -447,11 +469,30 @@ model Post {
 
   isHidden Boolean @default(false)
 
+  likes PostLike[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([authorId, createdAt])
   @@index([createdAt])
+}
+
+// A user can like each post at most once. Other engagement types are not part
+// of the current social API contract.
+model PostLike {
+  id String @id @default(uuid())
+
+  postId String
+  userId String
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([postId, userId])
+  @@index([userId, createdAt])
 }
 
 // ============================================================
