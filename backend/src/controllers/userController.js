@@ -1,6 +1,7 @@
+const { getUserStatistics } = require("../services/userStatisticsService");
 const {
-  getUserStatistics,
-} = require("../services/userStatisticsService");
+  getPublicProfile: getPublicSocialProfile,
+} = require("../services/socialService");
 
 /**
  * GET /api/v1/users/me/statistics
@@ -25,6 +26,22 @@ async function getMyStatistics(req, res, next) {
   }
 }
 
+async function getPublicProfile(req, res, next) {
+  try {
+    const user = await getPublicSocialProfile(req.params.id, req.user?.userId);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        user,
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   getMyStatistics,
+  getPublicProfile,
 };

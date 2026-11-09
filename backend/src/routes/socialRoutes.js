@@ -7,6 +7,7 @@ const {
   followParamsSchema,
   postIdParamsSchema,
   socialProfileParamsSchema,
+  postParamsSchema,
   feedQuerySchema,
   createPostSchema,
 } = require("../validators/socialValidator");
@@ -70,6 +71,13 @@ router.delete(
   authMiddleware,
   validate(postIdParamsSchema, "params"),
   socialController.unlikePost,
+);
+
+router.get(
+  "/posts/:postId",
+  authMiddleware,
+  validate(postParamsSchema, "params"),
+  socialController.getPost,
 );
 
 router.get("/followers", authMiddleware, socialController.getFollowers);

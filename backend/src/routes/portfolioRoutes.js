@@ -50,4 +50,11 @@ router.get(
   portfolioController.getCashBalance,
 );
 
+router.get(
+  "/:portfolioId/summary",
+  authMiddleware,
+  validate(portfolioIdParamsSchema, "params", "validatedParams"),
+  portfolioController.getPortfolioSummary,
+);
+
 module.exports = router;

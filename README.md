@@ -445,6 +445,7 @@ Earn Achievements
 | [CACHING.md](docs/CACHING.md)                 | Redis caching architecture      |
 | [NOTIFICATIONS.md](docs/NOTIFICATIONS.md)     | Notification pipeline           |
 | [MARKET_DATA.md](docs/MARKET_DATA.md)         | Market-data architecture        |
+| [MARKET_DATA_SERVICE.md](docs/MARKET_DATA_SERVICE.md) | Backend market-data service contract |
 | [SECURITY.md](docs/SECURITY.md)               | Security architecture           |
 | [FRONTEND.md](docs/FRONTEND.md)               | Frontend architecture           |
 | [SETUP.md](docs/SETUP.md)                     | Project setup                   |

@@ -1,3 +1,5 @@
+const { Prisma } = require("@prisma/client");
+
 const prisma = require("../config/database");
 const { AppError } = require("../utils/errors");
 
@@ -286,6 +288,61 @@ async function listPortfolioHoldings(userId, portfolioId) {
   }));
 }
 
+/**
+ * Portfolio summary for a single, caller-owned portfolio.
+ *
+ * Reuses the shared ownership check and serializer so the summary can never
+ * expose another user's portfolio and always matches the portfolio shape used
+ * by the list/create endpoints.
+ *
+ * Phase 1 has no market prices, so `holdingsValue` is the invested cost basis
+ * of the open positions (the sum of Holding.totalInvested) rather than a live
+ * market valuation. `totalValue` is cash plus that invested value. Market
+ * valuation, returns and P&L live in the Phase 2 analytics endpoints.
+ */
+async function getPortfolioSummary(userId, portfolioId) {
+  await ensureActiveUser(userId);
+
+  const portfolio = await prisma.portfolio.findFirst({
+    where: {
+      id: portfolioId,
+      userId,
+    },
+  });
+
+  if (!portfolio) {
+    throw createServiceError(
+      "Portfolio not found.",
+      404,
+      "PORTFOLIO_NOT_FOUND",
+    );
+  }
+
+  const holdingsAggregate = await prisma.holding.aggregate({
+    where: {
+      portfolioId: portfolio.id,
+    },
+    _count: true,
+    _sum: {
+      totalInvested: true,
+    },
+  });
+
+  // An empty aggregate sums to null; keep the value a Decimal so the
+  // cash + holdings addition stays precise.
+  const holdingsValue =
+    holdingsAggregate._sum.totalInvested ?? new Prisma.Decimal(0);
+
+  const totalValue = portfolio.cashBalance.plus(holdingsValue);
+
+  return {
+    ...serializePortfolio(portfolio),
+    holdingsValue: holdingsValue.toString(),
+    totalValue: totalValue.toString(),
+    holdingsCount: holdingsAggregate._count,
+  };
+}
+
 async function getPortfolioCashBalance(userId, portfolioId) {
   await ensureActiveUser(userId);
 
@@ -322,4 +379,5 @@ module.exports = {
   deactivatePortfolio,
   listPortfolioHoldings,
   getPortfolioCashBalance,
+  getPortfolioSummary,
 };

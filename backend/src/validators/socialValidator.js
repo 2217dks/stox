@@ -8,8 +8,8 @@ const postIdParamsSchema = z.object({
   postId: z.string().uuid("Invalid post ID."),
 });
 
-const socialProfileParamsSchema = z.object({
-  userId: z.string().uuid("Invalid user ID."),
+const postParamsSchema = z.object({
+  postId: z.string().uuid("Invalid post ID."),
 });
 
 const feedQuerySchema = z.object({
@@ -39,7 +39,7 @@ const createPostSchema = z.object({
 module.exports = {
   followParamsSchema,
   postIdParamsSchema,
-  socialProfileParamsSchema,
+  postParamsSchema,
   feedQuerySchema,
   createPostSchema,
 };
