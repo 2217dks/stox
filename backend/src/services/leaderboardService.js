@@ -40,17 +40,10 @@ function emptyPage(page, limit) {
 // A leaderboard is a snapshot: read the most recent snapshotDate that has
 // entries for the requested scope + period instead of mixing days together.
 async function resolveSnapshotDate(scope, period) {
-  const latest = await prisma.leaderboardEntry.findFirst({
-    where: {
-      scope,
-      period,
-    },
-    orderBy: {
-      snapshotDate: "desc",
-    },
-    select: {
-      snapshotDate: true,
-    },
+  const latest = await prisma.leaderboardSnapshot.findFirst({
+    where: { scope, period },
+    orderBy: { snapshotDate: "desc" },
+    select: { snapshotDate: true },
   });
 
   return latest?.snapshotDate ?? null;
@@ -366,6 +359,22 @@ async function generateLeaderboardSnapshots({ date = new Date() } = {}) {
         snapshotDate,
       }));
 
+      const snapshot = await transaction.leaderboardSnapshot.upsert({
+        where: {
+          scope_period_snapshotDate: {
+            scope: "GLOBAL",
+            period,
+            snapshotDate,
+          },
+        },
+        create: {
+          scope: "GLOBAL",
+          period,
+          snapshotDate,
+        },
+        update: {},
+      });
+
       await transaction.leaderboardEntry.deleteMany({
         where: {
           scope: "GLOBAL",
@@ -375,7 +384,12 @@ async function generateLeaderboardSnapshots({ date = new Date() } = {}) {
       });
 
       if (data.length > 0) {
-        await transaction.leaderboardEntry.createMany({ data });
+        await transaction.leaderboardEntry.createMany({
+          data: data.map((entry) => ({
+            ...entry,
+            snapshotId: snapshot.id,
+          })),
+        });
       }
 
       results.push({ period, entries: data.length });

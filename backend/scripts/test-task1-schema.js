@@ -16,7 +16,7 @@
 //   7. proves an enum value is enforced by the PostgreSQL enum
 //   8. removes everything it created
 //
-// Run from the backend/ directory:  node scripts/test-task1-schema.js
+// Run from the backend/ directory: node scripts/test-task1-schema.js
 
 const prisma = require("../src/config/database");
 
@@ -36,13 +36,14 @@ async function main() {
   const emailB = `task1-b-${suffix}@stox.test`;
   const testSymbol = `TASK1${suffix}${process.pid}`;
 
-  // Same calendar day for both leaderboard entries so the (scope, period,
-  // snapshotDate, userId) unique constraint is the only thing that can fail.
+  // Same calendar day for both leaderboard entries so the
+  // (scope, period, snapshotDate, userId) unique constraint is tested.
   const snapshotDate = new Date("2026-10-01T00:00:00.000Z");
 
   let userA;
   let userB;
   let testSymbolId;
+  let leaderboardSnapshotId;
 
   try {
     // ----------------------------------------------------------
@@ -108,9 +109,21 @@ async function main() {
       },
     });
 
+    // Create the snapshot header before creating its entries.
+    const leaderboardSnapshot = await prisma.leaderboardSnapshot.create({
+      data: {
+        scope: "GLOBAL",
+        period: "MONTHLY",
+        snapshotDate,
+      },
+    });
+
+    leaderboardSnapshotId = leaderboardSnapshot.id;
+
     await prisma.leaderboardEntry.create({
       data: {
         userId: userA.id,
+        snapshotId: leaderboardSnapshotId,
         scope: "GLOBAL",
         period: "MONTHLY",
         rank: 1,
@@ -156,7 +169,7 @@ async function main() {
     try {
       await prisma.follow.create({
         data: {
-          followerId: userA.id, // same pair again -> must fail
+          followerId: userA.id,
           followingId: userB.id,
         },
       });
@@ -223,7 +236,8 @@ async function main() {
       await prisma.leaderboardEntry.create({
         data: {
           userId: userA.id,
-          scope: "GLOBAL", // same (scope, period, snapshotDate, userId)
+          snapshotId: leaderboardSnapshotId,
+          scope: "GLOBAL",
           period: "MONTHLY",
           rank: 2,
           totalValue: "1",
@@ -244,8 +258,6 @@ async function main() {
 
     // ----------------------------------------------------------
     // 7. Enum validation
-    //    `type` is a real PostgreSQL enum, so the database rejects
-    //    values outside the NotificationType set.
     // ----------------------------------------------------------
 
     let enumRejected = false;
@@ -273,7 +285,6 @@ async function main() {
 
     // ----------------------------------------------------------
     // 3. Cascade deletion
-    //    Removing the owning user must remove every owned Task 1 row.
     // ----------------------------------------------------------
 
     await prisma.user.delete({ where: { id: userA.id } });
@@ -312,6 +323,16 @@ async function main() {
 
     if (userB) {
       await prisma.user.delete({ where: { id: userB.id } }).catch(() => {});
+    }
+
+    // Snapshot headers are not owned by users, so delete explicitly.
+    // This also cascades to any remaining entries linked to this snapshot.
+    if (leaderboardSnapshotId) {
+      await prisma.leaderboardSnapshot
+        .deleteMany({
+          where: { id: leaderboardSnapshotId },
+        })
+        .catch(() => {});
     }
 
     if (testSymbolId) {

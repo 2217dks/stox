@@ -12,6 +12,8 @@ const buildUser = (index) => ({
 });
 
 let snapshotDate;
+let snapshotId;
+let emptySnapshotId;
 
 let user1Id;
 let user2Id;
@@ -38,7 +40,7 @@ beforeAll(async () => {
   user2Id = registrations[1].user.id;
   user3Id = registrations[2].user.id;
 
-  const latestSnapshot = await prisma.leaderboardEntry.findFirst({
+  const latestSnapshot = await prisma.leaderboardSnapshot.findFirst({
     where: {
       scope: "GLOBAL",
       period: "MONTHLY",
@@ -61,10 +63,21 @@ beforeAll(async () => {
     ),
   );
 
+  const snapshot = await prisma.leaderboardSnapshot.create({
+    data: {
+      scope: "GLOBAL",
+      period: "MONTHLY",
+      snapshotDate,
+    },
+  });
+
+  snapshotId = snapshot.id;
+
   await prisma.leaderboardEntry.createMany({
     data: [
       {
         userId: user1Id,
+        snapshotId,
         scope: "GLOBAL",
         period: "MONTHLY",
         rank: 1,
@@ -74,6 +87,7 @@ beforeAll(async () => {
       },
       {
         userId: user2Id,
+        snapshotId,
         scope: "GLOBAL",
         period: "MONTHLY",
         rank: 2,
@@ -83,6 +97,7 @@ beforeAll(async () => {
       },
       {
         userId: user3Id,
+        snapshotId,
         scope: "GLOBAL",
         period: "MONTHLY",
         rank: 3,
@@ -103,6 +118,18 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (emptySnapshotId) {
+    await prisma.leaderboardSnapshot.deleteMany({
+      where: { id: emptySnapshotId },
+    });
+  }
+
+  if (snapshotId) {
+    await prisma.leaderboardSnapshot.deleteMany({
+      where: { id: snapshotId },
+    });
+  }
+
   await prisma.user.deleteMany({
     where: {
       id: {
@@ -209,5 +236,29 @@ describe("Leaderboard integration API", () => {
 
     expect(leaderboard.map((entry) => entry.userId)).toEqual(expectedOrder);
     expect(leaderboard.map((entry) => entry.rank)).toEqual([1, 2]);
+  });
+
+  test("returns an empty board when the latest snapshot has no entries", async () => {
+    const emptySnapshotDate = new Date(snapshotDate);
+    emptySnapshotDate.setUTCDate(emptySnapshotDate.getUTCDate() + 1);
+
+    const emptySnapshot = await prisma.leaderboardSnapshot.create({
+      data: {
+        scope: "GLOBAL",
+        period: "MONTHLY",
+        snapshotDate: emptySnapshotDate,
+      },
+    });
+
+    emptySnapshotId = emptySnapshot.id;
+
+    const response = await request(app)
+      .get("/api/v1/leaderboard?period=MONTHLY")
+      .set("Authorization", `Bearer ${user1AccessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.leaderboard).toHaveLength(0);
+    expect(response.body.data.pagination.total).toBe(0);
   });
 });

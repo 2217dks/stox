@@ -408,6 +408,22 @@ model Alert {
 // LEADERBOARD ENTRY
 // ============================================================
 
+model LeaderboardSnapshot {
+  id String @id @default(uuid())
+
+  scope  LeaderboardScope
+  period LeaderboardPeriod
+
+  snapshotDate DateTime @db.Date
+
+  createdAt DateTime @default(now())
+
+  entries LeaderboardEntry[]
+
+  @@unique([scope, period, snapshotDate])
+  @@index([scope, period, snapshotDate])
+}
+
 model LeaderboardEntry {
   id String @id @default(uuid())
 
@@ -426,8 +442,13 @@ model LeaderboardEntry {
 
   createdAt DateTime @default(now())
 
+  snapshotId String
+
+  snapshot LeaderboardSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Cascade)
+
   @@unique([scope, period, snapshotDate, userId])
   @@index([scope, period, snapshotDate, rank])
+  @@index([snapshotId])
 }
 
 // ============================================================
