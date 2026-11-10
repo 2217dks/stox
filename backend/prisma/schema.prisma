@@ -248,6 +248,12 @@ model Order {
   executedAt DateTime?
   expiresAt  DateTime?
 
+  // Worker retry accounting. A transient quote/execution failure increments
+  // `executionAttempts`; once it reaches the configured limit the order is
+  // rejected so a permanently failing row cannot monopolise the queue.
+  executionAttempts      Int       @default(0)
+  lastExecutionAttemptAt DateTime?
+
   notes String?
 
   source OrderSource @default(MANUAL)

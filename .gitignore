@@ -145,3 +145,10 @@ docker-compose.override.yml
 .stylelintcache
 .temp/
 .tmp/
+
+# ═══════════════════════════════════════════════════════════════
+# LOCAL AGENT INSTRUCTIONS
+# ═══════════════════════════════════════════════════════════════
+# Root agent guide is local-only. The leading slash keeps
+# frontend/AGENTS.md (tracked project documentation) unaffected.
+/AGENTS.md
