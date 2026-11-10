@@ -4,6 +4,7 @@ const { Prisma } = require("@prisma/client");
 
 const prisma = require("../config/database");
 const { createOrderExecutedNotification } = require("./notificationEvents");
+const { publishExecutionEvents } = require("../realtime/orderEvents");
 const { AppError } = require("../utils/errors");
 const logger = require("../utils/logger");
 
@@ -549,6 +550,10 @@ async function executeOrder(orderOrId, price) {
       error: error.message,
     });
   }
+
+  // Realtime fan-out is best-effort and runs after the commit. Awaited here so
+  // the worker's next pass observes a consistent event order.
+  await publishExecutionEvents({ trade, order: executedOrder });
 
   return trade;
 }
