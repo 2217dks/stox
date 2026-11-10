@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const { isExecutableAssetType } = require("../utils/assetSupport");
 const { AppError } = require("../utils/errors");
 
 async function ensureActiveUser(userId) {
@@ -282,6 +283,15 @@ async function createOrder({
   await ensureActiveUser(userId);
 
   await getOwnedActivePortfolio(userId, portfolioId);
+
+  // Reject unsupported classes before the row exists. Letting one through
+  // would create a PENDING order the worker can never quote or execute.
+  if (!isExecutableAssetType(assetType)) {
+    throw AppError.badRequest(
+      `Orders are not supported for the ${assetType} asset class.`,
+      "UNSUPPORTED_ASSET_TYPE",
+    );
+  }
 
   const normalizedSymbol = symbol.trim().toUpperCase();
 

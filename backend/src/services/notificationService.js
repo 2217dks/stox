@@ -1,5 +1,6 @@
 const prisma = require("../config/database");
 const { AppError } = require("../utils/errors");
+const { createOrderExecutedNotification } = require("./notificationEvents");
 
 async function ensureActiveUser(userId) {
   const user = await prisma.user.findUnique({
@@ -35,7 +36,10 @@ function serializeNotification(notification) {
   };
 }
 
-async function listNotifications(userId, { page = 1, limit = 20, isRead } = {}) {
+async function listNotifications(
+  userId,
+  { page = 1, limit = 20, isRead } = {},
+) {
   await ensureActiveUser(userId);
 
   const where = { userId };
@@ -126,4 +130,5 @@ module.exports = {
   listNotifications,
   markNotificationRead,
   markAllNotificationsRead,
+  createOrderExecutedNotification,
 };
