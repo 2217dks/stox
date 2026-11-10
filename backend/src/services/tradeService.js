@@ -453,6 +453,31 @@ async function executeOrder(orderOrId, price) {
         throw AppError.notFound("Order not found.", "ORDER_NOT_FOUND");
       }
 
+      // Lock the portfolio before changing the order or financial state.
+      // A concurrent deactivatePortfolio() update must wait until this
+      // transaction commits or rolls back.
+      const portfolios = await tx.$queryRaw`
+        SELECT "id", "isActive"
+        FROM "Portfolio"
+        WHERE "id" = ${order.portfolioId}
+        FOR UPDATE
+      `;
+
+      const portfolio = portfolios[0];
+
+      if (!portfolio) {
+        throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+      }
+
+      // Leave the order PENDING when the portfolio was already deactivated.
+      // ORDER_NOT_EXECUTABLE is already treated as a worker skip.
+      if (!portfolio.isActive) {
+        throw AppError.badRequest(
+          "Order is not executable.",
+          "ORDER_NOT_EXECUTABLE",
+        );
+      }
+
       const executedAt = new Date();
 
       const transition = await tx.order.updateMany({
@@ -480,11 +505,6 @@ async function executeOrder(orderOrId, price) {
       let realizedPnl = null;
       let realizedPnlPct = null;
 
-      // Both helpers read and write the holding in the same statement, so no
-      // stale holding snapshot exists between them. The portfolio's cash row is
-      // only touched afterwards, which gives every execution the same lock
-      // order (holding -> portfolio) and avoids deadlocks between buys and
-      // sells on the same symbol.
       if (order.side === "BUY") {
         await applyBuy(tx, order, quantity, executionPrice, totalValue);
       } else if (order.side === "SELL") {
@@ -517,8 +537,6 @@ async function executeOrder(orderOrId, price) {
     },
   );
 
-  // Notification delivery is a post-commit side effect: it must never undo a
-  // committed trade. Failures are logged and left for the delivery pipeline.
   try {
     await createOrderExecutedNotification({
       userId: executedOrder.portfolio.userId,
