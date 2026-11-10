@@ -30,6 +30,20 @@ stox uses **Socket.IO** for real-time communication between the server and clien
 
 ---
 
+## 📌 Implementation status
+
+| Area | Status |
+| --- | --- |
+| Socket.IO server attached to the HTTP server | Implemented (`createSocketServer`) |
+| Authenticated handshake | Implemented (`src/sockets/auth.js`) |
+| `/market` namespace + subscription rooms | Implemented (`src/sockets/marketRooms.js`) |
+| `/trading` namespace + portfolio rooms | Implemented (`src/sockets/tradingNamespace.js`) |
+| `/notifications` namespace | Planned |
+| `/social` namespace | Planned |
+| Redis adapter / horizontal scaling | Planned |
+
+---
+
 ## 🏠 Namespaces & Rooms
 
 ### Namespaces
@@ -78,6 +92,9 @@ socket.join(`portfolio:${portfolioId}`);
 | `orderbook-update` | Server → Client | `{ symbol, bids, asks }`                       |
 | `trade-tape`       | Server → Client | `{ symbol, price, quantity, side, timestamp }` |
 
+> `price-update` is implemented. `orderbook-update` and `trade-tape` need the
+> Binance depth/trade streams and are not emitted yet.
+
 ### `/trading` Namespace
 
 | Event              | Direction       | Payload                                |
@@ -95,7 +112,63 @@ socket.join(`portfolio:${portfolioId}`);
 
 ---
 
+## 🔐 Socket contract (implemented)
+
+### Handshake
+
+- `/trading` requires a valid access token, sent as `io("/trading", { auth: { token } })`
+  or as `Authorization: Bearer <token>`.
+- `/market` is public; anonymous clients may connect.
+- Failures arrive as `connect_error` with `err.data.code`: `UNAUTHORIZED` (no
+  credentials), `INVALID_AUTH_HEADER` (malformed header), or
+  `INVALID_ACCESS_TOKEN` (invalid or expired token).
+
+### Acknowledgements
+
+Client events accept an optional ack callback. The result is always an object:
+
+```javascript
+socket.emit("join:portfolio", { portfolioId }, (result) => {
+    // success: { ok: true, portfolioId }
+    // failure: { ok: false, code: "PORTFOLIO_NOT_FOUND", message }
+});
+```
+
+### Payloads
+
+| Namespace | Event                        | Payload                                     |
+| --------- | ---------------------------- | ------------------------------------------- |
+| `/market` | `subscribe` / `unsubscribe`  | `{ symbol }` (a bare string is also accepted) |
+| `/trading`| `join:portfolio` / `leave:portfolio` | `{ portfolioId }` (UUID)             |
+
+### Symbol and room normalisation
+
+Symbols are trimmed and uppercased. The provider prefix is preserved, so
+`BINANCE:BTCUSDT` subscribes to `stock:BINANCE:BTCUSDT` (matching the examples
+above), while `btcusdt` becomes `stock:BTCUSDT`. Rooms are `stock:{SYMBOL}` and
+`portfolio:{portfolioId}`. Price events carry the symbol the client subscribed
+with, not the provider's spelling of it.
+
+### Authorisation and lifecycle
+
+- `join:portfolio` verifies ownership through `portfolioService`; a foreign or
+  missing portfolio returns the same `PORTFOLIO_NOT_FOUND` so existence is not
+  leaked.
+- `leave:portfolio` is idempotent and needs no ownership lookup.
+- `subscribe` joins the room, fetches a quote immediately, and starts one shared
+  poll per symbol. Later subscribers receive the cached quote right away.
+- The last subscriber leaving (or disconnecting) stops the upstream poll; a
+  disconnect releases every subscription the socket held.
+
+---
+
 ## 📡 Market Data Service
+
+> **Phase 2 status:** upstream streaming is not implemented yet. The namespace
+> polls `marketDataService.getQuote` through a `priceSource` seam, caches each
+> update with the existing 5-second price TTL, and will swap the polling
+> implementation for the streaming client below without changing the namespace
+> or room contract.
 
 ```javascript
 // services/marketDataService.js
@@ -311,6 +384,13 @@ export default MarketDataService;
 ---
 
 ## 🖥️ Socket.IO Server Setup
+
+> **Implementation note (Phase 2):** the backend is CommonJS, so the ESM sketch
+> below is illustrative only. The implemented entrypoint is
+> `createSocketServer(httpServer)` in `backend/src/sockets/index.js`;
+> `backend/src/server.js` creates the `http.Server`, attaches Socket.IO, and
+> closes both on `SIGINT`/`SIGTERM`. Event names, room names, and payloads below
+> remain the contract.
 
 ```javascript
 // sockets/index.js
