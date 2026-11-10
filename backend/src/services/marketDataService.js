@@ -388,4 +388,6 @@ function createMarketDataService({ config, providers } = {}) {
 
 module.exports = {
   createMarketDataService,
+  normalizeAssetClass,
+  normalizeSymbol,
 };
