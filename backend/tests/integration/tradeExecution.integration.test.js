@@ -24,7 +24,10 @@ async function resetPortfolio(cashBalance = "10000") {
   await prisma.holding.deleteMany({ where: { portfolioId } });
   await prisma.portfolio.update({
     where: { id: portfolioId },
-    data: { cashBalance },
+    data: {
+      cashBalance,
+      isActive: true,
+    },
   });
 }
 
@@ -707,7 +710,9 @@ describe("executeOrder: state transition safety", () => {
 
     expect(fulfilled).toHaveLength(1);
     expect(rejected).toHaveLength(1);
-    expect(rejected[0].reason).toMatchObject({ code: "ORDER_NOT_EXECUTABLE" });
+    expect(rejected[0].reason).toMatchObject({
+      code: "ORDER_NOT_EXECUTABLE",
+    });
 
     const [storedOrder, trades, holding, portfolio] = await Promise.all([
       prisma.order.findUnique({ where: { id: order.id } }),
@@ -736,6 +741,36 @@ describe("executeOrder: state transition safety", () => {
     await expect(tradeService.executeOrder(order, "0")).rejects.toMatchObject({
       code: "INVALID_EXECUTION_PRICE",
     });
+  });
+
+  test("does not execute an order for a deactivated portfolio", async () => {
+    const order = await createOrder({ quantity: "2" });
+
+    await prisma.portfolio.update({
+      where: { id: portfolioId },
+      data: { isActive: false },
+    });
+
+    await expect(tradeService.executeOrder(order, "100")).rejects.toMatchObject(
+      {
+        code: "ORDER_NOT_EXECUTABLE",
+      },
+    );
+
+    const [storedOrder, tradeCount, holdingCount, portfolio] =
+      await Promise.all([
+        prisma.order.findUnique({ where: { id: order.id } }),
+        prisma.trade.count({ where: { orderId: order.id } }),
+        prisma.holding.count({ where: { portfolioId } }),
+        prisma.portfolio.findUnique({ where: { id: portfolioId } }),
+      ]);
+
+    expect(storedOrder.status).toBe("PENDING");
+    expect(storedOrder.executedPrice).toBeNull();
+    expect(storedOrder.executedAt).toBeNull();
+    expect(tradeCount).toBe(0);
+    expect(holdingCount).toBe(0);
+    expect(portfolio.cashBalance.toString()).toBe("10000");
   });
 });
 
