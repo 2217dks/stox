@@ -27,11 +27,7 @@ describe("cacheService", () => {
     test("sets a JSON value with the requested TTL", async () => {
       const value = { symbol: "AAPL", price: "250.10" };
 
-      const result = await cacheService.set(
-        "stox:v1:test:key",
-        value,
-        30,
-      );
+      const result = await cacheService.set("stox:v1:test:key", value, 30);
 
       expect(result).toBe(true);
       expect(fakeRedis.set).toHaveBeenCalledWith(
@@ -43,16 +39,12 @@ describe("cacheService", () => {
     });
 
     test("returns and parses a cached JSON value", async () => {
-      fakeRedis.get.mockResolvedValue(
-        JSON.stringify({ price: "250.10" }),
-      );
+      fakeRedis.get.mockResolvedValue(JSON.stringify({ price: "250.10" }));
 
       const result = await cacheService.get("stox:v1:test:key");
 
       expect(result).toEqual({ price: "250.10" });
-      expect(fakeRedis.incr).toHaveBeenCalledWith(
-        "stox:v1:metrics:cache:hits",
-      );
+      expect(fakeRedis.incr).toHaveBeenCalledWith("stox:v1:metrics:cache:hits");
     });
 
     test("returns null and records a miss when the key is absent", async () => {
@@ -115,9 +107,7 @@ describe("cacheService", () => {
     });
 
     test("does not call the loader on a cache hit", async () => {
-      fakeRedis.get.mockResolvedValue(
-        JSON.stringify({ id: "portfolio-1" }),
-      );
+      fakeRedis.get.mockResolvedValue(JSON.stringify({ id: "portfolio-1" }));
 
       const loader = jest.fn();
 
@@ -165,9 +155,7 @@ describe("cacheService", () => {
         price: "250.10",
       });
 
-      expect(fakeRedis.get).toHaveBeenCalledWith(
-        "stox:v1:price:STOCK:AAPL",
-      );
+      expect(fakeRedis.get).toHaveBeenCalledWith("stox:v1:price:STOCK:AAPL");
     });
 
     test("stores a price using the price TTL", async () => {
@@ -191,21 +179,65 @@ describe("cacheService", () => {
     test("invalidates a portfolio summary", async () => {
       fakeRedis.del.mockResolvedValue(1);
 
-      const result =
-        await cacheService.invalidatePortfolio("portfolio-1");
+      const result = await cacheService.invalidatePortfolio("portfolio-1");
 
       expect(result).toBe(1);
       expect(fakeRedis.del).toHaveBeenCalledWith(
         "stox:v1:portfolio:summary:portfolio-1",
       );
     });
+
+    test("loads and caches a quote on a cache miss", async () => {
+      fakeRedis.get.mockResolvedValue(null);
+
+      const loader = jest.fn().mockResolvedValue({
+        symbol: "AAPL",
+        assetClass: "STOCK",
+        price: "250.10",
+      });
+
+      const result = await cacheService.getOrSetPrice("STOCK", "aapl", loader);
+
+      expect(result).toEqual({
+        symbol: "AAPL",
+        assetClass: "STOCK",
+        price: "250.10",
+      });
+
+      expect(loader).toHaveBeenCalledTimes(1);
+      expect(fakeRedis.set).toHaveBeenCalledWith(
+        "stox:v1:price:STOCK:AAPL",
+        JSON.stringify({
+          symbol: "AAPL",
+          assetClass: "STOCK",
+          price: "250.10",
+        }),
+        "EX",
+        cacheService.TTL_SECONDS.price,
+      );
+    });
+
+    test("does not call the quote loader on a cache hit", async () => {
+      fakeRedis.get.mockResolvedValue(
+        JSON.stringify({
+          symbol: "AAPL",
+          assetClass: "STOCK",
+          price: "250.10",
+        }),
+      );
+
+      const loader = jest.fn();
+
+      const result = await cacheService.getOrSetPrice("STOCK", "AAPL", loader);
+
+      expect(result.price).toBe("250.10");
+      expect(loader).not.toHaveBeenCalled();
+    });
   });
 
   describe("metrics", () => {
     test("returns hit, miss, total, and hit-rate metrics", async () => {
-      fakeRedis.get
-        .mockResolvedValueOnce("8")
-        .mockResolvedValueOnce("2");
+      fakeRedis.get.mockResolvedValueOnce("8").mockResolvedValueOnce("2");
 
       const result = await cacheService.getMetrics();
 
@@ -218,9 +250,7 @@ describe("cacheService", () => {
     });
 
     test("returns zero metrics when no requests have been recorded", async () => {
-      fakeRedis.get
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce(null);
+      fakeRedis.get.mockResolvedValueOnce(null).mockResolvedValueOnce(null);
 
       const result = await cacheService.getMetrics();
 
@@ -237,9 +267,7 @@ describe("cacheService", () => {
     test("fails open when Redis cannot be reached", async () => {
       getRedis.mockRejectedValue(new Error("Redis is offline"));
 
-      await expect(
-        cacheService.get("stox:v1:test:key"),
-      ).resolves.toBeNull();
+      await expect(cacheService.get("stox:v1:test:key")).resolves.toBeNull();
 
       await expect(
         cacheService.set("stox:v1:test:key", { value: 1 }, 30),
