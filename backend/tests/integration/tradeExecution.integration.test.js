@@ -1,6 +1,7 @@
 const { Prisma } = require("@prisma/client");
 
 const prisma = require("../../src/config/database");
+const orderService = require("../../src/services/orderService");
 const tradeService = require("../../src/services/tradeService");
 
 // Contract tests for the order-execution write path.
@@ -302,6 +303,246 @@ describe("executeOrder: SELL", () => {
   });
 });
 
+describe("executeOrder: concurrent holding updates", () => {
+  test("two concurrent BUYs against one holding apply both contributions", async () => {
+    // Regression: applyBuy used to calculate absolute totals from a holding
+    // read before the transaction's write. Two orders could both read the
+    // same snapshot and the last writer silently discarded the other fill.
+    await createHolding({
+      quantity: "2",
+      averageBuyPrice: "100",
+      totalInvested: "200",
+    });
+    await resetPortfolioCash("10000");
+
+    const first = await createOrder({
+      quantity: "3",
+      createdAt: new Date(Date.now() - 1000),
+    });
+    const second = await createOrder({
+      quantity: "4",
+      createdAt: new Date(),
+    });
+
+    const results = await Promise.allSettled([
+      tradeService.executeOrder(first, "100"),
+      tradeService.executeOrder(second, "150"),
+    ]);
+
+    expect(results.map((result) => result.status)).toEqual([
+      "fulfilled",
+      "fulfilled",
+    ]);
+
+    const [holding, portfolio, trades] = await Promise.all([
+      prisma.holding.findUnique({
+        where: { portfolioId_symbol: { portfolioId, symbol: "AAPL" } },
+      }),
+      prisma.portfolio.findUnique({ where: { id: portfolioId } }),
+      prisma.trade.findMany({ where: { portfolioId } }),
+    ]);
+
+    // 2 + 3 + 4 shares, 200 + 300 + 600 invested, 10000 - 900 cash.
+    expect(holding.quantity.toString()).toBe("9");
+    expect(holding.totalInvested.toString()).toBe("1100");
+    expect(holding.averageBuyPrice.toNumber()).toBeCloseTo(1100 / 9, 6);
+    expect(portfolio.cashBalance.toString()).toBe("9100");
+    expect(trades).toHaveLength(2);
+    expect(
+      trades
+        .reduce(
+          (total, trade) => total.plus(trade.totalValue),
+          new Prisma.Decimal(0),
+        )
+        .toString(),
+    ).toBe("900");
+  });
+
+  test("two concurrent BUYs without an existing holding create it once without losing a fill", async () => {
+    // The holding row is created by the same statement that merges into an
+    // existing row, so the insert race between two first-time buys is covered
+    // by the unique (portfolioId, symbol) constraint.
+    await resetPortfolioCash("10000");
+
+    const first = await createOrder({
+      quantity: "3",
+      createdAt: new Date(Date.now() - 1000),
+    });
+    const second = await createOrder({
+      quantity: "4",
+      createdAt: new Date(),
+    });
+
+    const results = await Promise.allSettled([
+      tradeService.executeOrder(first, "100"),
+      tradeService.executeOrder(second, "150"),
+    ]);
+
+    expect(results.every((result) => result.status === "fulfilled")).toBe(true);
+
+    const [holding, portfolio, trades] = await Promise.all([
+      prisma.holding.findUnique({
+        where: { portfolioId_symbol: { portfolioId, symbol: "AAPL" } },
+      }),
+      prisma.portfolio.findUnique({ where: { id: portfolioId } }),
+      prisma.trade.findMany({ where: { portfolioId } }),
+    ]);
+
+    expect(holding.quantity.toString()).toBe("7");
+    expect(holding.totalInvested.toString()).toBe("900");
+    expect(holding.averageBuyPrice.toNumber()).toBeCloseTo(900 / 7, 6);
+    expect(portfolio.cashBalance.toString()).toBe("9100");
+    expect(trades).toHaveLength(2);
+  });
+
+  test("two concurrent SELLs apply both fills against the same cost basis", async () => {
+    await createHolding({
+      quantity: "10",
+      averageBuyPrice: "100",
+      totalInvested: "1000",
+    });
+    await resetPortfolioCash("9000");
+
+    const first = await createOrder({
+      side: "SELL",
+      quantity: "4",
+      createdAt: new Date(Date.now() - 1000),
+    });
+    const second = await createOrder({
+      side: "SELL",
+      quantity: "4",
+      createdAt: new Date(),
+    });
+
+    const results = await Promise.allSettled([
+      tradeService.executeOrder(first, "120"),
+      tradeService.executeOrder(second, "120"),
+    ]);
+
+    expect(results.every((result) => result.status === "fulfilled")).toBe(true);
+
+    const [holding, portfolio, trades] = await Promise.all([
+      prisma.holding.findUnique({
+        where: { portfolioId_symbol: { portfolioId, symbol: "AAPL" } },
+      }),
+      prisma.portfolio.findUnique({ where: { id: portfolioId } }),
+      prisma.trade.findMany({ where: { portfolioId } }),
+    ]);
+
+    expect(holding.quantity.toString()).toBe("2");
+    expect(holding.totalInvested.toString()).toBe("200");
+    expect(holding.averageBuyPrice.toString()).toBe("100");
+    expect(portfolio.cashBalance.toString()).toBe("9960");
+    expect(trades).toHaveLength(2);
+
+    for (const trade of trades) {
+      expect(trade.realizedPnl.toString()).toBe("80");
+      expect(trade.realizedPnlPct.toString()).toBe("20");
+    }
+  });
+
+  test("a concurrent BUY that loses the cash race rolls back its holding contribution", async () => {
+    await resetPortfolioCash("500");
+
+    const first = await createOrder({
+      quantity: "3",
+      createdAt: new Date(Date.now() - 1000),
+    });
+    const second = await createOrder({
+      quantity: "4",
+      createdAt: new Date(),
+    });
+
+    // 300 + 400 cannot both fit in 500 cash.
+    const results = await Promise.allSettled([
+      tradeService.executeOrder(first, "100"),
+      tradeService.executeOrder(second, "100"),
+    ]);
+
+    const fulfilled = results.filter((result) => result.status === "fulfilled");
+    const rejected = results.filter((result) => result.status === "rejected");
+
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0].reason).toMatchObject({ code: "INSUFFICIENT_BALANCE" });
+
+    const [holding, portfolio, trades] = await Promise.all([
+      prisma.holding.findUnique({
+        where: { portfolioId_symbol: { portfolioId, symbol: "AAPL" } },
+      }),
+      prisma.portfolio.findUnique({ where: { id: portfolioId } }),
+      prisma.trade.findMany({ where: { portfolioId } }),
+    ]);
+
+    // Only the winner's contribution survives: 3 shares / 300 invested with
+    // 200 cash left, or 4 shares / 400 invested with 100 cash left.
+    expect(trades).toHaveLength(1);
+    expect(["3", "4"]).toContain(holding.quantity.toString());
+    expect(["300", "400"]).toContain(holding.totalInvested.toString());
+    expect(["200", "100"]).toContain(portfolio.cashBalance.toString());
+  });
+
+  test("a concurrent BUY and SELL keep quantity, cash, and cost basis consistent", async () => {
+    // With different prices the serialization order changes the weighted
+    // average, so the assertion allows both valid outcomes while proving that
+    // neither fill is lost and every field stays mutually consistent.
+    await createHolding({
+      quantity: "10",
+      averageBuyPrice: "100",
+      totalInvested: "1000",
+    });
+    await resetPortfolioCash("9000");
+
+    const buy = await createOrder({
+      quantity: "5",
+      createdAt: new Date(Date.now() - 1000),
+    });
+    const sell = await createOrder({
+      side: "SELL",
+      quantity: "4",
+      createdAt: new Date(),
+    });
+
+    const results = await Promise.allSettled([
+      tradeService.executeOrder(buy, "200"),
+      tradeService.executeOrder(sell, "200"),
+    ]);
+
+    expect(results.every((result) => result.status === "fulfilled")).toBe(true);
+
+    const [holding, portfolio, trades] = await Promise.all([
+      prisma.holding.findUnique({
+        where: { portfolioId_symbol: { portfolioId, symbol: "AAPL" } },
+      }),
+      prisma.portfolio.findUnique({ where: { id: portfolioId } }),
+      prisma.trade.findMany({ where: { portfolioId } }),
+    ]);
+
+    expect(holding.quantity.toString()).toBe("11");
+    // 9000 - 1000 (buy) + 800 (sell).
+    expect(portfolio.cashBalance.toString()).toBe("8800");
+    expect(trades).toHaveLength(2);
+
+    const sellTrade = trades.find((trade) => trade.side === "SELL");
+    const totalInvested = holding.totalInvested.toNumber();
+
+    // The stored average must always describe the stored cost basis.
+    expect(holding.averageBuyPrice.toNumber()).toBeCloseTo(
+      totalInvested / 11,
+      6,
+    );
+
+    // Sell-first: average stays 100 -> 1600 invested, 400 realized P&L.
+    // Buy-first: average becomes 133.33.. -> 1466.66.. invested, 266.66.. P&L.
+    if (Math.abs(totalInvested - 1600) < 0.001) {
+      expect(sellTrade.realizedPnl.toNumber()).toBeCloseTo(400, 6);
+    } else {
+      expect(totalInvested).toBeCloseTo(1466.66666667, 6);
+      expect(sellTrade.realizedPnl.toNumber()).toBeCloseTo(266.66666667, 6);
+    }
+  });
+});
+
 describe("executeOrder: state transition safety", () => {
   test("rejects an order that is not pending and never creates a second trade", async () => {
     const order = await createOrder({ status: "CANCELLED" });
@@ -362,6 +603,26 @@ describe("executeOrder: state transition safety", () => {
     await expect(tradeService.executeOrder(order, "0")).rejects.toMatchObject({
       code: "INVALID_EXECUTION_PRICE",
     });
+  });
+});
+
+describe("order placement: executable asset types", () => {
+  test("rejects a FOREX order before it can enter the pending queue", async () => {
+    // Market data is only wired for STOCK and CRYPTO. Accepting a FOREX order
+    // would leave a permanently unquotable PENDING row in the worker's queue.
+    await expect(
+      orderService.createOrder({
+        userId,
+        portfolioId,
+        symbol: "EURUSD",
+        assetType: "FOREX",
+        side: "BUY",
+        type: "MARKET",
+        quantity: "1",
+      }),
+    ).rejects.toMatchObject({ code: "UNSUPPORTED_ASSET_TYPE" });
+
+    expect(await prisma.order.count({ where: { portfolioId } })).toBe(0);
   });
 });
 
