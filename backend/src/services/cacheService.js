@@ -93,6 +93,14 @@ async function setPrice(assetClass, symbol, value) {
   );
 }
 
+async function getOrSetPrice(assetClass, symbol, loader) {
+  return getOrSet(
+    cacheKeys.price(assetClass, symbol),
+    loader,
+    TTL_SECONDS.price,
+  );
+}
+
 async function getPortfolioSummary(portfolioId) {
   return get(cacheKeys.portfolioSummary(portfolioId));
 }
@@ -190,4 +198,5 @@ module.exports = {
   getHistoricalPrices,
   setHistoricalPrices,
   getMetrics,
+  getOrSetPrice
 };
