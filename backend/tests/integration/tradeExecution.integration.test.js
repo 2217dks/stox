@@ -303,6 +303,139 @@ describe("executeOrder: SELL", () => {
   });
 });
 
+describe("executeOrder: cost-basis precision", () => {
+  test("a full close removes the exact invested amount despite a rounded average price", async () => {
+    // 3.02 / 3 = 1.00666666..., stored as 1.00666667 at Decimal(18,8).
+    // Multiplying the stored average back by 3 would subtract 3.02000001.
+    await createHolding({
+      quantity: "3",
+      averageBuyPrice: "1.00666667",
+      totalInvested: "3.02",
+    });
+    await resetPortfolioCash("0");
+
+    const order = await createOrder({ side: "SELL", quantity: "3" });
+    const trade = await tradeService.executeOrder(order, "1.5");
+
+    const [holding, portfolio] = await Promise.all([
+      prisma.holding.findUnique({
+        where: { portfolioId_symbol: { portfolioId, symbol: "AAPL" } },
+      }),
+      prisma.portfolio.findUnique({ where: { id: portfolioId } }),
+    ]);
+
+    expect(holding.quantity.toString()).toBe("0");
+    expect(holding.totalInvested.toString()).toBe("0");
+    expect(holding.averageBuyPrice.toString()).toBe("1.00666667");
+    expect(portfolio.cashBalance.toString()).toBe("4.5");
+
+    // The trade and the holding must use the same removed cost basis:
+    // proceeds (4.5) - realized P&L (1.48) = 3.02.
+    expect(trade.totalValue.toString()).toBe("4.5");
+    expect(trade.realizedPnl.toString()).toBe("1.48");
+    expect(trade.totalValue.minus(trade.realizedPnl).toString()).toBe("3.02");
+  });
+
+  test("partial sales followed by a full close remove exactly the original invested amount", async () => {
+    await createHolding({
+      quantity: "3",
+      averageBuyPrice: "1.00666667",
+      totalInvested: "3.02",
+    });
+    await resetPortfolioCash("0");
+
+    const firstOrder = await createOrder({
+      side: "SELL",
+      quantity: "1",
+      createdAt: new Date(Date.now() - 1000),
+    });
+    const secondOrder = await createOrder({
+      side: "SELL",
+      quantity: "2",
+      createdAt: new Date(),
+    });
+
+    const firstTrade = await tradeService.executeOrder(firstOrder, "1.5");
+
+    let holding = await prisma.holding.findUnique({
+      where: { portfolioId_symbol: { portfolioId, symbol: "AAPL" } },
+    });
+
+    expect(holding.quantity.toString()).toBe("2");
+    // 3.02 - round(3.02 * 1 / 3, 8) = 2.01333333.
+    expect(holding.totalInvested.toString()).toBe("2.01333333");
+    expect(firstTrade.totalValue.toString()).toBe("1.5");
+    expect(firstTrade.realizedPnl.toString()).toBe("0.49333333");
+
+    const secondTrade = await tradeService.executeOrder(secondOrder, "1.5");
+
+    holding = await prisma.holding.findUnique({
+      where: { portfolioId_symbol: { portfolioId, symbol: "AAPL" } },
+    });
+
+    expect(holding.quantity.toString()).toBe("0");
+    expect(holding.totalInvested.toString()).toBe("0");
+    expect(secondTrade.totalValue.toString()).toBe("3");
+    expect(secondTrade.realizedPnl.toString()).toBe("0.98666667");
+
+    // Derive each removed basis from its trade and prove they add back to the
+    // original 3.02 with no residual.
+    const removedFirst = firstTrade.totalValue.minus(firstTrade.realizedPnl);
+    const removedSecond = secondTrade.totalValue.minus(secondTrade.realizedPnl);
+
+    expect(removedFirst.toString()).toBe("1.00666667");
+    expect(removedSecond.toString()).toBe("2.01333333");
+    expect(removedFirst.plus(removedSecond).toString()).toBe("3.02");
+
+    const proceeds = firstTrade.totalValue.plus(secondTrade.totalValue);
+    const realized = firstTrade.realizedPnl.plus(secondTrade.realizedPnl);
+    expect(proceeds.minus(realized).toString()).toBe("3.02");
+  });
+
+  test("repeated partial sells never leave a negative or residual cost basis", async () => {
+    // 10 / 7 = 1.42857142..., stored as 1.42857143. Selling one share at a
+    // time must remove exactly 10 in total without ever going negative.
+    await createHolding({
+      quantity: "7",
+      averageBuyPrice: "1.42857143",
+      totalInvested: "10",
+    });
+    await resetPortfolioCash("0");
+
+    let previousTotalInvested = new Prisma.Decimal("10");
+    let removedTotal = new Prisma.Decimal(0);
+
+    for (let remaining = 7; remaining > 0; remaining -= 1) {
+      const order = await createOrder({ side: "SELL", quantity: "1" });
+      const trade = await tradeService.executeOrder(order, "2");
+
+      const holding = await prisma.holding.findUnique({
+        where: { portfolioId_symbol: { portfolioId, symbol: "AAPL" } },
+      });
+
+      expect(holding.quantity.toString()).toBe(String(remaining - 1));
+      expect(holding.totalInvested.gte(0)).toBe(true);
+
+      const removedCostBasis = trade.totalValue.minus(trade.realizedPnl);
+      removedTotal = removedTotal.plus(removedCostBasis);
+
+      // The amount removed plus the new remainder is exactly the previous
+      // invested amount, at the column's 8 decimal places.
+      expect(holding.totalInvested.plus(removedCostBasis).toString()).toBe(
+        previousTotalInvested.toString(),
+      );
+
+      previousTotalInvested = holding.totalInvested;
+    }
+
+    expect(previousTotalInvested.toString()).toBe("0");
+    expect(removedTotal.toString()).toBe("10");
+
+    const trades = await prisma.trade.findMany({ where: { portfolioId } });
+    expect(trades).toHaveLength(7);
+  });
+});
+
 describe("executeOrder: concurrent holding updates", () => {
   test("two concurrent BUYs against one holding apply both contributions", async () => {
     // Regression: applyBuy used to calculate absolute totals from a holding

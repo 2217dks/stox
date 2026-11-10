@@ -10,6 +10,11 @@ const logger = require("../utils/logger");
 const ZERO = new Prisma.Decimal(0);
 const ONE_HUNDRED = new Prisma.Decimal(100);
 
+// Matches the Decimal(18, 8) columns in prisma/schema.prisma. The sell path
+// rounds the remaining invested amount once, at this scale, so the removed
+// basis and the stored remainder always add back to the previous total.
+const MONEY_SCALE = 8;
+
 const SERIALIZED_TRADE_FIELDS = {
   id: true,
   portfolioId: true,
@@ -26,6 +31,10 @@ const SERIALIZED_TRADE_FIELDS = {
   executedAt: true,
 };
 
+function serializeNullableDecimal(value) {
+  return value === null || value === undefined ? null : value.toString();
+}
+
 // Mirrors serializeOrder: Decimal columns leave Prisma as Decimal objects,
 // so the API contract serializes them as strings to preserve precision.
 function serializeTrade(trade) {
@@ -40,10 +49,10 @@ function serializeTrade(trade) {
     price: trade.price.toString(),
     totalValue: trade.totalValue.toString(),
     fees: trade.fees.toString(),
-    realizedPnl: trade.realizedPnl ? trade.realizedPnl.toString() : null,
-    realizedPnlPct: trade.realizedPnlPct
-      ? trade.realizedPnlPct.toString()
-      : null,
+    // Zero is a valid P&L (a sell at cost), so check for null explicitly
+    // instead of relying on a Decimal object's truthiness.
+    realizedPnl: serializeNullableDecimal(trade.realizedPnl),
+    realizedPnlPct: serializeNullableDecimal(trade.realizedPnlPct),
     executedAt: trade.executedAt,
   };
 }
@@ -325,36 +334,65 @@ async function applyBuy(tx, order, quantity, price, totalValue) {
   }
 }
 
-async function applySell(tx, order, quantity, price, totalValue) {
-  // One conditional statement locks the holding row and computes both the
-  // remaining quantity and the removed cost basis from the row's CURRENT
-  // average price. This keeps a concurrent buy from changing the average
-  // between a read and a write, and makes two concurrent sells evaluate
-  // `quantity >= sold` against the latest committed row.
-  const updatedHoldings = await tx.$queryRaw`
-    UPDATE "Holding"
-    SET
-      "quantity" = "Holding"."quantity" - ${quantity},
-      "totalInvested" =
-        "Holding"."totalInvested"
-        - ("Holding"."averageBuyPrice" * ${quantity}),
-      "updatedAt" = now()
+async function applySell(tx, order, quantity, totalValue) {
+  // Lock the holding and read its current quantity and invested amount.
+  //
+  // The removed cost basis is proportional to `totalInvested`, not derived
+  // from the stored average price: `averageBuyPrice` is Decimal(18,8), so a
+  // repeating weighted average is rounded on write. Multiplying it back by
+  // the quantity can overshoot the invested amount and leave a negative
+  // residual (3.02 / 3 stored as 1.00666667 subtracts 3.02000001 on a full
+  // close). The division runs in PostgreSQL numeric, and the remainder is
+  // rounded once at the column scale here rather than in JS.
+  const holdings = await tx.$queryRaw`
+    SELECT
+      "id",
+      "quantity",
+      "totalInvested",
+      ROUND(
+        "totalInvested"
+          - (("totalInvested" * ${quantity}) / "quantity"),
+        ${MONEY_SCALE}
+      ) AS "newTotalInvested"
+    FROM "Holding"
     WHERE "portfolioId" = ${order.portfolioId}
       AND "symbol" = ${order.symbol}
       AND "quantity" >= ${quantity}
-    RETURNING "averageBuyPrice"
+    FOR UPDATE
   `;
 
-  if (updatedHoldings.length === 0) {
+  if (holdings.length === 0) {
     throw AppError.badRequest(
       "Insufficient position to sell.",
       "INSUFFICIENT_POSITION",
     );
   }
 
-  const averageBuyPrice = new Prisma.Decimal(
-    updatedHoldings[0].averageBuyPrice,
-  );
+  const holding = holdings[0];
+  const currentQuantity = new Prisma.Decimal(holding.quantity);
+  const currentTotalInvested = new Prisma.Decimal(holding.totalInvested);
+  const isFullClose = currentQuantity.equals(quantity);
+
+  const newQuantity = isFullClose ? ZERO : currentQuantity.minus(quantity);
+  const newTotalInvested = isFullClose
+    ? ZERO
+    : new Prisma.Decimal(holding.newTotalInvested);
+
+  // Rounding the stored remainder at the column scale makes the remainder and
+  // the removed basis add back to the original total exactly. A full close is
+  // forced to zero in the `newTotalInvested` assignment above, so it can never
+  // retain a rounded residual. Realized P&L uses this same removed basis, so
+  // the trade record and the holding can never disagree about what was sold.
+  const removedCostBasis = currentTotalInvested.minus(newTotalInvested);
+  const realizedPnl = totalValue.minus(removedCostBasis);
+
+  await tx.holding.update({
+    where: { id: holding.id },
+    data: {
+      quantity: newQuantity,
+      totalInvested: newTotalInvested,
+    },
+  });
 
   // A sell only credits cash, so an unconditional increment is safe.
   await tx.portfolio.update({
@@ -369,13 +407,10 @@ async function applySell(tx, order, quantity, price, totalValue) {
   // Keep the row at quantity 0 for a full close: the trade history and the
   // original cost basis remain auditable.
   return {
-    realizedPnl: price.minus(averageBuyPrice).times(quantity),
-    realizedPnlPct: averageBuyPrice.isZero()
+    realizedPnl,
+    realizedPnlPct: removedCostBasis.isZero()
       ? null
-      : price
-          .minus(averageBuyPrice)
-          .dividedBy(averageBuyPrice)
-          .times(ONE_HUNDRED),
+      : realizedPnl.dividedBy(removedCostBasis).times(ONE_HUNDRED),
   };
 }
 
@@ -399,93 +434,88 @@ async function executeOrder(orderOrId, price) {
   }
 
   const executionPrice = toExecutionPrice(price);
-  let executedOrder = null;
 
-  const trade = await prisma.$transaction(async (tx) => {
-    const order = await tx.order.findUnique({
-      where: { id: orderId },
-      include: {
-        portfolio: {
-          select: {
-            id: true,
-            userId: true,
+  const { trade, order: executedOrder } = await prisma.$transaction(
+    async (tx) => {
+      const order = await tx.order.findUnique({
+        where: { id: orderId },
+        include: {
+          portfolio: {
+            select: {
+              id: true,
+              userId: true,
+            },
           },
         },
-      },
-    });
+      });
 
-    if (!order) {
-      throw AppError.notFound("Order not found.", "ORDER_NOT_FOUND");
-    }
+      if (!order) {
+        throw AppError.notFound("Order not found.", "ORDER_NOT_FOUND");
+      }
 
-    const executedAt = new Date();
+      const executedAt = new Date();
 
-    const transition = await tx.order.updateMany({
-      where: {
-        id: order.id,
-        status: "PENDING",
-      },
-      data: {
-        status: "EXECUTED",
-        executedPrice: executionPrice,
-        executedAt,
-      },
-    });
+      const transition = await tx.order.updateMany({
+        where: {
+          id: order.id,
+          status: "PENDING",
+        },
+        data: {
+          status: "EXECUTED",
+          executedPrice: executionPrice,
+          executedAt,
+        },
+      });
 
-    if (transition.count === 0) {
-      throw AppError.badRequest(
-        "Order is not executable.",
-        "ORDER_NOT_EXECUTABLE",
-      );
-    }
+      if (transition.count === 0) {
+        throw AppError.badRequest(
+          "Order is not executable.",
+          "ORDER_NOT_EXECUTABLE",
+        );
+      }
 
-    executedOrder = order;
+      const quantity = new Prisma.Decimal(order.quantity);
+      const totalValue = quantity.times(executionPrice);
 
-    const quantity = new Prisma.Decimal(order.quantity);
-    const totalValue = quantity.times(executionPrice);
+      let realizedPnl = null;
+      let realizedPnlPct = null;
 
-    let realizedPnl = null;
-    let realizedPnlPct = null;
+      // Both helpers read and write the holding in the same statement, so no
+      // stale holding snapshot exists between them. The portfolio's cash row is
+      // only touched afterwards, which gives every execution the same lock
+      // order (holding -> portfolio) and avoids deadlocks between buys and
+      // sells on the same symbol.
+      if (order.side === "BUY") {
+        await applyBuy(tx, order, quantity, executionPrice, totalValue);
+      } else if (order.side === "SELL") {
+        const realized = await applySell(tx, order, quantity, totalValue);
 
-    // Both helpers read and write the holding in the same statement, so no
-    // stale holding snapshot exists between them. The portfolio's cash row is
-    // only touched afterwards, which gives every execution the same lock
-    // order (holding -> portfolio) and avoids deadlocks between buys and
-    // sells on the same symbol.
-    if (order.side === "BUY") {
-      await applyBuy(tx, order, quantity, executionPrice, totalValue);
-    } else if (order.side === "SELL") {
-      const realized = await applySell(
-        tx,
-        order,
-        quantity,
-        executionPrice,
-        totalValue,
-      );
+        realizedPnl = realized.realizedPnl;
+        realizedPnlPct = realized.realizedPnlPct;
+      } else {
+        throw AppError.badRequest("Invalid order side.", "INVALID_ORDER");
+      }
 
-      realizedPnl = realized.realizedPnl;
-      realizedPnlPct = realized.realizedPnlPct;
-    } else {
-      throw AppError.badRequest("Invalid order side.", "INVALID_ORDER");
-    }
+      const trade = await tx.trade.create({
+        data: {
+          portfolioId: order.portfolioId,
+          orderId: order.id,
+          symbol: order.symbol,
+          assetType: order.assetType,
+          side: order.side,
+          quantity,
+          price: executionPrice,
+          totalValue,
+          fees: ZERO,
+          realizedPnl,
+          realizedPnlPct,
+          executedAt,
+        },
+      });
 
-    return tx.trade.create({
-      data: {
-        portfolioId: order.portfolioId,
-        orderId: order.id,
-        symbol: order.symbol,
-        assetType: order.assetType,
-        side: order.side,
-        quantity,
-        price: executionPrice,
-        totalValue,
-        fees: ZERO,
-        realizedPnl,
-        realizedPnlPct,
-        executedAt,
-      },
-    });
-  });
+      return { trade, order };
+    },
+  );
 
   // Notification delivery is a post-commit side effect: it must never undo a
   // committed trade. Failures are logged and left for the delivery pipeline.

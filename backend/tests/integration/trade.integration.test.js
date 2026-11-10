@@ -11,9 +11,10 @@ const prisma = require("../../src/config/database");
 // - foreign/missing trades are 404, never 403
 // - exact messages are NOT asserted (copy may change; contract may not).
 //
-// No execution path exists yet, so trade fixtures are inserted directly via
-// Prisma (EXECUTED order + its 1:1 trade), the same way suites clean up
-// through the Prisma client. Cleanup relies on the user cascade
+// These are read-API fixtures: each EXECUTED order and its 1:1 trade is
+// inserted directly via Prisma so the list/detail contract is independent of
+// the worker. The write path itself is covered by
+// tradeExecution.integration.test.js. Cleanup relies on the user cascade
 // (User -> Portfolio -> Order/Trade).
 const timestamp = Date.now();
 
@@ -161,10 +162,12 @@ beforeAll(async () => {
   tradeAaplBuyId = aaplBuy.id;
   tradeAaplSellId = aaplSell.id;
   tradeBtcBuyId = btcBuy.id;
-  tradeBId = (await createTradeFixture(userBId, portfolioBId, {
-    ...fixtureSpecs[1],
-    key: "b-fixture",
-  })).id;
+  tradeBId = (
+    await createTradeFixture(userBId, portfolioBId, {
+      ...fixtureSpecs[1],
+      key: "b-fixture",
+    })
+  ).id;
 });
 
 afterAll(async () => {
@@ -409,7 +412,11 @@ describe("trade history (black-box via GET /trades)", () => {
         query: { from: "2026-10-05", to: "2026-10-04" },
         path: "to",
       },
-      { case: "sort outside allowlist", query: { sort: "price" }, path: "sort" },
+      {
+        case: "sort outside allowlist",
+        query: { sort: "price" },
+        path: "sort",
+      },
       { case: "invalid order", query: { order: "ASC" }, path: "order" },
     ];
 
@@ -465,9 +472,7 @@ describe("trade detail (black-box via GET /trades/:id)", () => {
   });
 
   test("nonexistent trade id is 404 TRADE_NOT_FOUND", async () => {
-    const response = await getTrade(
-      "8b2c1a4e-3f2d-4c5b-9a8e-7d6c5b4a3f2e",
-    );
+    const response = await getTrade("8b2c1a4e-3f2d-4c5b-9a8e-7d6c5b4a3f2e");
 
     expect(response.status).toBe(404);
     expect(response.body.error.code).toBe("TRADE_NOT_FOUND");

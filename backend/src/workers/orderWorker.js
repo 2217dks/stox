@@ -114,6 +114,80 @@ async function recordTransientFailure(orderId, now, maxAttempts) {
 }
 
 /**
+ * Process one pending order and return the summary counter to increment.
+ *
+ * Outcomes: `executed`, `expired`, `rejected`, `retry` (a transient failure
+ * with retry budget left, counted as `failed`), or `skipped`. Keeping this
+ * decision in one place means `processPendingOrders` only owns querying,
+ * batching, and counters.
+ */
+async function processOrder(order, { quoteProvider, now, retryLimit }) {
+  if (order.expiresAt && order.expiresAt <= now) {
+    const expiration = await prisma.order.updateMany({
+      where: {
+        id: order.id,
+        status: "PENDING",
+      },
+      data: {
+        status: "EXPIRED",
+      },
+    });
+
+    return expiration.count > 0 ? "expired" : "skipped";
+  }
+
+  // Portfolios can be deactivated after the order was placed. Skip rather
+  // than execute against a portfolio the owner has closed.
+  if (!order.portfolio || order.portfolio.isActive === false) {
+    return "skipped";
+  }
+
+  // Defence in depth: placement rejects these already, but a legacy or
+  // externally written row must not be retried forever.
+  if (!isExecutableAssetType(order.assetType)) {
+    return (await rejectPendingOrder(order.id)) ? "rejected" : "skipped";
+  }
+
+  let quote;
+
+  try {
+    quote = await quoteProvider.getQuote(order.symbol, {
+      assetClass: order.assetType,
+    });
+  } catch (error) {
+    if (isPermanentProviderError(error)) {
+      return (await rejectPendingOrder(order.id)) ? "rejected" : "skipped";
+    }
+
+    return recordTransientFailure(order.id, now, retryLimit);
+  }
+
+  if (!quote || !evaluateOrder(order, quote.price)) {
+    return "skipped";
+  }
+
+  try {
+    await executeOrder(order, quote.price);
+    return "executed";
+  } catch (error) {
+    if (REJECTION_CODES.has(error.code)) {
+      return (await rejectPendingOrder(order.id)) ? "rejected" : "skipped";
+    }
+
+    // A concurrent worker won the PENDING -> EXECUTED transition, or the
+    // order disappeared. Neither is an error for this pass.
+    if (
+      error.code === "ORDER_NOT_EXECUTABLE" ||
+      error.code === "ORDER_NOT_FOUND"
+    ) {
+      return "skipped";
+    }
+
+    return recordTransientFailure(order.id, now, retryLimit);
+  }
+}
+
+/**
  * One polling pass over pending orders.
  *
  * The processor is deliberately separate from the transport (BullMQ or the
@@ -135,8 +209,14 @@ async function processPendingOrders({
       ? maxAttempts
       : DEFAULT_MAX_ATTEMPTS;
 
+  // Inactive portfolios are filtered before `take`, not after it. Otherwise
+  // their old PENDING rows occupy the oldest slots in every batch and can
+  // permanently starve valid orders belonging to active portfolios.
   const where = {
     status: "PENDING",
+    portfolio: {
+      isActive: true,
+    },
   };
 
   if (portfolioId) {
@@ -167,112 +247,15 @@ async function processPendingOrders({
   };
 
   for (const order of pendingOrders) {
-    if (order.expiresAt && order.expiresAt <= now) {
-      const expiration = await prisma.order.updateMany({
-        where: {
-          id: order.id,
-          status: "PENDING",
-        },
-        data: {
-          status: "EXPIRED",
-        },
-      });
+    const outcome = await processOrder(order, {
+      quoteProvider,
+      now,
+      retryLimit,
+    });
 
-      if (expiration.count > 0) {
-        summary.expired += 1;
-      }
-
-      continue;
-    }
-
-    // Portfolios can be deactivated after an order was placed. Skip rather
-    // than execute against a portfolio the owner has closed.
-    if (!order.portfolio || order.portfolio.isActive === false) {
-      summary.skipped += 1;
-      continue;
-    }
-
-    // Defence in depth: placement rejects these already, but a legacy or
-    // externally written row must not be retried forever.
-    if (!isExecutableAssetType(order.assetType)) {
-      if (await rejectPendingOrder(order.id)) {
-        summary.rejected += 1;
-      } else {
-        summary.skipped += 1;
-      }
-
-      continue;
-    }
-
-    let quote;
-
-    try {
-      quote = await quoteProvider.getQuote(order.symbol, {
-        assetClass: order.assetType,
-      });
-    } catch (error) {
-      if (isPermanentProviderError(error)) {
-        if (await rejectPendingOrder(order.id)) {
-          summary.rejected += 1;
-        } else {
-          summary.skipped += 1;
-        }
-
-        continue;
-      }
-
-      const outcome = await recordTransientFailure(order.id, now, retryLimit);
-
-      if (outcome === "rejected") {
-        summary.rejected += 1;
-      } else if (outcome === "retry") {
-        summary.failed += 1;
-      } else {
-        summary.skipped += 1;
-      }
-
-      continue;
-    }
-
-    if (!quote || !evaluateOrder(order, quote.price)) {
-      summary.skipped += 1;
-      continue;
-    }
-
-    try {
-      await executeOrder(order, quote.price);
-      summary.executed += 1;
-    } catch (error) {
-      if (REJECTION_CODES.has(error.code)) {
-        if (await rejectPendingOrder(order.id)) {
-          summary.rejected += 1;
-        } else {
-          summary.skipped += 1;
-        }
-
-        continue;
-      }
-
-      // A concurrent worker won the PENDING -> EXECUTED transition, or the
-      // order disappeared. Neither is an error for this pass.
-      if (
-        error.code === "ORDER_NOT_EXECUTABLE" ||
-        error.code === "ORDER_NOT_FOUND"
-      ) {
-        summary.skipped += 1;
-        continue;
-      }
-
-      const outcome = await recordTransientFailure(order.id, now, retryLimit);
-
-      if (outcome === "rejected") {
-        summary.rejected += 1;
-      } else if (outcome === "retry") {
-        summary.failed += 1;
-      } else {
-        summary.skipped += 1;
-      }
-    }
+    // `recordTransientFailure` says "retry"; the public summary calls it
+    // "failed".
+    summary[outcome === "retry" ? "failed" : outcome] += 1;
   }
 
   return summary;
@@ -328,8 +311,6 @@ module.exports = {
   DEFAULT_BATCH_SIZE,
   DEFAULT_INTERVAL_MS,
   DEFAULT_MAX_ATTEMPTS,
-  evaluateOrder,
-  executeOrder,
   processPendingOrders,
   startOrderWorker,
 };

@@ -39,11 +39,16 @@ Shipped:
 - Concurrency-safe status transition and overdraw/oversell guards.
 - Atomic holding writes: concurrent buys and sells cannot overwrite each
   other's quantity, cost basis, or realized P&L.
+- Precision-safe cost basis: sells remove `totalInvested × sold / quantity`
+  (rounded once to the column scale), so a full close lands exactly on zero
+  and partial sales add back to the original invested amount.
+- Inactive portfolios are filtered out of the worker's query before the batch
+  limit, so their old orders cannot starve active ones.
 - Unsupported asset classes (`FOREX`) are rejected before entering the queue.
 - Pending-order polling worker (`npm run workers`) with expiry, permanent-error
   rejection, and a bounded retry budget per order.
 - Post-commit in-app `ORDER_EXECUTED` notification.
-- 34 focused tests (7 unit, 27 integration) plus full-suite coverage.
+- 41 focused tests (10 unit, 31 integration) plus full-suite coverage.
 
 Not shipped:
 
@@ -70,6 +75,7 @@ Not shipped:
 | Integration contract tests | `backend/tests/integration/tradeExecution.integration.test.js` |
 | Worker contract tests | `backend/tests/integration/orderWorker.integration.test.js` |
 | Trigger-condition unit tests | `backend/tests/unit/services/tradeExecution.test.js` |
+| Trade serialization unit tests | `backend/tests/unit/services/tradeService.test.js` |
 
 `POST /api/v1/orders` still creates a `PENDING` row and returns immediately.
 It does not enqueue anything and does not execute. Execution happens on the
@@ -88,11 +94,13 @@ Order row (status = PENDING)
      │
      ▼
 orderWorker.processPendingOrders()      every 5s (DEFAULT_INTERVAL_MS)
+     │  query: status = PENDING AND portfolio.isActive = true
+     │  (inactive-portfolio orders never enter the batch or consume `limit`)
      │
      ├── expiresAt <= now ──────────────► status = EXPIRED
      │                                     (provider is never called)
      │
-     ├── portfolio.isActive === false ──► skip (stays PENDING)
+     ├── portfolio deactivated after the query ──► skip (defensive; stays PENDING)
      │
      ├── unsupported asset class ───────► status = REJECTED (no provider call)
      │
@@ -169,9 +177,11 @@ Inside `prisma.$transaction`:
      computes quantity, invested amount, and weighted average from the row's
      **current** values. Concurrent buys and first-time-holding races cannot
      base their totals on the same stale snapshot.
-   - `SELL`: `UPDATE ... WHERE quantity >= sold RETURNING averageBuyPrice`
-     deducts quantity and cost basis from the row's current values. Zero rows
-     matched means `INSUFFICIENT_POSITION`.
+   - `SELL`: `SELECT ... WHERE quantity >= sold FOR UPDATE` locks the row and
+     returns its current `quantity` and `totalInvested`. The removed basis is
+     `totalInvested × sold / quantity`, rounded once to 8 decimal places; a
+     full close uses `totalInvested` itself. Zero rows means
+     `INSUFFICIENT_POSITION`.
 4. **Cash movement** with the balance condition inside the `UPDATE`:
    `updateMany({ where: { id, cashBalance: { gte: totalValue } },
    data: { cashBalance: { decrement: totalValue } } })` for `BUY`.
@@ -236,13 +246,22 @@ the execution path.
 - Requires `holding.quantity >= order.quantity`; otherwise
   `INSUFFICIENT_POSITION`.
 - Cash: `cashBalance += quantity × price`.
-- Holding: `quantity -= quantity`,
-  `totalInvested -= averageBuyPrice × quantity`. `averageBuyPrice` is
-  unchanged, so the remaining cost basis per unit stays correct.
-- Realized P&L:
-  - `realizedPnl = (price − averageBuyPrice) × quantity`
-  - `realizedPnlPct = (price − averageBuyPrice) / averageBuyPrice × 100`
-    (`null` when the average cost is zero)
+- Holding: `quantity -= quantity`, and the removed cost basis is proportional
+  to the **stored total invested**, not the rounded average:
+  - `exactRemaining = totalInvested × (quantity − sold) / quantity`
+  - `newTotalInvested = round(exactRemaining, 8)` (the column scale)
+  - `removedCostBasis = totalInvested − newTotalInvested`
+  - a **full close** sets `quantity = 0` and `totalInvested = 0` explicitly,
+    so a repeating average such as `3.02 / 3 = 1.00666667` cannot leave a
+    `-0.00000001` residual.
+  - `averageBuyPrice` is unchanged.
+- Realized P&L uses the same basis that is actually removed:
+  - `realizedPnl = quantity × price − removedCostBasis`
+  - `realizedPnlPct = realizedPnl / removedCostBasis × 100`
+    (`null` when the removed basis is zero)
+- Because every partial sale stores `totalInvested − removedCostBasis`, the
+  removed amounts from successive sales plus the final remainder add back to
+  the original invested amount exactly at 8 decimal places.
 - A **full close leaves the holding row at `quantity = 0`,
   `totalInvested = 0`** with the original `averageBuyPrice` and the trade
   history intact. The row is not deleted: `portfolioService` computes portfolio
@@ -298,8 +317,11 @@ One polling pass, transport-agnostic. Options:
 | `maxAttempts` | `5` | Transient-failure budget before an order is rejected |
 | `portfolioId` | — | Restrict the pass to one portfolio (tests, admin tooling) |
 
-Query: `status = PENDING`, ordered by `createdAt asc, id asc` for deterministic
-FIFO processing.
+Query: `status = PENDING AND portfolio.isActive = true`, ordered by
+`createdAt asc, id asc` for deterministic FIFO processing. Inactive portfolios
+are excluded **before** `take`, so their old rows never occupy a batch slot.
+The post-fetch `isActive` check remains as a defensive guard for a portfolio
+that is deactivated between the query and the loop body.
 
 Summary counters: `scanned`, `executed`, `skipped`, `expired`, `rejected`,
 `failed`. A per-order failure never aborts the batch — one unavailable symbol
@@ -310,7 +332,8 @@ must not block the rest.
 | Situation | Order status | Counter |
 | --- | --- | --- |
 | `expiresAt <= now` | `EXPIRED` (conditional, so a concurrent cancel wins) | `expired` |
-| Portfolio missing or `isActive === false` | unchanged | `skipped` |
+| Inactive portfolio | excluded from the query, never fetched | not counted |
+| Portfolio deactivated between query and loop | unchanged (defensive) | `skipped` |
 | Unsupported `assetType` (e.g. `FOREX`) | `REJECTED`, provider not called | `rejected` |
 | Provider returns a permanent error (400/404/422, unsupported class, not found) | `REJECTED`, no retry | `rejected` |
 | Provider returns a transient error (timeout, rate limit, 5xx, credentials) | unchanged until the retry cap | `failed` |
@@ -359,6 +382,10 @@ There is **no BullMQ transport**. `src/queues/*.js` and
   `PENDING` row exists. The worker also rejects any legacy `FOREX` row without
   calling a provider. Adding FOREX end to end means adding a provider and
   extending `src/utils/assetSupport.js`.
+- Inactive portfolios are excluded from the worker query, so their orders are
+  not automatically expired by the worker. They stay `PENDING` until the
+  portfolio is reactivated or the owner cancels them; this is the deliberate
+  trade-off that prevents inactive rows from occupying the batch.
 - The worker process is separate from the API process. If it is not running,
   orders never leave `PENDING`.
 
@@ -491,32 +518,37 @@ npx jest --runInBand tests/integration/orderWorker.integration.test.js
 npm test -- --runInBand          # full suite
 ```
 
-Coverage (34 new tests):
+Coverage (41 new tests):
 
-- **Unit (7)** — trigger truth table for every order type and side, inclusive
+- **Unit (10)** — trigger truth table for every order type and side, inclusive
   boundaries, missing trigger prices, `MARKET` at any positive price, Decimal
-  precision.
-- **Execution integration (16)** — buy debit + trade + holding; weighted
+  precision; trade serialization keeps zero realized P&L as `"0"` and buys as
+  `null`.
+- **Execution integration (19)** — buy debit + trade + holding; weighted
   average add-on; overdraw rollback (order stays `PENDING`, cash untouched);
   partial sell with realized P&L; oversell rollback; full close leaves
   quantity 0; non-pending rejection; missing order; invalid price;
   notification payload; two concurrent executions of one order; concurrent
   buys (existing holding and first-time create); concurrent sells; concurrent
-  buy + sell; a buy that loses the cash race; FOREX rejected at placement.
-- **Worker integration (11)** — market fill at the provider quote; unmet limit
+  buy + sell; a buy that loses the cash race; FOREX rejected at placement;
+  full close with a repeating weighted average; partial sale followed by a
+  full close; seven successive partial sells whose removed bases telescope
+  back to the original invested amount.
+- **Worker integration (12)** — market fill at the provider quote; unmet limit
   stays pending then fills at the limit; expiry without a provider call;
   unfundable order becomes `REJECTED`; provider failure leaves `PENDING`;
-  inactive portfolio is skipped; pending FOREX rejected without a provider
-  call; permanent provider error rejected without retry; transient failure
-  increments attempts; retry cap rejects; a poisoned oldest order cannot
-  starve a newer valid order.
+  inactive portfolio is excluded from the batch; an older inactive order
+  cannot block a newer active order with `limit: 1`; pending FOREX rejected
+  without a provider call; permanent provider error rejected without retry;
+  transient failure increments attempts; retry cap rejects; a poisoned oldest
+  order cannot starve a newer valid order.
 
 The worker suites inject a fake quote provider, so no test calls Finnhub or
 Binance. Integration tests use the local PostgreSQL database from
 `backend/.env`, create their own user/portfolio rows, and clean up through the
 user cascade in `afterAll`.
 
-Last verified: `41 suites, 792 tests passed` on the full backend suite.
+Last verified: `42 suites, 799 tests passed` on the full backend suite.
 
 ---
 
