@@ -206,7 +206,7 @@ describe("processPendingOrders", () => {
     expect(storedOrder.status).toBe("PENDING");
   });
 
-  test("skips orders belonging to an inactive portfolio", async () => {
+  test("excludes orders belonging to an inactive portfolio from the batch", async () => {
     await resetPortfolio({ isActive: false });
     const order = await createOrder();
     const quoteProvider = quoteAt("100");
@@ -216,13 +216,80 @@ describe("processPendingOrders", () => {
       portfolioId,
     });
 
-    expect(summary).toMatchObject({ scanned: 1, skipped: 1, executed: 0 });
+    // The portfolio is filtered in the query, so the order is never fetched:
+    // it neither executes nor consumes a slot in `limit`.
+    expect(summary).toMatchObject({
+      scanned: 0,
+      skipped: 0,
+      executed: 0,
+    });
     expect(quoteProvider.getQuote).not.toHaveBeenCalled();
 
     const storedOrder = await prisma.order.findUnique({
       where: { id: order.id },
     });
     expect(storedOrder.status).toBe("PENDING");
+  });
+
+  test("an older inactive-portfolio order cannot block a newer active order with limit 1", async () => {
+    const inactivePortfolio = await prisma.portfolio.create({
+      data: {
+        userId,
+        name: `Inactive Worker Portfolio ${Date.now()}`,
+        startingBalance: "10000",
+        cashBalance: "10000",
+        isActive: false,
+      },
+    });
+
+    try {
+      const inactiveOrder = await prisma.order.create({
+        data: {
+          portfolioId: inactivePortfolio.id,
+          symbol: "AAPL",
+          assetType: "STOCK",
+          side: "BUY",
+          type: "MARKET",
+          status: "PENDING",
+          quantity: "1",
+          // Deliberately older than the active order.
+          createdAt: new Date("2000-01-01T00:00:00.000Z"),
+        },
+      });
+
+      const activeOrder = await createOrder({
+        createdAt: new Date("2000-01-02T00:00:00.000Z"),
+      });
+
+      const quoteProvider = quoteAt("100");
+
+      // No portfolioId restriction: this is the normal worker query.
+      const summary = await processPendingOrders({
+        quoteProvider,
+        limit: 1,
+      });
+
+      expect(summary).toMatchObject({
+        scanned: 1,
+        executed: 1,
+        skipped: 0,
+        failed: 0,
+      });
+      expect(quoteProvider.getQuote).toHaveBeenCalledTimes(1);
+
+      const [storedActive, storedInactive] = await Promise.all([
+        prisma.order.findUnique({ where: { id: activeOrder.id } }),
+        prisma.order.findUnique({ where: { id: inactiveOrder.id } }),
+      ]);
+
+      expect(storedActive.status).toBe("EXECUTED");
+      expect(storedInactive.status).toBe("PENDING");
+      expect(storedInactive.executionAttempts).toBe(0);
+    } finally {
+      await prisma.portfolio
+        .delete({ where: { id: inactivePortfolio.id } })
+        .catch(() => {});
+    }
   });
 
   test("rejects an already-pending FOREX order instead of retrying it forever", async () => {

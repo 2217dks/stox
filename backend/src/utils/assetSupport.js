@@ -13,6 +13,5 @@ function isExecutableAssetType(assetType) {
 }
 
 module.exports = {
-  EXECUTABLE_ASSET_TYPES,
   isExecutableAssetType,
 };
