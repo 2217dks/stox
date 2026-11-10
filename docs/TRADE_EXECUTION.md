@@ -37,9 +37,13 @@ Shipped:
 - Trigger evaluation for `MARKET`, `LIMIT`, `STOP_LOSS`, `TAKE_PROFIT`.
 - Realized P&L on `SELL` (absolute and percentage).
 - Concurrency-safe status transition and overdraw/oversell guards.
-- Pending-order polling worker (`npm run workers`) with expiry and rejection.
+- Atomic holding writes: concurrent buys and sells cannot overwrite each
+  other's quantity, cost basis, or realized P&L.
+- Unsupported asset classes (`FOREX`) are rejected before entering the queue.
+- Pending-order polling worker (`npm run workers`) with expiry, permanent-error
+  rejection, and a bounded retry budget per order.
 - Post-commit in-app `ORDER_EXECUTED` notification.
-- 23 focused tests (7 unit, 16 integration) plus full-suite coverage.
+- 34 focused tests (7 unit, 27 integration) plus full-suite coverage.
 
 Not shipped:
 
@@ -60,6 +64,7 @@ Not shipped:
 | `evaluateOrder`, `executeOrder`, BUY/SELL helpers | `backend/src/services/tradeService.js` |
 | One polling pass + in-process loop | `backend/src/workers/orderWorker.js` |
 | Worker process entrypoint (`npm run workers`) | `backend/src/workers/index.js` |
+| Executable asset-class allowlist | `backend/src/utils/assetSupport.js` |
 | `ORDER_EXECUTED` notification writer | `backend/src/services/notificationEvents.js` |
 | Re-export for API/service consumers | `backend/src/services/notificationService.js` |
 | Integration contract tests | `backend/tests/integration/tradeExecution.integration.test.js` |
@@ -89,8 +94,11 @@ orderWorker.processPendingOrders()      every 5s (DEFAULT_INTERVAL_MS)
      │
      ├── portfolio.isActive === false ──► skip (stays PENDING)
      │
+     ├── unsupported asset class ───────► status = REJECTED (no provider call)
+     │
      ├── getQuote(symbol, { assetClass })
-     │        └── provider error ───────► failed (stays PENDING)
+     │        ├── permanent error ──────► status = REJECTED (no retry)
+     │        └── transient error ──────► attempts += 1 (REJECTED at the cap)
      │
      ├── evaluateOrder(order, price) ───► false → skip (stays PENDING)
      │
@@ -102,15 +110,15 @@ orderWorker.processPendingOrders()      every 5s (DEFAULT_INTERVAL_MS)
           ▼
      BEGIN
        conditional PENDING → EXECUTED
+       atomic holding create / merge / decrement
        cash debit / credit
-       holding create / merge / decrement
        trade.create (totalValue = quantity × price)
      COMMIT
           │
           ├── success ───────────────────► executed
-          ├── INSUFFICIENT_* ────────────► status = REJECTED (no retry)
+          ├── INSUFFICIENT_* / INVALID_ORDER ► status = REJECTED (no retry)
           ├── ORDER_NOT_EXECUTABLE ──────► skipped (another worker won)
-          └── other error ───────────────► failed (stays PENDING)
+          └── other error ───────────────► attempts += 1 (REJECTED at the cap)
           │
           ▼
      ORDER_EXECUTED notification (post-commit, best effort)
@@ -156,16 +164,26 @@ Inside `prisma.$transaction`:
    `updateMany({ where: { id, status: "PENDING" }, data: { status: "EXECUTED",
    executedPrice, executedAt } })`. Zero rows matched means
    `ORDER_NOT_EXECUTABLE` and the transaction aborts.
-3. **Cash movement** with the balance condition inside the `UPDATE`:
+3. **Holding write — one atomic statement per side.**
+   - `BUY`: `INSERT ... ON CONFLICT ("portfolioId", "symbol") DO UPDATE`
+     computes quantity, invested amount, and weighted average from the row's
+     **current** values. Concurrent buys and first-time-holding races cannot
+     base their totals on the same stale snapshot.
+   - `SELL`: `UPDATE ... WHERE quantity >= sold RETURNING averageBuyPrice`
+     deducts quantity and cost basis from the row's current values. Zero rows
+     matched means `INSUFFICIENT_POSITION`.
+4. **Cash movement** with the balance condition inside the `UPDATE`:
    `updateMany({ where: { id, cashBalance: { gte: totalValue } },
    data: { cashBalance: { decrement: totalValue } } })` for `BUY`.
    Zero rows matched means `INSUFFICIENT_BALANCE`.
-4. **Holding update** — create, weighted-average merge, or decrement. `SELL`
-   uses `updateMany({ where: { id, quantity: { gte: quantity } }, ... })`, so a
-   concurrent sell cannot oversell. Zero rows matched means
-   `INSUFFICIENT_POSITION`.
 5. **`trade.create`** with `totalValue = quantity × price`, `fees = 0`, and
    realized P&L for sells.
+
+Holding is written before cash so every execution takes locks in the same
+order (`holding → portfolio`). A `BUY` and a `SELL` on the same symbol
+therefore cannot deadlock against each other. If the cash guard fails after a
+buy's holding write, the whole transaction rolls back and the holding
+contribution disappears with it.
 
 ### Why the conditions live inside the `UPDATE`
 
@@ -176,9 +194,23 @@ lock, so the loser matches zero rows and aborts cleanly. This is why the
 service does not rely on a `findUnique` + `if` guard for the critical
 invariants.
 
-The concurrency test executes the same order twice in parallel and asserts:
-exactly one call fulfils, exactly one rejects with `ORDER_NOT_EXECUTABLE`, one
-trade row exists, and cash/holdings are applied once.
+The same principle applies to the holding. An earlier version read the
+holding into application code, calculated absolute totals, and wrote them
+back. Two buys for the same symbol could both read the same snapshot, both
+debit cash successfully, and the last write silently discarded the other
+fill. The current implementation lets PostgreSQL perform the read and write in
+one statement, so the row lock and the current values are guaranteed to refer
+to the same version.
+
+Concurrency tests cover:
+
+- the same order executed twice (exactly one `EXECUTED`, one trade),
+- two different buys against one holding (both fills survive),
+- two first-time buys with no holding row (the unique constraint resolves the
+  insert race),
+- two sells against one cost basis,
+- a buy and a sell interleaving without losing quantity or cash,
+- a buy that loses the cash race (its holding contribution rolls back).
 
 ---
 
@@ -239,14 +271,16 @@ Thrown as `AppError`, so `src/middleware/errorHandler.js` owns the envelope.
 | `ORDER_NOT_EXECUTABLE` | 400 | Order is not `PENDING` (cancelled, expired, already executed, rejected, or lost a race) |
 | `INSUFFICIENT_BALANCE` | 400 | `cashBalance < quantity × price` on a buy |
 | `INSUFFICIENT_POSITION` | 400 | No holding, or `holding.quantity < quantity` on a sell |
+| `UNSUPPORTED_ASSET_TYPE` | 400 | `POST /orders` asked for an asset class the pipeline cannot price (`FOREX`) |
 | `PORTFOLIO_NOT_FOUND` | 404 | Portfolio row disappeared mid-transaction |
 
 `details` on `INSUFFICIENT_BALANCE` includes `required` and `available` as
 decimal strings.
 
-These codes exist only inside the execution engine and worker today. There is
-no HTTP route that returns them until an execution trigger, modify endpoint, or
-manual execution endpoint is added.
+`UNSUPPORTED_ASSET_TYPE` is returned by `POST /api/v1/orders`. The remaining
+codes exist only inside the execution engine and worker today; no HTTP route
+returns them until an execution trigger, modify endpoint, or manual execution
+endpoint is added.
 
 ---
 
@@ -261,6 +295,7 @@ One polling pass, transport-agnostic. Options:
 | `quoteProvider` | `services/marketData` | Object exposing `getQuote(symbol, { assetClass })` |
 | `now` | `new Date()` | Clock, injectable for expiry tests |
 | `limit` | `100` | Batch size |
+| `maxAttempts` | `5` | Transient-failure budget before an order is rejected |
 | `portfolioId` | — | Restrict the pass to one portfolio (tests, admin tooling) |
 
 Query: `status = PENDING`, ordered by `createdAt asc, id asc` for deterministic
@@ -276,16 +311,24 @@ must not block the rest.
 | --- | --- | --- |
 | `expiresAt <= now` | `EXPIRED` (conditional, so a concurrent cancel wins) | `expired` |
 | Portfolio missing or `isActive === false` | unchanged | `skipped` |
-| Quote provider throws | unchanged | `failed` |
+| Unsupported `assetType` (e.g. `FOREX`) | `REJECTED`, provider not called | `rejected` |
+| Provider returns a permanent error (400/404/422, unsupported class, not found) | `REJECTED`, no retry | `rejected` |
+| Provider returns a transient error (timeout, rate limit, 5xx, credentials) | unchanged until the retry cap | `failed` |
+| Transient failure reaches `maxAttempts` | `REJECTED` | `rejected` |
 | Quote missing or trigger unmet | unchanged | `skipped` |
 | `executeOrder` succeeds | `EXECUTED` | `executed` |
-| `INSUFFICIENT_BALANCE` / `INSUFFICIENT_POSITION` | `REJECTED` | `rejected` |
+| `INSUFFICIENT_*` / `INVALID_ORDER` | `REJECTED`, no retry | `rejected` |
 | `ORDER_NOT_EXECUTABLE` / `ORDER_NOT_FOUND` | unchanged | `skipped` |
-| Anything else | unchanged | `failed` |
+| Anything else | unchanged until the retry cap | `failed` |
 
-Terminal funding failures become `REJECTED` deliberately: retrying an
-unfundable order every 5 seconds forever would only hide the problem. A
-transient provider failure leaves the order `PENDING` so the next pass retries.
+Terminal failures become `REJECTED` deliberately: retrying an unfundable order
+every 5 seconds forever would only hide the problem. Transient failures leave
+the order `PENDING` so the next pass retries, but each attempt increments
+`executionAttempts` (`lastExecutionAttemptAt` records the time). Once the
+budget is spent the order is rejected, so a permanently failing row cannot
+occupy the oldest-first queue and starve newer valid orders. The
+`executionAttempts >= maxAttempts` condition lives in the rejection `UPDATE`,
+so two workers cannot reject an order another one just executed.
 
 ### Running it
 
@@ -311,9 +354,11 @@ There is **no BullMQ transport**. `src/queues/*.js` and
   rejected at execution time.
 - `expiresAt` is compared against the process clock. Expiring an order moves
   it to `EXPIRED`; nothing is refunded because nothing was reserved.
-- `FOREX` orders depend on a configured provider for that asset class. If the
-  provider rejects the request, the order stays `PENDING` and counts as
-  `failed`. Only `STOCK` (Finnhub) and `CRYPTO` (Binance) providers are wired.
+- Only `STOCK` (Finnhub) and `CRYPTO` (Binance) providers are wired. `FOREX`
+  orders are rejected at `POST /orders` with `UNSUPPORTED_ASSET_TYPE`, before a
+  `PENDING` row exists. The worker also rejects any legacy `FOREX` row without
+  calling a provider. Adding FOREX end to end means adding a provider and
+  extending `src/utils/assetSupport.js`.
 - The worker process is separate from the API process. If it is not running,
   orders never leave `PENDING`.
 
@@ -446,27 +491,32 @@ npx jest --runInBand tests/integration/orderWorker.integration.test.js
 npm test -- --runInBand          # full suite
 ```
 
-Coverage (23 new tests):
+Coverage (34 new tests):
 
 - **Unit (7)** — trigger truth table for every order type and side, inclusive
   boundaries, missing trigger prices, `MARKET` at any positive price, Decimal
   precision.
-- **Execution integration (10)** — buy debit + trade + holding; weighted
+- **Execution integration (16)** — buy debit + trade + holding; weighted
   average add-on; overdraw rollback (order stays `PENDING`, cash untouched);
   partial sell with realized P&L; oversell rollback; full close leaves
-  quantity 0; non-pending rejection; two concurrent executions (exactly one
-  wins); missing order; invalid price; notification payload.
-- **Worker integration (6)** — market fill at the provider quote; unmet limit
+  quantity 0; non-pending rejection; missing order; invalid price;
+  notification payload; two concurrent executions of one order; concurrent
+  buys (existing holding and first-time create); concurrent sells; concurrent
+  buy + sell; a buy that loses the cash race; FOREX rejected at placement.
+- **Worker integration (11)** — market fill at the provider quote; unmet limit
   stays pending then fills at the limit; expiry without a provider call;
   unfundable order becomes `REJECTED`; provider failure leaves `PENDING`;
-  inactive portfolio is skipped.
+  inactive portfolio is skipped; pending FOREX rejected without a provider
+  call; permanent provider error rejected without retry; transient failure
+  increments attempts; retry cap rejects; a poisoned oldest order cannot
+  starve a newer valid order.
 
 The worker suites inject a fake quote provider, so no test calls Finnhub or
 Binance. Integration tests use the local PostgreSQL database from
 `backend/.env`, create their own user/portfolio rows, and clean up through the
 user cascade in `afterAll`.
 
-Last verified: `41 suites, 781 tests passed` on the full backend suite.
+Last verified: `41 suites, 792 tests passed` on the full backend suite.
 
 ---
 
@@ -474,7 +524,8 @@ Last verified: `41 suites, 781 tests passed` on the full backend suite.
 
 | Area | Gap | Impact |
 | --- | --- | --- |
-| Queues | `orderQueue`, `notificationQueue`, `alertQueue`, `queues/index.js` are empty | No retries, backoff, job persistence, or dashboard |
+| Queues | `orderQueue`, `notificationQueue`, `alertQueue`, `queues/index.js` are empty | No transport-level retries, backoff, job persistence, or dashboard (the in-process worker has a bounded attempt counter, not a queue) |
+| Asset classes | `FOREX` exists in the enum but has no market-data provider | FOREX orders are rejected at placement; only `STOCK` and `CRYPTO` execute |
 | Transport | In-process `setInterval` instead of BullMQ | Execution stops when the worker process stops; no horizontal scaling |
 | Real-time | No Socket.IO emission on execution | Clients poll instead of receiving pushes |
 | Analytics | No analytics event on execution | Analytics consumers see trades only via database reads |

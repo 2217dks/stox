@@ -224,4 +224,161 @@ describe("processPendingOrders", () => {
     });
     expect(storedOrder.status).toBe("PENDING");
   });
+
+  test("rejects an already-pending FOREX order instead of retrying it forever", async () => {
+    // Defence in depth: new FOREX orders are rejected at placement, but a row
+    // written before that guard (or by another process) must not occupy a
+    // queue slot on every poll.
+    const order = await createOrder({
+      symbol: "EURUSD",
+      assetType: "FOREX",
+    });
+    const quoteProvider = quoteAt("100");
+
+    const summary = await processPendingOrders({
+      quoteProvider,
+      portfolioId,
+    });
+
+    expect(summary).toMatchObject({ scanned: 1, rejected: 1, executed: 0 });
+    expect(quoteProvider.getQuote).not.toHaveBeenCalled();
+
+    const storedOrder = await prisma.order.findUnique({
+      where: { id: order.id },
+    });
+    expect(storedOrder.status).toBe("REJECTED");
+  });
+
+  test("rejects an order immediately when the provider reports a permanent error", async () => {
+    const order = await createOrder();
+    const permanentError = Object.assign(new Error("unsupported symbol"), {
+      statusCode: 404,
+      code: "MARKET_DATA_NOT_FOUND",
+    });
+    const quoteProvider = {
+      getQuote: jest.fn(async () => {
+        throw permanentError;
+      }),
+    };
+
+    const summary = await processPendingOrders({
+      quoteProvider,
+      portfolioId,
+      maxAttempts: 5,
+    });
+
+    expect(summary).toMatchObject({ scanned: 1, rejected: 1, failed: 0 });
+
+    const storedOrder = await prisma.order.findUnique({
+      where: { id: order.id },
+    });
+    expect(storedOrder.status).toBe("REJECTED");
+  });
+
+  test("counts a transient provider failure and keeps the order pending below the retry limit", async () => {
+    const order = await createOrder();
+    const quoteProvider = {
+      getQuote: jest.fn(async () => {
+        throw new Error("provider unavailable");
+      }),
+    };
+
+    const summary = await processPendingOrders({
+      quoteProvider,
+      portfolioId,
+      maxAttempts: 3,
+    });
+
+    expect(summary).toMatchObject({ scanned: 1, failed: 1, rejected: 0 });
+
+    const storedOrder = await prisma.order.findUnique({
+      where: { id: order.id },
+    });
+    expect(storedOrder.status).toBe("PENDING");
+    expect(storedOrder.executionAttempts).toBe(1);
+    expect(storedOrder.lastExecutionAttemptAt).toBeInstanceOf(Date);
+  });
+
+  test("rejects an order after the maximum number of transient failures", async () => {
+    const order = await createOrder();
+    const quoteProvider = {
+      getQuote: jest.fn(async () => {
+        throw new Error("provider unavailable");
+      }),
+    };
+
+    await processPendingOrders({
+      quoteProvider,
+      portfolioId,
+      maxAttempts: 2,
+    });
+    const summary = await processPendingOrders({
+      quoteProvider,
+      portfolioId,
+      maxAttempts: 2,
+    });
+
+    expect(summary).toMatchObject({ scanned: 1, rejected: 1, failed: 0 });
+
+    const storedOrder = await prisma.order.findUnique({
+      where: { id: order.id },
+    });
+    expect(storedOrder.status).toBe("REJECTED");
+    expect(storedOrder.executionAttempts).toBe(2);
+  });
+
+  test("a permanently failing order cannot starve newer valid orders", async () => {
+    // `limit: 1` forces the worker to see only the oldest pending order on
+    // each pass, which is exactly how a poisoned order used to monopolise the
+    // queue. Once the retry budget is spent it must leave the queue so the
+    // newer order can execute.
+    const failingOrder = await createOrder({
+      symbol: "FAIL",
+      createdAt: new Date(Date.now() - 10_000),
+    });
+    const validOrder = await createOrder({
+      createdAt: new Date(Date.now() - 1_000),
+    });
+
+    const quoteProvider = {
+      getQuote: jest.fn(async (symbol) => {
+        if (symbol === "FAIL") {
+          throw new Error("provider unavailable");
+        }
+
+        return { symbol, assetClass: "STOCK", price: "100" };
+      }),
+    };
+
+    const first = await processPendingOrders({
+      quoteProvider,
+      portfolioId,
+      limit: 1,
+      maxAttempts: 2,
+    });
+    const second = await processPendingOrders({
+      quoteProvider,
+      portfolioId,
+      limit: 1,
+      maxAttempts: 2,
+    });
+    const third = await processPendingOrders({
+      quoteProvider,
+      portfolioId,
+      limit: 1,
+      maxAttempts: 2,
+    });
+
+    expect(first).toMatchObject({ scanned: 1, failed: 1 });
+    expect(second).toMatchObject({ scanned: 1, rejected: 1 });
+    expect(third).toMatchObject({ scanned: 1, executed: 1 });
+
+    const [storedFailing, storedValid] = await Promise.all([
+      prisma.order.findUnique({ where: { id: failingOrder.id } }),
+      prisma.order.findUnique({ where: { id: validOrder.id } }),
+    ]);
+
+    expect(storedFailing.status).toBe("REJECTED");
+    expect(storedValid.status).toBe("EXECUTED");
+  });
 });

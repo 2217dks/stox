@@ -1,3 +1,5 @@
+const { randomUUID } = require("crypto");
+
 const { Prisma } = require("@prisma/client");
 
 const prisma = require("../config/database");
@@ -241,9 +243,53 @@ function evaluateOrder(order, currentPrice) {
   }
 }
 
-async function applyBuy(tx, order, holding, quantity, price, totalValue) {
+async function applyBuy(tx, order, quantity, price, totalValue) {
+  // Read-modify-write in one statement. PostgreSQL evaluates every right-hand
+  // side against the row's CURRENT values while holding its row lock, so two
+  // concurrent buys cannot both base their totals on the same stale snapshot.
+  // ON CONFLICT also resolves the first-time race where two transactions try
+  // to insert the same (portfolioId, symbol) holding at once; the loser turns
+  // into an update instead of failing on the unique constraint.
+  await tx.$executeRaw`
+    INSERT INTO "Holding" (
+      "id",
+      "portfolioId",
+      "symbol",
+      "assetType",
+      "quantity",
+      "averageBuyPrice",
+      "totalInvested",
+      "isShort",
+      "createdAt",
+      "updatedAt"
+    )
+    VALUES (
+      ${randomUUID()},
+      ${order.portfolioId},
+      ${order.symbol},
+      ${order.assetType}::"AssetType",
+      ${quantity},
+      ${price},
+      ${totalValue},
+      false,
+      now(),
+      now()
+    )
+    ON CONFLICT ("portfolioId", "symbol") DO UPDATE SET
+      "quantity" = "Holding"."quantity" + EXCLUDED."quantity",
+      "totalInvested" =
+        "Holding"."totalInvested" + EXCLUDED."totalInvested",
+      "averageBuyPrice" =
+        ("Holding"."totalInvested" + EXCLUDED."totalInvested")
+        / ("Holding"."quantity" + EXCLUDED."quantity"),
+      "isShort" = false,
+      "updatedAt" = now()
+  `;
+
   // The cash condition lives in the UPDATE itself, so two concurrent buys
-  // cannot both pass an earlier check and overdraw the portfolio.
+  // cannot both pass an earlier check and overdraw the portfolio. This runs
+  // after the holding write; if it fails, the whole transaction — including
+  // the holding change above — rolls back.
   const cashUpdate = await tx.portfolio.updateMany({
     where: {
       id: order.portfolioId,
@@ -277,76 +323,40 @@ async function applyBuy(tx, order, holding, quantity, price, totalValue) {
       },
     );
   }
-
-  if (!holding) {
-    await tx.holding.create({
-      data: {
-        portfolioId: order.portfolioId,
-        symbol: order.symbol,
-        assetType: order.assetType,
-        quantity,
-        averageBuyPrice: price,
-        totalInvested: totalValue,
-        isShort: false,
-      },
-    });
-
-    return;
-  }
-
-  const newQuantity = new Prisma.Decimal(holding.quantity).plus(quantity);
-  const newTotalInvested = new Prisma.Decimal(holding.totalInvested).plus(
-    totalValue,
-  );
-
-  await tx.holding.update({
-    where: { id: holding.id },
-    data: {
-      quantity: newQuantity,
-      averageBuyPrice: newTotalInvested.dividedBy(newQuantity),
-      totalInvested: newTotalInvested,
-      isShort: false,
-    },
-  });
 }
 
-async function applySell(tx, order, holding, quantity, price, totalValue) {
-  if (!holding || new Prisma.Decimal(holding.quantity).lt(quantity)) {
+async function applySell(tx, order, quantity, price, totalValue) {
+  // One conditional statement locks the holding row and computes both the
+  // remaining quantity and the removed cost basis from the row's CURRENT
+  // average price. This keeps a concurrent buy from changing the average
+  // between a read and a write, and makes two concurrent sells evaluate
+  // `quantity >= sold` against the latest committed row.
+  const updatedHoldings = await tx.$queryRaw`
+    UPDATE "Holding"
+    SET
+      "quantity" = "Holding"."quantity" - ${quantity},
+      "totalInvested" =
+        "Holding"."totalInvested"
+        - ("Holding"."averageBuyPrice" * ${quantity}),
+      "updatedAt" = now()
+    WHERE "portfolioId" = ${order.portfolioId}
+      AND "symbol" = ${order.symbol}
+      AND "quantity" >= ${quantity}
+    RETURNING "averageBuyPrice"
+  `;
+
+  if (updatedHoldings.length === 0) {
     throw AppError.badRequest(
       "Insufficient position to sell.",
       "INSUFFICIENT_POSITION",
     );
   }
 
-  const averageBuyPrice = new Prisma.Decimal(holding.averageBuyPrice);
-  const costBasis = averageBuyPrice.times(quantity);
+  const averageBuyPrice = new Prisma.Decimal(
+    updatedHoldings[0].averageBuyPrice,
+  );
 
-  // Match only a holding whose quantity still covers the sale. This keeps
-  // two concurrent sells from both passing the read-time check above.
-  const holdingUpdate = await tx.holding.updateMany({
-    where: {
-      id: holding.id,
-      quantity: {
-        gte: quantity,
-      },
-    },
-    data: {
-      quantity: {
-        decrement: quantity,
-      },
-      totalInvested: {
-        decrement: costBasis,
-      },
-    },
-  });
-
-  if (holdingUpdate.count === 0) {
-    throw AppError.badRequest(
-      "Insufficient position to sell.",
-      "INSUFFICIENT_POSITION",
-    );
-  }
-
+  // A sell only credits cash, so an unconditional increment is safe.
   await tx.portfolio.update({
     where: { id: order.portfolioId },
     data: {
@@ -433,25 +443,21 @@ async function executeOrder(orderOrId, price) {
 
     const quantity = new Prisma.Decimal(order.quantity);
     const totalValue = quantity.times(executionPrice);
-    const holding = await tx.holding.findUnique({
-      where: {
-        portfolioId_symbol: {
-          portfolioId: order.portfolioId,
-          symbol: order.symbol,
-        },
-      },
-    });
 
     let realizedPnl = null;
     let realizedPnlPct = null;
 
+    // Both helpers read and write the holding in the same statement, so no
+    // stale holding snapshot exists between them. The portfolio's cash row is
+    // only touched afterwards, which gives every execution the same lock
+    // order (holding -> portfolio) and avoids deadlocks between buys and
+    // sells on the same symbol.
     if (order.side === "BUY") {
-      await applyBuy(tx, order, holding, quantity, executionPrice, totalValue);
+      await applyBuy(tx, order, quantity, executionPrice, totalValue);
     } else if (order.side === "SELL") {
       const realized = await applySell(
         tx,
         order,
-        holding,
         quantity,
         executionPrice,
         totalValue,
