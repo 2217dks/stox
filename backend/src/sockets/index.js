@@ -3,10 +3,29 @@ require("dotenv").config();
 const { Server } = require("socket.io");
 
 const logger = require("../utils/logger");
+const marketDataService = require("../services/marketData");
+const {
+  createMarketStream,
+} = require("../services/marketStreamService");
+const {
+  createPollingPriceStream,
+} = require("../services/pollingPriceStream");
 const { registerMarketNamespace } = require("./marketNamespace");
 const { registerTradingNamespace } = require("./tradingNamespace");
 
 const DEFAULT_CORS_ORIGIN = "http://localhost:3000";
+
+/**
+ * WebSocket streaming is the default. `MARKET_STREAM_ENABLED=false` swaps in
+ * the polling fallback, which is useful when the provider stream is blocked.
+ */
+function createDefaultPriceStream() {
+  if (process.env.MARKET_STREAM_ENABLED === "false") {
+    return createPollingPriceStream({ priceSource: marketDataService });
+  }
+
+  return createMarketStream();
+}
 
 /**
  * Turn a comma-separated origin list into the array Socket.IO expects.
@@ -70,9 +89,8 @@ function createSocketServer(httpServer, options = {}) {
   registerTradingNamespace(io);
 
   const marketRooms = registerMarketNamespace(io, {
-    priceSource: options.marketPriceSource,
+    priceStream: options.marketPriceStream || createDefaultPriceStream(),
     cache: options.marketCache,
-    pollIntervalMs: options.marketPollIntervalMs,
   });
 
   logger.info("Socket.IO server attached", {

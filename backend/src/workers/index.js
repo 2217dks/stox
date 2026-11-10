@@ -1,7 +1,12 @@
 require("dotenv").config();
 
 const logger = require("../utils/logger");
+const { configureEventBus } = require("../realtime/eventBus");
+const { createRedisEventBus } = require("../realtime/redisBus");
 const { DEFAULT_INTERVAL_MS, startOrderWorker } = require("./orderWorker");
+
+const eventBus = createRedisEventBus({ withSubscriber: false });
+configureEventBus(eventBus);
 
 const worker = startOrderWorker();
 
@@ -12,7 +17,15 @@ logger.info(
 function shutdown(signal) {
   logger.info(`Order worker stopping (${signal})`);
   worker.stop();
-  process.exit(0);
+
+  eventBus
+    .close()
+    .catch((error) => {
+      logger.warn("Realtime bus shutdown failed", {
+        message: error.message,
+      });
+    })
+    .finally(() => process.exit(0));
 }
 
 process.on("SIGINT", () => shutdown("SIGINT"));
