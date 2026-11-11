@@ -2,6 +2,7 @@ const request = require("supertest");
 
 const app = require("../../src/app");
 const prisma = require("../../src/config/database");
+const cacheService = require("../../src/services/cacheService");
 
 const timestamp = Date.now();
 
@@ -313,6 +314,8 @@ describe("Portfolio integration API", () => {
       },
     });
 
+    await cacheService.invalidatePortfolio(user1TestPortfolioId);
+
     const response = await request(app)
       .get(`/api/v1/portfolios/${user1TestPortfolioId}/summary`)
       .set("Authorization", `Bearer ${user1AccessToken}`);
@@ -382,6 +385,8 @@ describe("Portfolio integration API", () => {
         cashBalance: "0.10000001",
       },
     });
+
+    await cacheService.invalidatePortfolio(user1TestPortfolioId);
 
     const response = await request(app)
       .get(`/api/v1/portfolios/${user1TestPortfolioId}/summary`)
