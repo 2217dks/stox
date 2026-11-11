@@ -187,6 +187,53 @@ describe("cacheService", () => {
       );
     });
 
+    test("loads and caches a portfolio summary on a miss", async () => {
+      fakeRedis.get.mockResolvedValue(null);
+
+      const loader = jest.fn().mockResolvedValue({
+        id: "portfolio-1",
+        cashBalance: "10000",
+        totalValue: "12500",
+      });
+
+      const result = await cacheService.getOrSetPortfolioSummary(
+        "portfolio-1",
+        loader,
+      );
+
+      expect(result.totalValue).toBe("12500");
+      expect(loader).toHaveBeenCalledTimes(1);
+      expect(fakeRedis.set).toHaveBeenCalledWith(
+        "stox:v1:portfolio:summary:portfolio-1",
+        JSON.stringify({
+          id: "portfolio-1",
+          cashBalance: "10000",
+          totalValue: "12500",
+        }),
+        "EX",
+        cacheService.TTL_SECONDS.portfolioSummary,
+      );
+    });
+
+    test("does not load a portfolio summary on a cache hit", async () => {
+      fakeRedis.get.mockResolvedValue(
+        JSON.stringify({
+          id: "portfolio-1",
+          totalValue: "12500",
+        }),
+      );
+
+      const loader = jest.fn();
+
+      const result = await cacheService.getOrSetPortfolioSummary(
+        "portfolio-1",
+        loader,
+      );
+
+      expect(result.totalValue).toBe("12500");
+      expect(loader).not.toHaveBeenCalled();
+    });
+
     test("loads and caches a quote on a cache miss", async () => {
       fakeRedis.get.mockResolvedValue(null);
 
