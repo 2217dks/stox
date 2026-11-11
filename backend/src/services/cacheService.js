@@ -154,6 +154,14 @@ async function getMetrics() {
   );
 }
 
+async function getOrSetPortfolioSummary(portfolioId, loader) {
+  return getOrSet(
+    cacheKeys.portfolioSummary(portfolioId),
+    loader,
+    TTL_SECONDS.portfolioSummary,
+  );
+}
+
 module.exports = {
   TTL_SECONDS,
   get,
@@ -169,4 +177,5 @@ module.exports = {
   setHistoricalPrices,
   getMetrics,
   getOrSetPrice,
+  getOrSetPortfolioSummary
 };

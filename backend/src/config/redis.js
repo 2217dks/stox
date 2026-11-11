@@ -24,9 +24,11 @@ async function getRedis() {
 }
 
 async function disconnectRedis() {
-  if (redis.status !== "end") {
-    await redis.quit();
+  if (redis.status === "wait" || redis.status === "end") {
+    return;
   }
+
+  await redis.quit();
 }
 
 module.exports = {
