@@ -7,6 +7,8 @@ const { createOrderExecutedNotification } = require("./notificationEvents");
 const { AppError } = require("../utils/errors");
 const logger = require("../utils/logger");
 
+const cacheService = require("./cacheService");
+
 const ZERO = new Prisma.Decimal(0);
 const ONE_HUNDRED = new Prisma.Decimal(100);
 
@@ -536,6 +538,8 @@ async function executeOrder(orderOrId, price) {
       return { trade, order };
     },
   );
+
+  await cacheService.invalidatePortfolio(executedOrder.portfolioId);
 
   try {
     await createOrderExecutedNotification({
