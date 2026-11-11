@@ -6,6 +6,20 @@ const { loadCacheConfig } = require("../config/cacheConfig");
 
 const TTL_SECONDS = loadCacheConfig();
 
+const CACHE_PORTFOLIO_SUMMARY_IF_GENERATION_MATCHES = `
+  if redis.call("GET", KEYS[1]) == ARGV[1] then
+    redis.call("SET", KEYS[2], ARGV[2], "EX", ARGV[3])
+    return 1
+  end
+
+  return 0
+`;
+
+const INVALIDATE_PORTFOLIO_SUMMARY = `
+  redis.call("INCR", KEYS[1])
+  return redis.call("DEL", KEYS[2])
+`;
+
 async function safe(operation, fallback) {
   try {
     const redis = await getRedis();
@@ -39,6 +53,45 @@ async function set(key, value, ttlSeconds) {
     await redis.set(key, JSON.stringify(value), "EX", ttlSeconds);
 
     return true;
+  }, false);
+}
+
+async function getPortfolioSummaryGeneration(portfolioId) {
+  const generationKey = cacheKeys.portfolioSummaryGeneration(portfolioId);
+
+  return safe(async (redis) => {
+    let generation = await redis.get(generationKey);
+
+    if (generation !== null) {
+      return generation;
+    }
+
+    // Initialize the generation without overwriting a concurrent invalidation.
+    await redis.set(generationKey, "0", "NX");
+
+    generation = await redis.get(generationKey);
+
+    return generation ?? "0";
+  }, null);
+}
+
+async function writePortfolioSummaryIfGenerationMatches(
+  portfolioId,
+  value,
+  generation,
+) {
+  return safe(async (redis) => {
+    const result = await redis.eval(
+      CACHE_PORTFOLIO_SUMMARY_IF_GENERATION_MATCHES,
+      2,
+      cacheKeys.portfolioSummaryGeneration(portfolioId),
+      cacheKeys.portfolioSummary(portfolioId),
+      generation,
+      JSON.stringify(value),
+      TTL_SECONDS.portfolioSummary,
+    );
+
+    return result === 1;
   }, false);
 }
 
@@ -86,17 +139,31 @@ async function getPortfolioSummary(portfolioId) {
 }
 
 async function setPortfolioSummary(portfolioId, value) {
-  return set(
-    cacheKeys.portfolioSummary(portfolioId),
+  const generation = await getPortfolioSummaryGeneration(portfolioId);
+
+  if (generation === null) {
+    return false;
+  }
+
+  return writePortfolioSummaryIfGenerationMatches(
+    portfolioId,
     value,
-    TTL_SECONDS.portfolioSummary,
+    generation,
   );
 }
 
 async function invalidatePortfolio(portfolioId) {
-  return del(cacheKeys.portfolioSummary(portfolioId));
+  return safe(
+    async (redis) =>
+      redis.eval(
+        INVALIDATE_PORTFOLIO_SUMMARY,
+        2,
+        cacheKeys.portfolioSummaryGeneration(portfolioId),
+        cacheKeys.portfolioSummary(portfolioId),
+      ),
+    0,
+  );
 }
-
 async function getHistoricalPrices(
   assetClass,
   symbol,
@@ -150,11 +217,28 @@ async function getMetrics() {
 }
 
 async function getOrSetPortfolioSummary(portfolioId, loader) {
-  return getOrSet(
-    cacheKeys.portfolioSummary(portfolioId),
-    loader,
-    TTL_SECONDS.portfolioSummary,
-  );
+  const key = cacheKeys.portfolioSummary(portfolioId);
+
+  const cached = await get(key);
+
+  if (cached !== null) {
+    return cached;
+  }
+
+  // Capture the generation BEFORE starting the database loader.
+  const generation = await getPortfolioSummaryGeneration(portfolioId);
+
+  const freshValue = await loader();
+
+  if (freshValue !== null && freshValue !== undefined && generation !== null) {
+    await writePortfolioSummaryIfGenerationMatches(
+      portfolioId,
+      freshValue,
+      generation,
+    );
+  }
+
+  return freshValue;
 }
 
 module.exports = {
