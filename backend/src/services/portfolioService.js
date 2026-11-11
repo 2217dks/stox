@@ -185,6 +185,8 @@ async function updatePortfolio(
       data,
     });
 
+    await cacheService.invalidatePortfolio(portfolio.id);
+
     return serializePortfolio(updatedPortfolio);
   } catch (error) {
     if (error?.code === "P2002") {
@@ -235,6 +237,7 @@ async function deactivatePortfolio(userId, portfolioId) {
 
   // Deactivation is idempotent.
   if (!portfolio.isActive) {
+    await cacheService.invalidatePortfolio(portfolio.id);
     return serializePortfolio(portfolio);
   }
 
@@ -246,6 +249,8 @@ async function deactivatePortfolio(userId, portfolioId) {
       isActive: false,
     },
   });
+
+  await cacheService.invalidatePortfolio(portfolio.id);
 
   return serializePortfolio(deactivatedPortfolio);
 }
