@@ -314,22 +314,22 @@ async function listPortfolioHoldings(userId, portfolioId) {
 async function getPortfolioSummary(userId, portfolioId) {
   await ensureActiveUser(userId);
 
+  const portfolio = await prisma.portfolio.findFirst({
+    where: {
+      id: portfolioId,
+      userId,
+    },
+  });
+
+  if (!portfolio) {
+    throw createServiceError(
+      "Portfolio not found.",
+      404,
+      "PORTFOLIO_NOT_FOUND",
+    );
+  }
+
   return cacheService.getOrSetPortfolioSummary(portfolioId, async () => {
-    const portfolio = await prisma.portfolio.findFirst({
-      where: {
-        id: portfolioId,
-        userId,
-      },
-    });
-
-    if (!portfolio) {
-      throw createServiceError(
-        "Portfolio not found.",
-        404,
-        "PORTFOLIO_NOT_FOUND",
-      );
-    }
-
     const holdingsAggregate = await prisma.holding.aggregate({
       where: {
         portfolioId: portfolio.id,

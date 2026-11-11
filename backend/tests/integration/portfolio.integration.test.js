@@ -338,6 +338,23 @@ describe("Portfolio integration API", () => {
     expect(portfolio.holdingsCount).toBe(2);
   });
 
+  test("does not allow cached summaries to bypass ownership checks", async () => {
+    await cacheService.invalidatePortfolio(user1TestPortfolioId);
+
+    const ownerResponse = await request(app)
+      .get(`/api/v1/portfolios/${user1TestPortfolioId}/summary`)
+      .set("Authorization", `Bearer ${user1AccessToken}`);
+
+    expect(ownerResponse.status).toBe(200);
+
+    const foreignResponse = await request(app)
+      .get(`/api/v1/portfolios/${user1TestPortfolioId}/summary`)
+      .set("Authorization", `Bearer ${user2AccessToken}`);
+
+    expect(foreignResponse.status).toBe(404);
+    expect(foreignResponse.body.error.code).toBe("PORTFOLIO_NOT_FOUND");
+  });
+
   test("returns a stable summary for an empty portfolio", async () => {
     const response = await request(app)
       .get(`/api/v1/portfolios/${user2MainPortfolioId}/summary`)
