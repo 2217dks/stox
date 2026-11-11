@@ -120,7 +120,9 @@ describe("getPortfolioSummary", () => {
     expect(prisma.holding.aggregate).not.toHaveBeenCalled();
   });
 
-  test("returns the cached summary without querying the database", async () => {
+  test("returns the cached summary after checking ownership", async () => {
+    mockPortfolio();
+
     const cachedSummary = {
       id: PORTFOLIO_ID,
       cashBalance: "10000",
@@ -137,11 +139,19 @@ describe("getPortfolioSummary", () => {
     );
 
     expect(summary).toEqual(cachedSummary);
+
+    expect(prisma.portfolio.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: PORTFOLIO_ID,
+        userId: USER_ID,
+      },
+    });
+
     expect(cacheService.getOrSetPortfolioSummary).toHaveBeenCalledWith(
       PORTFOLIO_ID,
       expect.any(Function),
     );
-    expect(prisma.portfolio.findFirst).not.toHaveBeenCalled();
+
     expect(prisma.holding.aggregate).not.toHaveBeenCalled();
   });
 });
