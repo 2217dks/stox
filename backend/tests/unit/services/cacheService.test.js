@@ -3,6 +3,7 @@ const fakeRedis = {
   set: jest.fn(),
   del: jest.fn(),
   incr: jest.fn(),
+  eval: jest.fn(),
 };
 
 jest.mock("../../../src/config/redis", () => ({
@@ -21,6 +22,7 @@ describe("cacheService", () => {
   beforeEach(() => {
     jest.clearAllMocks();
     getRedis.mockResolvedValue(fakeRedis);
+    fakeRedis.eval.mockResolvedValue(1);
   });
 
   describe("generic cache operations", () => {
@@ -176,13 +178,17 @@ describe("cacheService", () => {
       );
     });
 
-    test("invalidates a portfolio summary", async () => {
-      fakeRedis.del.mockResolvedValue(1);
+    test("atomically invalidates a portfolio summary and advances its generation", async () => {
+      fakeRedis.eval.mockResolvedValue(1);
 
       const result = await cacheService.invalidatePortfolio("portfolio-1");
 
       expect(result).toBe(1);
-      expect(fakeRedis.del).toHaveBeenCalledWith(
+
+      expect(fakeRedis.eval).toHaveBeenCalledWith(
+        expect.stringContaining("INCR"),
+        2,
+        "stox:v1:portfolio:summary:generation:portfolio-1",
         "stox:v1:portfolio:summary:portfolio-1",
       );
     });
@@ -203,14 +209,17 @@ describe("cacheService", () => {
 
       expect(result.totalValue).toBe("12500");
       expect(loader).toHaveBeenCalledTimes(1);
-      expect(fakeRedis.set).toHaveBeenCalledWith(
+      expect(fakeRedis.eval).toHaveBeenCalledWith(
+        expect.stringContaining("SET"),
+        2,
+        "stox:v1:portfolio:summary:generation:portfolio-1",
         "stox:v1:portfolio:summary:portfolio-1",
+        "0",
         JSON.stringify({
           id: "portfolio-1",
           cashBalance: "10000",
           totalValue: "12500",
         }),
-        "EX",
         cacheService.TTL_SECONDS.portfolioSummary,
       );
     });
@@ -279,6 +288,98 @@ describe("cacheService", () => {
 
       expect(result.price).toBe("250.10");
       expect(loader).not.toHaveBeenCalled();
+    });
+
+    test("does not cache an in-flight summary after portfolio invalidation", async () => {
+      const generationKey = "stox:v1:portfolio:summary:generation:portfolio-1";
+
+      const summaryKey = "stox:v1:portfolio:summary:portfolio-1";
+
+      let generation = "0";
+      let cachedSummary = null;
+      let resolveLoader;
+
+      let markLoaderStarted;
+
+      const loaderStarted = new Promise((resolve) => {
+        markLoaderStarted = resolve;
+      });
+
+      fakeRedis.get.mockImplementation(async (key) => {
+        if (key === summaryKey) {
+          return null;
+        }
+
+        if (key === generationKey) {
+          return generation;
+        }
+
+        return null;
+      });
+
+      fakeRedis.eval.mockImplementation(
+        async (
+          script,
+          numberOfKeys,
+          genKey,
+          cacheKey,
+          expectedGeneration,
+          value,
+        ) => {
+          // Simulate atomic invalidation.
+          if (script.includes("INCR")) {
+            generation = String(Number(generation) + 1);
+            cachedSummary = null;
+
+            return 0;
+          }
+
+          // Simulate the generation-checked cache write.
+          if (generation !== expectedGeneration) {
+            return 0;
+          }
+
+          cachedSummary = value;
+
+          return 1;
+        },
+      );
+
+      const loader = jest.fn(() => {
+        markLoaderStarted();
+
+        return new Promise((resolve) => {
+          resolveLoader = resolve;
+        });
+      });
+
+      const pendingSummary = cacheService.getOrSetPortfolioSummary(
+        "portfolio-1",
+        loader,
+      );
+
+      // Wait until the loader is running with generation 0.
+      await loaderStarted;
+
+      // Simulate a trade updating the portfolio.
+      await cacheService.invalidatePortfolio("portfolio-1");
+
+      // The old loader now finishes with stale data.
+      resolveLoader({
+        id: "portfolio-1",
+        totalValue: "10000",
+      });
+
+      const result = await pendingSummary;
+
+      // The original request still receives its loader result.
+      expect(result.totalValue).toBe("10000");
+
+      // But the stale result must not be written into Redis.
+      expect(generation).toBe("1");
+      expect(cachedSummary).toBeNull();
+
+      expect(loader).toHaveBeenCalledTimes(1);
     });
   });
 
