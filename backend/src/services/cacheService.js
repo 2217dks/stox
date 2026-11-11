@@ -2,14 +2,9 @@ const { getRedis } = require("../config/redis");
 const cacheKeys = require("../utils/cacheKeys");
 const logger = require("../utils/logger");
 
-const TTL_SECONDS = {
-  price: 5,
-  portfolioSummary: 30,
-  leaderboard: 60,
-  historicalPrices: 60 * 60,
-  symbol: 24 * 60 * 60,
-  session: 7 * 24 * 60 * 60,
-};
+const { loadCacheConfig } = require("../config/cacheConfig");
+
+const TTL_SECONDS = loadCacheConfig();
 
 async function safe(operation, fallback) {
   try {
@@ -177,5 +172,5 @@ module.exports = {
   setHistoricalPrices,
   getMetrics,
   getOrSetPrice,
-  getOrSetPortfolioSummary
+  getOrSetPortfolioSummary,
 };
