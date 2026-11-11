@@ -40,29 +40,18 @@ async function get(key) {
 }
 
 async function set(key, value, ttlSeconds) {
-  return safe(
-    async (redis) => {
-      await redis.set(
-        key,
-        JSON.stringify(value),
-        "EX",
-        ttlSeconds,
-      );
+  return safe(async (redis) => {
+    await redis.set(key, JSON.stringify(value), "EX", ttlSeconds);
 
-      return true;
-    },
-    false,
-  );
+    return true;
+  }, false);
 }
 
 async function del(...keys) {
-  return safe(
-    async (redis) => {
-      if (keys.length === 0) return 0;
-      return redis.del(...keys);
-    },
-    0,
-  );
+  return safe(async (redis) => {
+    if (keys.length === 0) return 0;
+    return redis.del(...keys);
+  }, 0);
 }
 
 async function getOrSet(key, loader, ttlSeconds) {
@@ -86,9 +75,13 @@ async function getPrice(assetClass, symbol) {
 }
 
 async function setPrice(assetClass, symbol, value) {
-  return set(
+  return set(cacheKeys.price(assetClass, symbol), value, TTL_SECONDS.price);
+}
+
+async function getOrSetPrice(assetClass, symbol, loader) {
+  return getOrSet(
     cacheKeys.price(assetClass, symbol),
-    value,
+    loader,
     TTL_SECONDS.price,
   );
 }
@@ -118,14 +111,7 @@ async function getHistoricalPrices(
   limit,
 ) {
   return get(
-    cacheKeys.historicalPrices(
-      assetClass,
-      symbol,
-      interval,
-      from,
-      to,
-      limit,
-    ),
+    cacheKeys.historicalPrices(assetClass, symbol, interval, from, to, limit),
   );
 }
 
@@ -139,41 +125,33 @@ async function setHistoricalPrices(
   value,
 ) {
   return set(
-    cacheKeys.historicalPrices(
-      assetClass,
-      symbol,
-      interval,
-      from,
-      to,
-      limit,
-    ),
+    cacheKeys.historicalPrices(assetClass, symbol, interval, from, to, limit),
     value,
     TTL_SECONDS.historicalPrices,
   );
 }
 
 async function getMetrics() {
-  return safe(async (redis) => {
-    const hits = Number(
-      (await redis.get(cacheKeys.metric("hits"))) || 0,
-    );
-    const misses = Number(
-      (await redis.get(cacheKeys.metric("misses"))) || 0,
-    );
-    const total = hits + misses;
+  return safe(
+    async (redis) => {
+      const hits = Number((await redis.get(cacheKeys.metric("hits"))) || 0);
+      const misses = Number((await redis.get(cacheKeys.metric("misses"))) || 0);
+      const total = hits + misses;
 
-    return {
-      hits,
-      misses,
-      total,
-      hitRate: total === 0 ? 0 : Number((hits / total).toFixed(4)),
-    };
-  }, {
-    hits: 0,
-    misses: 0,
-    total: 0,
-    hitRate: 0,
-  });
+      return {
+        hits,
+        misses,
+        total,
+        hitRate: total === 0 ? 0 : Number((hits / total).toFixed(4)),
+      };
+    },
+    {
+      hits: 0,
+      misses: 0,
+      total: 0,
+      hitRate: 0,
+    },
+  );
 }
 
 module.exports = {
@@ -190,4 +168,5 @@ module.exports = {
   getHistoricalPrices,
   setHistoricalPrices,
   getMetrics,
+  getOrSetPrice,
 };
