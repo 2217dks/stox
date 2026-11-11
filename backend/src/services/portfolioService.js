@@ -3,6 +3,8 @@ const { Prisma } = require("@prisma/client");
 const prisma = require("../config/database");
 const { AppError } = require("../utils/errors");
 
+const cacheService = require("./cacheService");
+
 function createServiceError(message, statusCode, code) {
   return new AppError(message, { statusCode, code });
 }
@@ -126,7 +128,11 @@ async function createPortfolio(userId, { name, description = null }) {
   }
 }
 
-async function updatePortfolio(userId, portfolioId, { name, description } = {}) {
+async function updatePortfolio(
+  userId,
+  portfolioId,
+  { name, description } = {},
+) {
   await ensureActiveUser(userId);
 
   const portfolio = await prisma.portfolio.findFirst({
@@ -303,44 +309,44 @@ async function listPortfolioHoldings(userId, portfolioId) {
 async function getPortfolioSummary(userId, portfolioId) {
   await ensureActiveUser(userId);
 
-  const portfolio = await prisma.portfolio.findFirst({
-    where: {
-      id: portfolioId,
-      userId,
-    },
+  return cacheService.getOrSetPortfolioSummary(portfolioId, async () => {
+    const portfolio = await prisma.portfolio.findFirst({
+      where: {
+        id: portfolioId,
+        userId,
+      },
+    });
+
+    if (!portfolio) {
+      throw createServiceError(
+        "Portfolio not found.",
+        404,
+        "PORTFOLIO_NOT_FOUND",
+      );
+    }
+
+    const holdingsAggregate = await prisma.holding.aggregate({
+      where: {
+        portfolioId: portfolio.id,
+      },
+      _count: true,
+      _sum: {
+        totalInvested: true,
+      },
+    });
+
+    const holdingsValue =
+      holdingsAggregate._sum.totalInvested ?? new Prisma.Decimal(0);
+
+    const totalValue = portfolio.cashBalance.plus(holdingsValue);
+
+    return {
+      ...serializePortfolio(portfolio),
+      holdingsValue: holdingsValue.toString(),
+      totalValue: totalValue.toString(),
+      holdingsCount: holdingsAggregate._count,
+    };
   });
-
-  if (!portfolio) {
-    throw createServiceError(
-      "Portfolio not found.",
-      404,
-      "PORTFOLIO_NOT_FOUND",
-    );
-  }
-
-  const holdingsAggregate = await prisma.holding.aggregate({
-    where: {
-      portfolioId: portfolio.id,
-    },
-    _count: true,
-    _sum: {
-      totalInvested: true,
-    },
-  });
-
-  // An empty aggregate sums to null; keep the value a Decimal so the
-  // cash + holdings addition stays precise.
-  const holdingsValue =
-    holdingsAggregate._sum.totalInvested ?? new Prisma.Decimal(0);
-
-  const totalValue = portfolio.cashBalance.plus(holdingsValue);
-
-  return {
-    ...serializePortfolio(portfolio),
-    holdingsValue: holdingsValue.toString(),
-    totalValue: totalValue.toString(),
-    holdingsCount: holdingsAggregate._count,
-  };
 }
 
 async function getPortfolioCashBalance(userId, portfolioId) {
