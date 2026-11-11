@@ -21,6 +21,13 @@ const cacheKeys = {
     return `${PREFIX}:portfolio:summary:${required(portfolioId, "portfolioId")}`;
   },
 
+  portfolioSummaryGeneration(portfolioId) {
+    return `${PREFIX}:portfolio:summary:generation:${required(
+      portfolioId,
+      "portfolioId",
+    )}`;
+  },
+
   leaderboard(scope, period, page, limit, userId = null) {
     const owner = scope === "friends" ? `:${required(userId, "userId")}` : "";
 
