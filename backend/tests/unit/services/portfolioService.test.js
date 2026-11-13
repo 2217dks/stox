@@ -4,8 +4,14 @@ jest.mock("../../../src/config/database", () => ({
   holding: { aggregate: jest.fn() },
 }));
 
+jest.mock("../../../src/services/cacheService", () => ({
+  getOrSetPortfolioSummary: jest.fn(),
+  invalidatePortfolio: jest.fn().mockResolvedValue(1),
+}));
+
 const { Prisma } = require("@prisma/client");
 const prisma = require("../../../src/config/database");
+const cacheService = require("../../../src/services/cacheService");
 const portfolioService = require("../../../src/services/portfolioService");
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
@@ -37,6 +43,10 @@ function mockPortfolio(cashBalance = "10000") {
 beforeEach(() => {
   jest.clearAllMocks();
   mockActiveUser();
+
+  cacheService.getOrSetPortfolioSummary.mockImplementation(
+    (_portfolioId, loader) => loader(),
+  );
 });
 
 describe("getPortfolioSummary", () => {
@@ -106,6 +116,41 @@ describe("getPortfolioSummary", () => {
       statusCode: 404,
       code: "PORTFOLIO_NOT_FOUND",
     });
+
+    expect(prisma.holding.aggregate).not.toHaveBeenCalled();
+  });
+
+  test("returns the cached summary after checking ownership", async () => {
+    mockPortfolio();
+
+    const cachedSummary = {
+      id: PORTFOLIO_ID,
+      cashBalance: "10000",
+      holdingsValue: "2500",
+      totalValue: "12500",
+      holdingsCount: 1,
+    };
+
+    cacheService.getOrSetPortfolioSummary.mockResolvedValue(cachedSummary);
+
+    const summary = await portfolioService.getPortfolioSummary(
+      USER_ID,
+      PORTFOLIO_ID,
+    );
+
+    expect(summary).toEqual(cachedSummary);
+
+    expect(prisma.portfolio.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: PORTFOLIO_ID,
+        userId: USER_ID,
+      },
+    });
+
+    expect(cacheService.getOrSetPortfolioSummary).toHaveBeenCalledWith(
+      PORTFOLIO_ID,
+      expect.any(Function),
+    );
 
     expect(prisma.holding.aggregate).not.toHaveBeenCalled();
   });

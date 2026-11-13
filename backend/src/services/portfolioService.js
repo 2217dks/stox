@@ -3,6 +3,8 @@ const { Prisma } = require("@prisma/client");
 const prisma = require("../config/database");
 const { AppError } = require("../utils/errors");
 
+const cacheService = require("./cacheService");
+
 function createServiceError(message, statusCode, code) {
   return new AppError(message, { statusCode, code });
 }
@@ -126,7 +128,11 @@ async function createPortfolio(userId, { name, description = null }) {
   }
 }
 
-async function updatePortfolio(userId, portfolioId, { name, description } = {}) {
+async function updatePortfolio(
+  userId,
+  portfolioId,
+  { name, description } = {},
+) {
   await ensureActiveUser(userId);
 
   const portfolio = await prisma.portfolio.findFirst({
@@ -179,6 +185,8 @@ async function updatePortfolio(userId, portfolioId, { name, description } = {}) 
       data,
     });
 
+    await cacheService.invalidatePortfolio(portfolio.id);
+
     return serializePortfolio(updatedPortfolio);
   } catch (error) {
     if (error?.code === "P2002") {
@@ -229,6 +237,7 @@ async function deactivatePortfolio(userId, portfolioId) {
 
   // Deactivation is idempotent.
   if (!portfolio.isActive) {
+    await cacheService.invalidatePortfolio(portfolio.id);
     return serializePortfolio(portfolio);
   }
 
@@ -240,6 +249,8 @@ async function deactivatePortfolio(userId, portfolioId) {
       isActive: false,
     },
   });
+
+  await cacheService.invalidatePortfolio(portfolio.id);
 
   return serializePortfolio(deactivatedPortfolio);
 }
@@ -318,29 +329,29 @@ async function getPortfolioSummary(userId, portfolioId) {
     );
   }
 
-  const holdingsAggregate = await prisma.holding.aggregate({
-    where: {
-      portfolioId: portfolio.id,
-    },
-    _count: true,
-    _sum: {
-      totalInvested: true,
-    },
+  return cacheService.getOrSetPortfolioSummary(portfolioId, async () => {
+    const holdingsAggregate = await prisma.holding.aggregate({
+      where: {
+        portfolioId: portfolio.id,
+      },
+      _count: true,
+      _sum: {
+        totalInvested: true,
+      },
+    });
+
+    const holdingsValue =
+      holdingsAggregate._sum.totalInvested ?? new Prisma.Decimal(0);
+
+    const totalValue = portfolio.cashBalance.plus(holdingsValue);
+
+    return {
+      ...serializePortfolio(portfolio),
+      holdingsValue: holdingsValue.toString(),
+      totalValue: totalValue.toString(),
+      holdingsCount: holdingsAggregate._count,
+    };
   });
-
-  // An empty aggregate sums to null; keep the value a Decimal so the
-  // cash + holdings addition stays precise.
-  const holdingsValue =
-    holdingsAggregate._sum.totalInvested ?? new Prisma.Decimal(0);
-
-  const totalValue = portfolio.cashBalance.plus(holdingsValue);
-
-  return {
-    ...serializePortfolio(portfolio),
-    holdingsValue: holdingsValue.toString(),
-    totalValue: totalValue.toString(),
-    holdingsCount: holdingsAggregate._count,
-  };
 }
 
 /**
