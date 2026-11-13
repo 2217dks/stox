@@ -66,8 +66,6 @@ async function disconnectRedis() {
   } finally {
     disconnectPromise = null;
   }
-
-  await redis.quit();
 }
 
 module.exports = {
