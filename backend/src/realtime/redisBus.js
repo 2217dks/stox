@@ -300,15 +300,25 @@ function createRedisEventBus({
     }
   }
 
+  let closePromise = null;
+
   async function close() {
-    closed = true;
-    subscribed = false;
-    handlers.clear();
+    if (closePromise) {
+      return closePromise;
+    }
 
-    await shutdownClient(subscriber, "Realtime subscriber");
-    subscriber = null;
+    closePromise = (async () => {
+      closed = true;
+      subscribed = false;
+      handlers.clear();
 
-    await shutdownClient(publisher, "Realtime publisher");
+      await shutdownClient(subscriber, "Realtime subscriber");
+      subscriber = null;
+
+      await shutdownClient(publisher, "Realtime publisher");
+    })();
+
+    return closePromise;
   }
 
   function connectionState() {

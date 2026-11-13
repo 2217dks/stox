@@ -248,6 +248,35 @@ describe("Redis event bus lifecycle", () => {
     );
   });
 
+  it("closes both clients exactly once across concurrent close calls", async () => {
+    const { bus, redisFactory } = buildBus();
+    const handler = jest.fn();
+
+    await bus.subscribe(handler);
+
+    const publisher = redisFactory.clients.find(
+      (client) => client.context === "publisher",
+    );
+    const subscriber = redisFactory.clients.find(
+      (client) => client.context === "subscriber",
+    );
+
+    await Promise.all([bus.close(), bus.close(), bus.close()]);
+
+    expect(subscriber.quitCalls).toBe(1);
+    expect(publisher.quitCalls + publisher.disconnectCalls).toBe(1);
+    expect(bus.connectionState()).toMatchObject({
+      subscribed: false,
+      handlerCount: 0,
+    });
+
+    // Repeated cleanup after completion is a no-op.
+    await bus.close();
+
+    expect(subscriber.quitCalls).toBe(1);
+    expect(publisher.quitCalls + publisher.disconnectCalls).toBe(1);
+  });
+
   it("closes both clients and clears handlers", async () => {
     const { bus, redisFactory } = buildBus();
     const handler = jest.fn();

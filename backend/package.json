@@ -19,6 +19,9 @@
   "jest": {
     "setupFiles": [
       "<rootDir>/tests/setupEnv.js"
+    ],
+    "setupFilesAfterEnv": [
+      "<rootDir>/tests/setupAfterEnv.js"
     ]
   },
   "keywords": [],
