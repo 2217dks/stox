@@ -1,10 +1,11 @@
 const http = require("http");
 
 const app = require("../../src/app");
+const { createInMemoryEventBus } = require("../../src/realtime/eventBus");
 const {
-  createInMemoryEventBus,
-} = require("../../src/realtime/eventBus");
-const { startRealtimeBridge } = require("../../src/realtime/realtimeBridge");
+  startRealtimeBridge,
+  validateMessage,
+} = require("../../src/realtime/realtimeBridge");
 const { createSocketServer } = require("../../src/sockets");
 const logger = require("../../src/utils/logger");
 const {
@@ -110,6 +111,87 @@ describe("Realtime event bridge", () => {
 
     await expect(received).resolves.toEqual(payload);
     expect(await notReceived).toEqual([]);
+  });
+
+  it("rejects trading events when the room and payload portfolio IDs differ", () => {
+    const cases = [
+      {
+        event: "order-status",
+        payload: {
+          orderId: "order-1",
+          portfolioId: "portfolio-B",
+          status: "PENDING",
+        },
+      },
+      {
+        event: "trade-executed",
+        payload: {
+          tradeId: "trade-1",
+          orderId: "order-1",
+          portfolioId: "portfolio-B",
+        },
+      },
+      {
+        event: "portfolio-update",
+        payload: {
+          portfolioId: "portfolio-B",
+        },
+      },
+    ];
+
+    for (const { event, payload } of cases) {
+      const result = validateMessage({
+        namespace: "/trading",
+        room: "portfolio:portfolio-A",
+        event,
+        payload,
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        reason: "trading room portfolio ID must match payload.portfolioId.",
+      });
+    }
+  });
+
+  it("accepts trading events when the room and payload portfolio IDs match", () => {
+    const cases = [
+      {
+        event: "order-status",
+        payload: {
+          orderId: "order-1",
+          portfolioId: "portfolio-A",
+          status: "PENDING",
+        },
+      },
+      {
+        event: "trade-executed",
+        payload: {
+          tradeId: "trade-1",
+          orderId: "order-1",
+          portfolioId: "portfolio-A",
+        },
+      },
+      {
+        event: "portfolio-update",
+        payload: {
+          portfolioId: "portfolio-A",
+        },
+      },
+    ];
+
+    for (const { event, payload } of cases) {
+      const result = validateMessage({
+        namespace: "/trading",
+        room: "portfolio:portfolio-A",
+        event,
+        payload,
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+      });
+    }
   });
 
   it("rejects roomless events and rooms from another namespace", async () => {
@@ -243,7 +325,8 @@ describe("Realtime event bridge", () => {
     }
 
     const valid = waitForEvent(appleClient, "price-update", {
-      predicate: (payload) => payload.symbol === "AAPL" && payload.price === "9",
+      predicate: (payload) =>
+        payload.symbol === "AAPL" && payload.price === "9",
     });
 
     await bus.publish({
@@ -377,8 +460,8 @@ describe("Realtime event bridge", () => {
   it("requires a Socket.IO server and a subscribable bus", () => {
     expect(() => startRealtimeBridge({})).toThrow(TypeError);
     expect(() => startRealtimeBridge({ io })).toThrow(TypeError);
-    expect(() =>
-      startRealtimeBridge({ io, bus: { publish() {} } }),
-    ).toThrow(TypeError);
+    expect(() => startRealtimeBridge({ io, bus: { publish() {} } })).toThrow(
+      TypeError,
+    );
   });
 });
