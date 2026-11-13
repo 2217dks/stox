@@ -2,6 +2,7 @@ const prisma = require("../config/database");
 const marketDataService = require("../services/marketData");
 const { evaluateOrder, executeOrder } = require("../services/tradeService");
 const { isExecutableAssetType } = require("../utils/assetSupport");
+const { hasEventBus, publishOrderStatus } = require("../realtime/orderEvents");
 const logger = require("../utils/logger");
 
 const DEFAULT_INTERVAL_MS = 5000;
@@ -121,7 +122,7 @@ async function recordTransientFailure(orderId, now, maxAttempts) {
  * decision in one place means `processPendingOrders` only owns querying,
  * batching, and counters.
  */
-async function processOrder(order, { quoteProvider, now, retryLimit }) {
+async function runOrder(order, { quoteProvider, now, retryLimit }) {
   if (order.expiresAt && order.expiresAt <= now) {
     const expiration = await prisma.order.updateMany({
       where: {
@@ -185,6 +186,27 @@ async function processOrder(order, { quoteProvider, now, retryLimit }) {
 
     return recordTransientFailure(order.id, now, retryLimit);
   }
+}
+
+/**
+ * Run one order and publish terminal lifecycle events.
+ *
+ * Execution events come from `tradeService.executeOrder` after its commit; this
+ * wrapper only covers the transitions the execution path does not see:
+ * expiry and rejection.
+ */
+async function processOrder(order, options) {
+  const outcome = await runOrder(order, options);
+
+  if (hasEventBus() && (outcome === "expired" || outcome === "rejected")) {
+    void publishOrderStatus({
+      ...order,
+      status: outcome === "expired" ? "EXPIRED" : "REJECTED",
+      executedPrice: null,
+    });
+  }
+
+  return outcome;
 }
 
 /**

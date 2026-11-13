@@ -354,6 +354,50 @@ async function getPortfolioSummary(userId, portfolioId) {
   });
 }
 
+/**
+ * Internal, non-request-scoped valuation used by realtime portfolio updates.
+ *
+ * It takes only a portfolio id and performs no ownership or active-user check,
+ * so it must never be exposed directly by a route. `pnl` is account-level
+ * performance against the starting balance, using invested cost basis for open
+ * positions (Phase 2 market valuation is a separate concern).
+ */
+async function getPortfolioValuation(portfolioId) {
+  const [portfolio, aggregate] = await Promise.all([
+    prisma.portfolio.findUnique({
+      where: { id: portfolioId },
+      select: {
+        id: true,
+        cashBalance: true,
+        startingBalance: true,
+      },
+    }),
+    prisma.holding.aggregate({
+      where: { portfolioId },
+      _sum: {
+        totalInvested: true,
+      },
+    }),
+  ]);
+
+  if (!portfolio) {
+    return null;
+  }
+
+  const holdingsValue = aggregate._sum.totalInvested ?? new Prisma.Decimal(0);
+  const totalValue = portfolio.cashBalance.plus(holdingsValue);
+  const pnl = totalValue.minus(portfolio.startingBalance);
+
+  return {
+    portfolioId: portfolio.id,
+    cashBalance: portfolio.cashBalance.toString(),
+    holdingsValue: holdingsValue.toString(),
+    totalValue: totalValue.toString(),
+    pnl: pnl.toString(),
+    asOf: new Date().toISOString(),
+  };
+}
+
 async function getPortfolioCashBalance(userId, portfolioId) {
   await ensureActiveUser(userId);
 
@@ -391,4 +435,5 @@ module.exports = {
   listPortfolioHoldings,
   getPortfolioCashBalance,
   getPortfolioSummary,
+  getPortfolioValuation,
 };

@@ -1,6 +1,7 @@
 const prisma = require("../config/database");
 const { isExecutableAssetType } = require("../utils/assetSupport");
 const { AppError } = require("../utils/errors");
+const { hasEventBus, publishOrderStatus } = require("../realtime/orderEvents");
 
 async function ensureActiveUser(userId) {
   const user = await prisma.user.findUnique({
@@ -87,6 +88,18 @@ function serializeOrder(order) {
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
   };
+}
+
+/**
+ * Emit a lifecycle event only when a realtime bus is configured.
+ *
+ * Unit tests and one-off scripts run without a bus, so the guard avoids both a
+ * meaningless publish and (for EXECUTED) the extra valuation query.
+ */
+function triggerOrderStatus(order) {
+  if (hasEventBus()) {
+    void publishOrderStatus(order);
+  }
 }
 
 // Orders are reached through their portfolio; ownership is enforced at the
@@ -266,7 +279,10 @@ async function cancelOrder({ userId, orderId }) {
     select: SERIALIZED_ORDER_FIELDS,
   });
 
-  return serializeOrder(updated);
+  const serialized = serializeOrder(updated);
+  triggerOrderStatus(serialized);
+
+  return serialized;
 }
 
 async function createOrder({
@@ -321,7 +337,10 @@ async function createOrder({
     },
   });
 
-  return serializeOrder(order);
+  const serialized = serializeOrder(order);
+  triggerOrderStatus(serialized);
+
+  return serialized;
 }
 
 module.exports = {
