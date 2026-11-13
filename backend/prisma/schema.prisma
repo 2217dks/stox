@@ -173,6 +173,7 @@ model Portfolio {
   // Virtual trading money
   startingBalance Decimal @default(10000) @db.Decimal(18, 8)
   cashBalance     Decimal @default(10000) @db.Decimal(18, 8)
+  reservedCash    Decimal @default(0) @db.Decimal(18, 8)
 
   isDefault Boolean @default(false)
   isActive  Boolean @default(true)
@@ -236,7 +237,9 @@ model Order {
   type   OrderType
   status OrderStatus @default(PENDING)
 
-  quantity Decimal @db.Decimal(18, 8)
+  quantity     Decimal @db.Decimal(18, 8)
+  // Cash held for this order while it remains pending.
+  reservedCash Decimal @default(0) @db.Decimal(18, 8)
 
   // Used by LIMIT / STOP / TAKE-PROFIT orders
   limitPrice Decimal? @db.Decimal(18, 8)
