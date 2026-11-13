@@ -1,5 +1,5 @@
 const { emitRealtimeEvent, getEventBus } = require("./eventBus");
-const { getPortfolioValuation } = require("../services/portfolioService");
+const portfolioService = require("../services/portfolioService");
 const logger = require("../utils/logger");
 
 const TRADING_NAMESPACE = "/trading";
@@ -82,21 +82,55 @@ async function publishExecutionEvents({ trade, order }) {
     return;
   }
 
+  // Each event is published independently. A portfolio valuation is a
+  // supplementary view of state; it must never decide whether a committed
+  // trade reaches connected clients. Likewise, one failed publish must not
+  // suppress the others.
   try {
-    const valuation = await getPortfolioValuation(order.portfolioId);
-
     await publishOrderStatus({
       ...order,
       status: "EXECUTED",
       executedPrice: trade.price,
     });
-    await publishTradeExecuted({ trade, order });
-
-    if (valuation) {
-      await publishPortfolioUpdate(valuation);
-    }
   } catch (error) {
-    logger.warn("Failed to publish execution events", {
+    logger.warn("Failed to publish order status event", {
+      orderId: order.id,
+      message: error.message,
+    });
+  }
+
+  try {
+    await publishTradeExecuted({ trade, order });
+  } catch (error) {
+    logger.warn("Failed to publish trade executed event", {
+      orderId: order.id,
+      message: error.message,
+    });
+  }
+
+  let valuation;
+
+  try {
+    valuation = await portfolioService.getPortfolioValuation(order.portfolioId);
+  } catch (error) {
+    logger.warn("Failed to load portfolio valuation for realtime update", {
+      portfolioId: order.portfolioId,
+      orderId: order.id,
+      message: error.message,
+    });
+
+    return;
+  }
+
+  if (!valuation) {
+    return;
+  }
+
+  try {
+    await publishPortfolioUpdate(valuation);
+  } catch (error) {
+    logger.warn("Failed to publish portfolio update event", {
+      portfolioId: order.portfolioId,
       orderId: order.id,
       message: error.message,
     });

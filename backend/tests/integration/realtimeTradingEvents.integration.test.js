@@ -11,6 +11,7 @@ const {
 } = require("../../src/realtime/eventBus");
 const { startRealtimeBridge } = require("../../src/realtime/realtimeBridge");
 const { createSocketServer } = require("../../src/sockets");
+const portfolioService = require("../../src/services/portfolioService");
 const tradeService = require("../../src/services/tradeService");
 const { processPendingOrders } = require("../../src/workers/orderWorker");
 const {
@@ -309,6 +310,64 @@ describe("Trading realtime events", () => {
       status: "EXECUTED",
       executedPrice: "100",
     });
+  });
+
+  it("still publishes the order and trade when portfolio valuation fails", async () => {
+    const portfolioId = await newPortfolio("valuation-failure");
+    await join(primary.client, portfolioId);
+
+    const placed = await placeOrder({
+      portfolioId,
+      symbol: "ADBE",
+      quantity: "1",
+    });
+    const orderId = placed.body.data.order.id;
+
+    expect(placed.status).toBe(201);
+
+    const status = waitForEvent(primary.client, "order-status", {
+      predicate: (payload) =>
+        payload.orderId === orderId && payload.status === "EXECUTED",
+    });
+    const executed = waitForEvent(primary.client, "trade-executed", {
+      predicate: orderStatus(orderId),
+    });
+    const valuationFailure = jest
+      .spyOn(portfolioService, "getPortfolioValuation")
+      .mockRejectedValue(new Error("valuation query failed"));
+
+    try {
+      const { summary } = await runWorker(portfolioId, { ADBE: 100 });
+
+      expect(summary.executed).toBe(1);
+
+      await expect(status).resolves.toMatchObject({
+        orderId,
+        status: "EXECUTED",
+        price: "100",
+      });
+      await expect(executed).resolves.toMatchObject({
+        orderId,
+        price: "100",
+        totalValue: "100",
+      });
+
+      // The valuation is supplementary: it must not be broadcast, and it must
+      // not turn the committed trade into an error.
+      const updates = collectEvents(primary.client, "portfolio-update", 250);
+
+      expect(await updates).toEqual([]);
+
+      const stored = await getOrder(orderId);
+
+      expect(stored.status).toBe(200);
+      expect(stored.body.data.order).toMatchObject({
+        status: "EXECUTED",
+        executedPrice: "100",
+      });
+    } finally {
+      valuationFailure.mockRestore();
+    }
   });
 
   it("reports realized P&L and the updated valuation on a profitable sell", async () => {

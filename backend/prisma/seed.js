@@ -76,6 +76,9 @@ function addDays(days) {
 // SYMBOL CATALOG (schema: Symbol model)
 // ============================================================
 
+// Optional development/demo fixtures. Runtime order and market-data paths do
+// not consult this table as an allow-list; any provider-recognised symbol can
+// be ordered or streamed. This catalog only makes the seeded examples prettier.
 const SYMBOL_CATALOG = [
   {
     symbol: "AAPL",

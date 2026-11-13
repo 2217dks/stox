@@ -252,6 +252,120 @@ describe("Polling price stream", () => {
     expect(microsoft.mock.calls.length).toBeGreaterThan(microsoftBefore);
   });
 
+  it("never starts a second poll for a symbol while one is still in flight", async () => {
+    let resolveFirst;
+    let concurrent = 0;
+    let maxConcurrent = 0;
+    const getQuote = jest.fn(() => {
+      concurrent += 1;
+      maxConcurrent = Math.max(maxConcurrent, concurrent);
+
+      if (getQuote.mock.calls.length === 1) {
+        return new Promise((resolve) => {
+          resolveFirst = resolve;
+        });
+      }
+
+      concurrent -= 1;
+
+      return Promise.resolve({
+        price: 2,
+        volume: 1,
+        timestamp: QUOTE_TIME,
+      });
+    });
+    const { stream } = buildStream({ getQuote, intervalMs: 20 });
+    const listener = jest.fn();
+
+    stream.subscribe("AAPL", listener);
+
+    await waitFor(() => getQuote.mock.calls.length === 1, {
+      description: "first poll",
+    });
+
+    // Several intervals pass while the provider is still responding. A fixed
+    // setInterval implementation would have started overlapping requests.
+    await sleep(120);
+
+    expect(getQuote).toHaveBeenCalledTimes(1);
+    expect(maxConcurrent).toBe(1);
+
+    resolveFirst({ price: 1, volume: 1, timestamp: QUOTE_TIME });
+    concurrent -= 1;
+
+    await waitFor(() => getQuote.mock.calls.length >= 2, {
+      description: "poll after the slow response completed",
+    });
+
+    expect(maxConcurrent).toBe(1);
+    expect(listener).toHaveBeenCalledWith(
+      expect.objectContaining({ symbol: "AAPL", price: "1" }),
+    );
+  });
+
+  it("does not broadcast a quote that resolves after unsubscribe", async () => {
+    let resolveQuote;
+    const getQuote = jest.fn(
+      () =>
+        new Promise((resolve) => {
+          resolveQuote = resolve;
+        }),
+    );
+    const { stream } = buildStream({ getQuote, intervalMs: 1000 });
+    const listener = jest.fn();
+
+    stream.subscribe("AAPL", listener);
+
+    await waitFor(() => getQuote.mock.calls.length === 1, {
+      description: "in-flight poll",
+    });
+
+    stream.unsubscribe("AAPL");
+    resolveQuote({ price: 99, volume: 1, timestamp: QUOTE_TIME });
+
+    await sleep(50);
+
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("exposes lifecycle and provider health state", async () => {
+    const getQuote = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("provider down"))
+      .mockResolvedValue({
+        price: 5,
+        volume: 1,
+        timestamp: QUOTE_TIME,
+      });
+    const { stream } = buildStream({ getQuote, intervalMs: 20 });
+
+    stream.subscribe("AAPL", jest.fn());
+
+    await waitFor(
+      () => stream.getState().subscriptions[0]?.lastSuccessAt !== null,
+      { description: "successful poll after a health failure" },
+    );
+
+    const state = stream.getState();
+
+    expect(state.running).toBe(true);
+    expect(state.subscriptions).toEqual([
+      expect.objectContaining({
+        symbol: "AAPL",
+        assetClass: "STOCK",
+        intervalMs: 20,
+        lastPollStartedAt: expect.any(Number),
+        lastSuccessAt: expect.any(Number),
+        lastError: expect.any(String),
+        inFlight: expect.any(Boolean),
+      }),
+    ]);
+
+    stream.stop();
+
+    expect(stream.getState().running).toBe(false);
+  });
+
   it("swallows quote failures and keeps polling", async () => {
     const getQuote = jest
       .fn()
@@ -303,6 +417,13 @@ describe("Polling price stream", () => {
       volume: "1",
       timestamp: QUOTE_TIME,
     });
+  });
+
+  it("reports both asset classes as supported", () => {
+    const { stream } = buildStream();
+
+    expect(stream.supportsAssetClass("STOCK")).toBe(true);
+    expect(stream.supportsAssetClass("CRYPTO")).toBe(true);
   });
 
   it("exposes a five-second default interval", () => {

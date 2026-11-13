@@ -1,26 +1,19 @@
 const logger = require("../utils/logger");
+const { toInternalSymbol } = require("../utils/symbolUtils");
 const { normalizeAssetClass } = require("./marketDataService");
 
 const DEFAULT_MAX_ATTEMPTS = 10;
 const DEFAULT_BASE_DELAY_MS = 1000;
 const DEFAULT_MAX_DELAY_MS = 30000;
+// Once the short backoff budget is exhausted the provider is not abandoned:
+// the stream enters a long cooldown and tries again. A market-data service is
+// expected to recover from a provider outage without an application restart.
+const DEFAULT_COOLDOWN_MS = 60000;
 const MAX_JITTER_MS = 250;
 const WS_OPEN = 1;
 
 const FINNHUB_URL = "wss://ws.finnhub.io";
 const BINANCE_URL = "wss://stream.binance.com:9443/ws";
-
-/**
- * Provider prefixes are a transport detail. Rooms, cache keys, and event
- * payloads all use the internal symbol, so `BINANCE:BTCUSDT` and `btcusdt`
- * address the same stream.
- */
-function toInternalSymbol(symbol) {
-  return String(symbol || "")
-    .trim()
-    .toUpperCase()
-    .replace(/^BINANCE:/, "");
-}
 
 function createReconnectingSocket({
   name,
@@ -28,10 +21,12 @@ function createReconnectingSocket({
   webSocketFactory,
   onOpen,
   onMessage,
+  onError,
   logger: log = logger,
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   baseDelayMs = DEFAULT_BASE_DELAY_MS,
   maxDelayMs = DEFAULT_MAX_DELAY_MS,
+  cooldownMs = DEFAULT_COOLDOWN_MS,
   random = Math.random,
   timers = { setTimeout, clearTimeout },
 }) {
@@ -39,16 +34,19 @@ function createReconnectingSocket({
   let attempts = 0;
   let stopped = false;
   let reconnectTimer = null;
+  let state = "idle";
 
   function connect() {
     if (stopped) {
       return;
     }
 
+    state = "connecting";
     socket = webSocketFactory(url);
 
     socket.onopen = () => {
       attempts = 0;
+      state = "connected";
       log.info("Market stream connected", { provider: name });
 
       if (typeof onOpen === "function") {
@@ -70,10 +68,19 @@ function createReconnectingSocket({
     };
 
     socket.onerror = (error) => {
+      if (stopped) {
+        return;
+      }
+
+      state = "reconnecting";
       log.warn("Market stream error", {
         provider: name,
         message: error?.message,
       });
+
+      if (typeof onError === "function") {
+        onError(error);
+      }
     };
 
     socket.onclose = () => {
@@ -82,20 +89,42 @@ function createReconnectingSocket({
       }
 
       log.warn("Market stream disconnected", { provider: name });
+      state = "reconnecting";
       scheduleReconnect();
     };
+  }
+
+  function scheduleTimer(delay) {
+    reconnectTimer = timers.setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, delay);
+
+    if (typeof reconnectTimer.unref === "function") {
+      reconnectTimer.unref();
+    }
   }
 
   /**
    * Exponential backoff with a small bounded jitter. Jitter prevents every
    * instance reconnecting in lockstep after a provider-wide outage.
+   *
+   * After `maxAttempts` consecutive failures the socket enters a long cooldown
+   * instead of giving up permanently. The retry budget resets for the next
+   * cycle, so a provider that recovers minutes later is reconnected and every
+   * active symbol is resubscribed by `onOpen`.
    */
   function scheduleReconnect() {
     if (attempts >= maxAttempts) {
-      log.error("Market stream reconnect limit reached", {
+      state = "unavailable";
+      log.error("Market stream provider unavailable; entering cooldown", {
         provider: name,
         attempts,
+        cooldownMs,
       });
+
+      attempts = 0;
+      scheduleTimer(cooldownMs);
       return;
     }
 
@@ -103,10 +132,7 @@ function createReconnectingSocket({
     const jitter = Math.floor(random() * Math.min(MAX_JITTER_MS, delay * 0.1));
 
     attempts += 1;
-    reconnectTimer = timers.setTimeout(() => {
-      reconnectTimer = null;
-      connect();
-    }, delay + jitter);
+    scheduleTimer(delay + jitter);
   }
 
   function send(payload) {
@@ -120,6 +146,7 @@ function createReconnectingSocket({
 
   function stop() {
     stopped = true;
+    state = "stopped";
 
     if (reconnectTimer) {
       timers.clearTimeout(reconnectTimer);
@@ -144,6 +171,16 @@ function createReconnectingSocket({
     connect,
     send,
     stop,
+    getState() {
+      return {
+        state,
+        attempts,
+        hasSocket: Boolean(socket),
+      };
+    },
+    get state() {
+      return state;
+    },
     get attempts() {
       return attempts;
     },
@@ -170,6 +207,7 @@ function createMarketStream({
   maxAttempts = DEFAULT_MAX_ATTEMPTS,
   baseDelayMs = DEFAULT_BASE_DELAY_MS,
   maxDelayMs = DEFAULT_MAX_DELAY_MS,
+  cooldownMs = DEFAULT_COOLDOWN_MS,
   random = Math.random,
   timers = { setTimeout, clearTimeout },
 } = {}) {
@@ -185,16 +223,23 @@ function createMarketStream({
       url: `${finnhubUrl}?token=${encodeURIComponent(finnhubApiKey || "")}`,
       symbols: new Set(),
       connection: null,
+      lastConnectedAt: null,
+      lastUpdateAt: null,
+      lastError: null,
     },
     crypto: {
       enabled: true,
       url: binanceUrl,
       symbols: new Set(),
       connection: null,
+      lastConnectedAt: null,
+      lastUpdateAt: null,
+      lastError: null,
     },
   };
 
   let warnedStockDisabled = false;
+  let running = true;
 
   function subscribeMessage(provider, symbol) {
     if (provider === "stock") {
@@ -263,6 +308,8 @@ function createMarketStream({
         return;
       }
 
+      providers[provider].lastUpdateAt = new Date().toISOString();
+
       for (const trade of data.data) {
         emitTick(trade.s, trade.p, trade.v, trade.t);
       }
@@ -277,6 +324,7 @@ function createMarketStream({
       return;
     }
 
+    providers[provider].lastUpdateAt = new Date().toISOString();
     emitTick(trade.s, trade.p, trade.q, trade.T);
   }
 
@@ -292,15 +340,22 @@ function createMarketStream({
       url: state.url,
       webSocketFactory,
       onOpen: (send) => {
+        state.lastConnectedAt = new Date().toISOString();
+        state.lastError = null;
+
         for (const symbol of state.symbols) {
           send(subscribeMessage(provider, symbol));
         }
       },
       onMessage: (data) => handleMessage(provider, data),
+      onError: (error) => {
+        state.lastError = error?.message || "Market stream error";
+      },
       logger: log,
       maxAttempts,
       baseDelayMs,
       maxDelayMs,
+      cooldownMs,
       random,
       timers,
     });
@@ -379,6 +434,7 @@ function createMarketStream({
   }
 
   function stop() {
+    running = false;
     listeners.clear();
 
     for (const state of Object.values(providers)) {
@@ -391,10 +447,47 @@ function createMarketStream({
     }
   }
 
+  function getState() {
+    return {
+      mode: "websocket",
+      running,
+      providers: Object.fromEntries(
+        Object.entries(providers).map(([name, state]) => [
+          name,
+          {
+            enabled: state.enabled,
+            state: !running
+              ? "stopped"
+              : state.connection
+                ? state.connection.state
+                : "idle",
+            activeSubscriptions: [...state.symbols],
+            reconnectAttempts: state.connection?.attempts ?? 0,
+            lastConnectedAt: state.lastConnectedAt,
+            lastUpdateAt: state.lastUpdateAt,
+            lastError: state.lastError,
+          },
+        ]),
+      ),
+    };
+  }
+
   return {
     subscribe,
     unsubscribe,
     stop,
+    getState,
+    supportsAssetClass(assetClass) {
+      if (assetClass === "CRYPTO") {
+        return providers.crypto.enabled;
+      }
+
+      if (assetClass === "STOCK") {
+        return providers.stock.enabled;
+      }
+
+      return false;
+    },
     isListening(symbol) {
       return listeners.has(toInternalSymbol(symbol));
     },
@@ -411,4 +504,5 @@ module.exports = {
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_BASE_DELAY_MS,
   DEFAULT_MAX_DELAY_MS,
+  DEFAULT_COOLDOWN_MS,
 };

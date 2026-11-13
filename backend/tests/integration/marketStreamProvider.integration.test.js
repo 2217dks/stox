@@ -1,5 +1,7 @@
 const net = require("net");
 
+const { WebSocketServer } = require("ws");
+
 const {
   createMarketStream,
 } = require("../../src/services/marketStreamService");
@@ -139,6 +141,37 @@ describe("Market stream provider connection", () => {
     ).resolves.toEqual({
       method: "SUBSCRIBE",
       params: ["btcusdt@trade"],
+      id: 1,
+    });
+  });
+
+  it("streams arbitrary stock and crypto symbols without a catalog allow-list", async () => {
+    const stream = buildStream();
+
+    // AAPL/MSFT appear in fixtures and docs, but nothing in the stream is
+    // restricted to a predefined symbol catalog.
+    stream.subscribe("IBM", jest.fn());
+    stream.subscribe("SAP", jest.fn());
+    stream.subscribe("XRPUSDT", jest.fn());
+
+    const stock = await waitForConnection("/finnhub");
+    const crypto = await waitForConnection("/binance");
+
+    await expect(
+      waitForMessage(stock, stockSubscribe("IBM"), "IBM subscription"),
+    ).resolves.toEqual({ type: "subscribe", symbol: "IBM" });
+    await expect(
+      waitForMessage(stock, stockSubscribe("SAP"), "SAP subscription"),
+    ).resolves.toEqual({ type: "subscribe", symbol: "SAP" });
+    await expect(
+      waitForMessage(
+        crypto,
+        binanceSubscribe("XRPUSDT"),
+        "XRPUSDT subscription",
+      ),
+    ).resolves.toEqual({
+      method: "SUBSCRIBE",
+      params: ["xrpusdt@trade"],
       id: 1,
     });
   });
@@ -466,7 +499,7 @@ describe("Market stream provider connection", () => {
     ).toEqual(["AAPL", "MSFT"]);
   });
 
-  it("stops reconnecting after the configured attempt limit", async () => {
+  it("enters a cooldown after the retry budget and tries again", async () => {
     const attempts = [];
     const rejecting = net.createServer((socket) => {
       attempts.push(Date.now());
@@ -488,19 +521,213 @@ describe("Market stream provider connection", () => {
       logger: silentLogger,
       baseDelayMs: 20,
       maxDelayMs: 20,
-      maxAttempts: 3,
+      maxAttempts: 2,
+      cooldownMs: 100,
     });
 
     streams.push(stream);
     stream.subscribe("AAPL", jest.fn());
 
+    // Initial attempt + two retries + one post-cooldown attempt.
     await waitFor(() => attempts.length >= 4, {
-      description: "initial attempt plus three retries",
+      description: "an attempt after the cooldown",
     });
 
-    await sleep(150);
+    const gaps = attempts.slice(1).map((time, index) => time - attempts[index]);
 
-    expect(attempts).toHaveLength(4);
+    // The first two gaps are ordinary backoff; the third is the long cooldown
+    // after the retry budget was exhausted.
+    expect(gaps[2]).toBeGreaterThanOrEqual(80);
+
+    await new Promise((resolve) => rejecting.close(resolve));
+  });
+
+  it("recovers after the cooldown and restores active subscriptions", async () => {
+    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+
+    await new Promise((resolve, reject) => {
+      server.once("listening", resolve);
+      server.once("error", reject);
+    });
+
+    const connections = [];
+
+    server.on("connection", (socket) => {
+      const entry = { socket, messages: [], closed: false };
+      connections.push(entry);
+
+      socket.on("message", (raw) => {
+        try {
+          entry.messages.push(JSON.parse(raw.toString()));
+        } catch (error) {
+          entry.messages.push(raw.toString());
+        }
+      });
+      socket.on("close", () => {
+        entry.closed = true;
+      });
+
+      // The provider accepts the first three connections and immediately
+      // drops them, exhausting the retry budget. The fourth connection
+      // succeeds, proving the cooldown re-arms the client.
+      if (connections.length <= 3) {
+        socket.terminate();
+      }
+    });
+
+    const port = server.address().port;
+    const stream = createMarketStream({
+      config: {
+        finnhubApiKey: "",
+        finnhubUrl: `ws://127.0.0.1:${port}/finnhub`,
+        binanceUrl: `ws://127.0.0.1:${port}/binance`,
+      },
+      logger: silentLogger,
+      baseDelayMs: 10,
+      maxDelayMs: 10,
+      maxAttempts: 2,
+      cooldownMs: 80,
+    });
+    const listener = jest.fn();
+
+    streams.push(stream);
+    stream.subscribe("BTCUSDT", listener);
+
+    try {
+      await waitFor(
+        () =>
+          connections.length >= 4 &&
+          connections[3].messages.some(
+            (message) =>
+              message.method === "SUBSCRIBE" &&
+              Array.isArray(message.params) &&
+              message.params.includes("btcusdt@trade"),
+          ),
+        { description: "successful connection after cooldown" },
+      );
+
+      connections[3].socket.send(
+        JSON.stringify({
+          e: "trade",
+          s: "BTCUSDT",
+          p: "42",
+          q: "1",
+          T: TICK_TIME,
+        }),
+      );
+
+      await waitFor(() => listener.mock.calls.length === 1, {
+        description: "tick after cooldown recovery",
+      });
+    } finally {
+      for (const entry of connections) {
+        try {
+          entry.socket.terminate();
+        } catch (error) {
+          // Already closed.
+        }
+      }
+
+      await new Promise((resolve) => server.close(resolve));
+    }
+  });
+
+  it("exposes provider connection and subscription state", async () => {
+    const stream = buildStream();
+    const listener = jest.fn();
+
+    stream.subscribe("AAPL", listener);
+
+    const connection = await waitForConnection("/finnhub");
+    await waitForMessage(connection, stockSubscribe("AAPL"));
+
+    const connected = stream.getState();
+
+    expect(connected).toMatchObject({
+      mode: "websocket",
+      running: true,
+      providers: {
+        stock: {
+          enabled: true,
+          state: "connected",
+          activeSubscriptions: ["AAPL"],
+        },
+        crypto: {
+          enabled: true,
+          state: "idle",
+          activeSubscriptions: [],
+        },
+      },
+    });
+    expect(connected.providers.stock.lastConnectedAt).toEqual(expect.any(String));
+
+    connection.socket.terminate();
+
+    await waitFor(
+      () => stream.getState().providers.stock.state !== "connected",
+      { description: "provider leaves the connected state" },
+    );
+
+    expect(stream.getState().providers.stock.activeSubscriptions).toEqual([
+      "AAPL",
+    ]);
+
+    stream.stop();
+
+    expect(stream.getState()).toMatchObject({
+      running: false,
+      providers: {
+        stock: { state: "stopped" },
+        crypto: { state: "stopped" },
+      },
+    });
+  });
+
+  it("cancels a pending cooldown timer when the stream stops", async () => {
+    const attempts = [];
+    const rejecting = net.createServer((socket) => {
+      attempts.push(Date.now());
+      socket.destroy();
+    });
+
+    await new Promise((resolve, reject) => {
+      rejecting.once("error", reject);
+      rejecting.listen(0, "127.0.0.1", resolve);
+    });
+
+    const port = rejecting.address().port;
+    const stream = createMarketStream({
+      config: {
+        finnhubApiKey: "test-key",
+        finnhubUrl: `ws://127.0.0.1:${port}`,
+        binanceUrl: `ws://127.0.0.1:${port}`,
+      },
+      logger: silentLogger,
+      baseDelayMs: 10,
+      maxDelayMs: 10,
+      maxAttempts: 1,
+      cooldownMs: 150,
+    });
+
+    streams.push(stream);
+    stream.subscribe("AAPL", jest.fn());
+
+    // Initial attempt plus one bounded retry, then the provider enters its
+    // cooldown instead of scheduling another short retry.
+    await waitFor(() => attempts.length >= 2, {
+      description: "retry budget exhausted",
+    });
+
+    await sleep(40);
+
+    stream.stop();
+
+    const attemptsAtStop = attempts.length;
+
+    await sleep(200);
+
+    expect(attempts).toHaveLength(attemptsAtStop);
+    expect(stream.getState().providers.stock.state).toBe("stopped");
 
     await new Promise((resolve) => rejecting.close(resolve));
   });
@@ -562,6 +789,11 @@ describe("Market stream provider connection", () => {
     expect(
       provider.connections.filter((entry) => entry.path === "/finnhub"),
     ).toHaveLength(0);
+
+    // The namespace uses this capability check to return a clear error instead
+    // of accepting a stock subscription that can never produce data.
+    expect(stream.supportsAssetClass("STOCK")).toBe(false);
+    expect(stream.supportsAssetClass("CRYPTO")).toBe(true);
 
     // Crypto does not depend on the stock credentials.
     stream.subscribe("BTCUSDT", jest.fn());

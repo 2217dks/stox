@@ -322,7 +322,11 @@ describe("Worker-to-API realtime fan-out over Redis", () => {
       namespace: "/trading",
       room: `portfolio:${portfolioId}-not-mine`,
       event: "order-status",
-      payload: { orderId: "foreign-order" },
+      payload: {
+        orderId: "foreign-order",
+        portfolioId: `${portfolioId}-not-mine`,
+        status: "EXECUTED",
+      },
     });
 
     expect(await received).toEqual([]);
