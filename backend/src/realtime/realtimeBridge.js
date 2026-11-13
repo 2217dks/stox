@@ -77,7 +77,10 @@ function validatePriceUpdate(payload) {
   if (
     payload.timestamp !== undefined &&
     typeof payload.timestamp !== "string" &&
-    !(typeof payload.timestamp === "number" && Number.isFinite(payload.timestamp))
+    !(
+      typeof payload.timestamp === "number" &&
+      Number.isFinite(payload.timestamp)
+    )
   ) {
     return "price-update timestamp must be a string or number.";
   }
@@ -161,6 +164,27 @@ function validateMessage(message) {
 
   if (payloadError) {
     return { ok: false, reason: payloadError };
+  }
+
+  // Trading events must target the same portfolio identified by their payload.
+  // A valid room prefix alone is not enough: mismatched IDs could route one
+  // portfolio's event into another portfolio's room.
+  if (namespace === "/trading") {
+    const roomPortfolioId = room.slice(ROOM_PREFIXES[namespace].length);
+
+    if (!isNonEmptyString(roomPortfolioId)) {
+      return {
+        ok: false,
+        reason: "trading room must contain a portfolio ID.",
+      };
+    }
+
+    if (roomPortfolioId !== payload.portfolioId) {
+      return {
+        ok: false,
+        reason: "trading room portfolio ID must match payload.portfolioId.",
+      };
+    }
   }
 
   return { ok: true, message };
@@ -295,8 +319,7 @@ function startRealtimeBridge({
           return;
         }
 
-        unsubscribe =
-          typeof candidate === "function" ? candidate : null;
+        unsubscribe = typeof candidate === "function" ? candidate : null;
         status = "connected";
         lastError = null;
 
