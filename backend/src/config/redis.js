@@ -23,12 +23,49 @@ async function getRedis() {
   return redis;
 }
 
+let disconnectPromise = null;
+
+/**
+ * Disconnect the shared Redis client exactly once.
+ *
+ * Jest suites can call this from their own `afterAll` while a global
+ * `setupFilesAfterEnv` hook calls it as well. Two concurrent `quit()` calls
+ * race: the second is rejected by ioredis with "Connection is closed." and
+ * marks the suite as failed. Sharing one in-flight promise makes cleanup
+ * idempotent and safe from either order.
+ */
 async function disconnectRedis() {
-  if (redis.status === "wait" || redis.status === "end") {
+  if (redis.status === "end") {
     return;
   }
 
-  await redis.quit();
+  if (disconnectPromise) {
+    return disconnectPromise;
+  }
+
+  disconnectPromise = (async () => {
+    try {
+      if (redis.status === "ready") {
+        await redis.quit();
+      } else {
+        // `quit()` on a lazy/connecting client would open a connection just to
+        // close it. For every non-ready state the immediate close is correct.
+        redis.disconnect();
+      }
+    } catch (error) {
+      // A concurrent shutdown may have closed the socket before this command
+      // completed. Treat an already-ended connection as success.
+      if (redis.status !== "end") {
+        redis.disconnect();
+      }
+    }
+  })();
+
+  try {
+    await disconnectPromise;
+  } finally {
+    disconnectPromise = null;
+  }
 }
 
 module.exports = {

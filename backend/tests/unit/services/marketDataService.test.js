@@ -1,5 +1,6 @@
 const {
   createMarketDataService,
+  normalizeAssetClass,
 } = require("../../../src/services/marketDataService");
 
 const CONFIG = {
@@ -118,6 +119,22 @@ describe("marketDataService provider-independent interface", () => {
     expect(result.symbol).toBe("AAPL");
     expect(result.assetClass).toBe("STOCK");
     expect(stockProvider.getQuote).toHaveBeenCalledWith("AAPL");
+  });
+
+  test("does not misclassify stock tickers that end in a crypto quote asset", () => {
+    // GBTC, METH, and SOL are real/valid stock tickers whose spelling overlaps
+    // crypto symbols. Only well-formed pairs should infer CRYPTO.
+    for (const stock of ["AAPL", "MSFT", "IBM", "SAP", "GBTC", "METH", "SOL"]) {
+      expect(normalizeAssetClass(undefined, stock)).toBe("STOCK");
+    }
+
+    for (const pair of ["BTCUSDT", "ETHBTC", "SOLUSDT", "BINANCE:BTCUSDT"]) {
+      expect(normalizeAssetClass(undefined, pair)).toBe("CRYPTO");
+    }
+
+    // An explicit asset class always wins, even for an ambiguous symbol.
+    expect(normalizeAssetClass("CRYPTO", "WBTC")).toBe("CRYPTO");
+    expect(normalizeAssetClass("STOCK", "BTCUSDT")).toBe("STOCK");
   });
 
   test("infers crypto for the project's unprefixed crypto symbols", async () => {

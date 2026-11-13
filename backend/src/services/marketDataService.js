@@ -26,17 +26,35 @@ const HISTORICAL_INTERVALS = new Set([
 ]);
 const ASSET_CLASSES = new Set(["STOCK", "CRYPTO"]);
 
+// A bare suffix is not enough: stock tickers such as GBTC, METH, and SOL also
+// end in a crypto quote asset. Treating any suffix as crypto would silently
+// route legitimate stock symbols to Binance. Requiring a non-empty base asset
+// on each side of a known quote asset avoids that class of misclassification.
+// Keep this aligned with the Binance adapter's supported quote assets. An
+// inferred crypto pair that the adapter rejects would be worse than leaving the
+// symbol as a stock.
+const CRYPTO_QUOTE_ASSETS = ["USDT", "BTC", "ETH"];
+const CRYPTO_PAIR_PATTERN = new RegExp(
+  `^([A-Z0-9]{2,20})(?:${CRYPTO_QUOTE_ASSETS.join("|")})$`,
+);
+
 function invalidRequest(message) {
   return createMarketDataError(message, 400, "MARKET_DATA_INVALID_REQUEST");
+}
+
+function inferAssetClass(normalizedSymbol) {
+  if (normalizedSymbol.startsWith("BINANCE:")) {
+    return "CRYPTO";
+  }
+
+  return CRYPTO_PAIR_PATTERN.test(normalizedSymbol) ? "CRYPTO" : "STOCK";
 }
 
 function normalizeAssetClass(value, symbol) {
   const normalizedSymbol = String(symbol || "")
     .trim()
     .toUpperCase();
-  const inferredCrypto =
-    normalizedSymbol.startsWith("BINANCE:") ||
-    /(?:USDT|BTC|ETH)$/.test(normalizedSymbol);
+  const inferredCrypto = inferAssetClass(normalizedSymbol) === "CRYPTO";
   const assetClass = value
     ? String(value).trim().toUpperCase()
     : inferredCrypto
@@ -263,9 +281,10 @@ function createMarketDataService({ config, providers } = {}) {
   return {
     /**
      * Get one current quote. `options.assetClass` may be STOCK or CRYPTO;
-     * otherwise BINANCE-prefixed symbols and symbols ending in USDT, BTC, or
-     * ETH are treated as crypto and other symbols as stocks. Prices and
-     * changes are decimal strings.
+     * otherwise BINANCE-prefixed symbols and well-formed crypto pairs such as
+     * BTCUSDT or ETHBTC are treated as crypto. Ambiguous single-token symbols
+     * default to stocks so tickers like GBTC are never silently routed to
+     * Binance. Prices and changes are decimal strings.
      */
     async getQuote(symbol, options = {}) {
       const assetClass = normalizeAssetClass(options.assetClass, symbol);
@@ -388,4 +407,6 @@ function createMarketDataService({ config, providers } = {}) {
 
 module.exports = {
   createMarketDataService,
+  normalizeAssetClass,
+  normalizeSymbol,
 };
