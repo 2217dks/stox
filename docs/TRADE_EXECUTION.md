@@ -33,6 +33,12 @@ explicitly instead of being hidden.
 
 Shipped:
 
+- Socket.IO trading events for order status, executed trades, and portfolio
+  valuation updates, published through the realtime event bus.
+- Redis Pub/Sub bridge between the worker and API processes, with
+  best-effort delivery and reconnect-aware subscription.
+- Realtime market price streaming through the `/market` namespace, with
+  polling fallback when market streaming is disabled.
 - Atomic order execution: `order → cash → holding → trade` in one transaction.
 - Trigger evaluation for `MARKET`, `LIMIT`, `STOP_LOSS`, `TAKE_PROFIT`.
 - Realized P&L on `SELL` (absolute and percentage).
@@ -53,7 +59,8 @@ Shipped:
 Not shipped:
 
 - BullMQ/Redis queues, retries, persistence, dashboard, repeatable jobs.
-- Socket.IO / analytics event publication.
+- Analytics event publication for downstream analytics consumers.
+- Durable realtime event history, replay, or guaranteed delivery.
 - Email and push delivery for `ORDER_EXECUTED` (in-app row only).
 - `PATCH /orders/:id` (modify) — see
   [Order endpoints and lifecycle](#-order-endpoints-and-lifecycle), short
@@ -417,9 +424,16 @@ from auth startup validation keeps the engine usable in worker/test contexts.
 
 No email or push is sent, and user preferences (`emailAlerts`,
 `pushEnabled`) are not consulted yet — those belong to the notification
-worker described in `docs/NOTIFICATIONS.md`. There is no Socket.IO emission
-(`docs/REALTIME.md`); clients see the notification on their next
-`GET /notifications` poll.
+worker described in `docs/NOTIFICATIONS.md`.
+
+The in-app `ORDER_EXECUTED` notification is still persisted as a database
+row and is retrieved through the notifications API. Separately, the trading
+realtime pipeline publishes `order-status`, `trade-executed`, and
+`portfolio-update` events to the portfolio's Socket.IO room after execution.
+
+These are separate mechanisms: the realtime trading events do not replace
+the persisted notification row, and the notification row is not itself
+broadcast as a Socket.IO notification event.
 
 ---
 
@@ -559,7 +573,8 @@ Last verified: `42 suites, 799 tests passed` on the full backend suite.
 | Queues | `orderQueue`, `notificationQueue`, `alertQueue`, `queues/index.js` are empty | No transport-level retries, backoff, job persistence, or dashboard (the in-process worker has a bounded attempt counter, not a queue) |
 | Asset classes | `FOREX` exists in the enum but has no market-data provider | FOREX orders are rejected at placement; only `STOCK` and `CRYPTO` execute |
 | Transport | In-process `setInterval` instead of BullMQ | Execution stops when the worker process stops; no horizontal scaling |
-| Real-time | No Socket.IO emission on execution | Clients poll instead of receiving pushes |
+| Analytics | No analytics event publication on execution | Analytics consumers see trades through database reads |
+| Realtime delivery | Redis Pub/Sub is best-effort and has no durable replay | Events can be missed during disconnection; clients must resynchronise from the API/database |
 | Analytics | No analytics event on execution | Analytics consumers see trades only via database reads |
 | Notifications | In-app row only; no email/push, no preference checks | Users get no external alert on a fill |
 | Modify order | `PATCH /orders/:id` is documented but not routed (see [Order endpoints and lifecycle](#-order-endpoints-and-lifecycle)) | Pending orders can only be created or cancelled |
