@@ -89,21 +89,29 @@ describe("Market subscription limits", () => {
     await startServer();
     const client = await connect();
 
-    await expect(emitWithAck(client, "subscribe", { symbol: "AAPL" })).resolves.toMatchObject({
+    await expect(
+      emitWithAck(client, "subscribe", { symbol: "AAPL" }),
+    ).resolves.toMatchObject({
       ok: true,
       symbol: "AAPL",
     });
     // Repeating an existing subscription must not count as a new one.
-    await expect(emitWithAck(client, "subscribe", { symbol: "AAPL" })).resolves.toMatchObject({
+    await expect(
+      emitWithAck(client, "subscribe", { symbol: "AAPL" }),
+    ).resolves.toMatchObject({
       ok: true,
       symbol: "AAPL",
     });
-    await expect(emitWithAck(client, "subscribe", { symbol: "MSFT" })).resolves.toMatchObject({
+    await expect(
+      emitWithAck(client, "subscribe", { symbol: "MSFT" }),
+    ).resolves.toMatchObject({
       ok: true,
       symbol: "MSFT",
     });
 
-    await expect(emitWithAck(client, "subscribe", { symbol: "GOOG" })).resolves.toEqual({
+    await expect(
+      emitWithAck(client, "subscribe", { symbol: "GOOG" }),
+    ).resolves.toEqual({
       ok: false,
       code: "SUBSCRIPTION_LIMIT_REACHED",
       message: expect.any(String),
@@ -117,12 +125,16 @@ describe("Market subscription limits", () => {
     ]);
 
     // Unsubscribing frees capacity without touching the other symbol.
-    await expect(emitWithAck(client, "unsubscribe", { symbol: "AAPL" })).resolves.toMatchObject({
+    await expect(
+      emitWithAck(client, "unsubscribe", { symbol: "AAPL" }),
+    ).resolves.toMatchObject({
       ok: true,
       symbol: "AAPL",
     });
 
-    await expect(emitWithAck(client, "subscribe", { symbol: "GOOG" })).resolves.toMatchObject({
+    await expect(
+      emitWithAck(client, "subscribe", { symbol: "GOOG" }),
+    ).resolves.toMatchObject({
       ok: true,
       symbol: "GOOG",
     });
@@ -130,6 +142,7 @@ describe("Market subscription limits", () => {
     expect(priceStream.subscribe).toHaveBeenLastCalledWith(
       "GOOG",
       expect.any(Function),
+      "STOCK",
     );
   });
 
