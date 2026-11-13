@@ -88,16 +88,24 @@ function createSocketServer(httpServer, options = {}) {
 
   registerTradingNamespace(io);
 
+  const priceStream = options.marketPriceStream || createDefaultPriceStream();
+
   const marketRooms = registerMarketNamespace(io, {
-    priceStream: options.marketPriceStream || createDefaultPriceStream(),
+    priceStream,
     cache: options.marketCache,
+    maxSubscriptionsPerSocket: options.marketMaxSubscriptionsPerSocket,
+    maxTotalSubscriptions: options.marketMaxTotalSubscriptions,
+    subscriptionRateLimit: options.marketSubscriptionRateLimit,
+    subscriptionRateWindowMs: options.marketSubscriptionRateWindowMs,
   });
 
   logger.info("Socket.IO server attached", {
     corsOrigins,
   });
 
-  return { io, marketRooms };
+  // `priceStream` is exposed so operational/debug handlers can read its
+  // `getState()` snapshot without reaching into module internals.
+  return { io, marketRooms, priceStream };
 }
 
 module.exports = {

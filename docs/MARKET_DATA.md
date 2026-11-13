@@ -57,20 +57,16 @@ Both provide **WebSocket streams** for real-time data and **REST APIs** for hist
 ## 🔤 Symbol Normalization
 
 ```javascript
-// utils/symbolUtils.js
+// services/marketDataService.js
 
-// Finnhub: "AAPL", "TSLA", "MSFT"
-// Binance: "BTCUSDT", "ETHUSDT"
+// Stocks are the default: any ticker Finnhub recognises, not a fixed list.
+// Crypto is inferred only for "BINANCE:..." or a pair with a real base asset
+// and one of the adapter-supported quote assets (USDT, BTC, ETH).
+const CRYPTO_PAIR = /^([A-Z0-9]{2,20})(?:USDT|BTC|ETH)$/;
 
-export function normalizeSymbol(symbol) {
-    if (
-        symbol.endsWith("USDT") ||
-        symbol.endsWith("BTC") ||
-        symbol.endsWith("ETH")
-    ) {
-        return `BINANCE:${symbol}`;
-    }
-    return symbol;
+function inferAssetClass(symbol) {
+    if (symbol.startsWith("BINANCE:")) return "CRYPTO";
+    return CRYPTO_PAIR.test(symbol) ? "CRYPTO" : "STOCK";
 }
 
 export function parseSymbol(symbol) {
@@ -96,6 +92,11 @@ export function formatSymbolForDisplay(symbol) {
     return symbol;
 }
 ```
+
+A bare suffix is not enough: tickers such as `GBTC` and `METH` end in `BTC`
+and `ETH` but are stocks. Clients can also pass an explicit `assetClass` to
+override inference for genuinely ambiguous symbols. Examples such as `AAPL`
+and `MSFT` are illustrative; they are not an allow-list.
 
 ---
 
