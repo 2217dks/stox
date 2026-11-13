@@ -299,6 +299,7 @@ async function cancelOrder({ userId, orderId }) {
     },
     select: {
       id: true,
+      portfolioId: true,
       status: true,
     },
   });
@@ -307,23 +308,82 @@ async function cancelOrder({ userId, orderId }) {
     throw AppError.notFound("Order not found.", "ORDER_NOT_FOUND");
   }
 
-  // PENDING -> CANCELLED must be atomic: the status condition lives in the
-  // UPDATE itself, so a concurrent execution between the eligibility check
-  // above and this write cannot be overwritten with CANCELLED. If the
-  // conditional update matches no rows, re-read owner-scoped to tell a
-  // vanished/foreign order (404) apart from one that is no longer
-  // cancellable (400).
-  const transition = await prisma.order.updateMany({
-    where: {
-      id: orderId,
-      status: "PENDING",
-    },
-    data: {
-      status: "CANCELLED",
-    },
-  });
+  if (order.status !== "PENDING") {
+    throw AppError.badRequest(
+      "Only pending orders can be cancelled.",
+      "ORDER_NOT_CANCELLABLE",
+    );
+  }
 
-  if (transition.count === 0) {
+  try {
+    await prisma.$transaction(async (tx) => {
+      // Serialize cash-affecting operations for this portfolio.
+      await tx.$queryRaw`
+        SELECT id
+        FROM "Portfolio"
+        WHERE id = ${order.portfolioId}
+        FOR UPDATE
+      `;
+
+      // Re-read the pending order after acquiring the portfolio lock.
+      const currentOrder = await tx.order.findFirst({
+        where: {
+          id: orderId,
+          portfolioId: order.portfolioId,
+          status: "PENDING",
+        },
+        select: {
+          id: true,
+          side: true,
+          reservedCash: true,
+        },
+      });
+
+      if (!currentOrder) {
+        throw AppError.badRequest(
+          "Only pending orders can be cancelled.",
+          "ORDER_NOT_CANCELLABLE",
+        );
+      }
+
+      // Keep the status condition inside the write to protect against races.
+      const transition = await tx.order.updateMany({
+        where: {
+          id: orderId,
+          status: "PENDING",
+        },
+        data: {
+          status: "CANCELLED",
+          reservedCash: 0,
+        },
+      });
+
+      if (transition.count === 0) {
+        throw AppError.badRequest(
+          "Only pending orders can be cancelled.",
+          "ORDER_NOT_CANCELLABLE",
+        );
+      }
+
+      if (currentOrder.side === "BUY" && !currentOrder.reservedCash.isZero()) {
+        await tx.portfolio.update({
+          where: {
+            id: order.portfolioId,
+          },
+          data: {
+            reservedCash: {
+              decrement: currentOrder.reservedCash,
+            },
+          },
+        });
+      }
+    });
+  } catch (error) {
+    if (error.code !== "ORDER_NOT_CANCELLABLE") {
+      throw error;
+    }
+
+    // Preserve the original 404 vs 400 distinction.
     const current = await prisma.order.findFirst({
       where: {
         id: orderId,
@@ -340,10 +400,7 @@ async function cancelOrder({ userId, orderId }) {
       throw AppError.notFound("Order not found.", "ORDER_NOT_FOUND");
     }
 
-    throw AppError.badRequest(
-      "Only pending orders can be cancelled.",
-      "ORDER_NOT_CANCELLABLE",
-    );
+    throw error;
   }
 
   const updated = await prisma.order.findUnique({
