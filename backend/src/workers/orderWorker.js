@@ -52,66 +52,199 @@ function isPermanentProviderError(error) {
   );
 }
 
-async function rejectPendingOrder(orderId) {
-  const rejection = await prisma.order.updateMany({
-    where: {
-      id: orderId,
-      status: "PENDING",
-    },
-    data: {
-      status: "REJECTED",
-    },
-  });
+async function transitionPendingOrder(orderId, status, extraWhere = {}) {
+  return prisma.$transaction(async (tx) => {
+    // Read the portfolio ID first. This is only a lookup, not a row lock.
+    const orderRef = await tx.order.findUnique({
+      where: { id: orderId },
+      select: { portfolioId: true },
+    });
 
-  return rejection.count > 0;
+    if (!orderRef) {
+      return false;
+    }
+
+    // Always lock the portfolio before locking/updating the order.
+    const portfolios = await tx.$queryRaw`
+      SELECT "id", "reservedCash"
+      FROM "Portfolio"
+      WHERE "id" = ${orderRef.portfolioId}
+      FOR UPDATE
+    `;
+
+    const portfolio = portfolios[0];
+
+    if (!portfolio) {
+      return false;
+    }
+
+    const currentOrder = await tx.order.findFirst({
+      where: {
+        id: orderId,
+        status: "PENDING",
+        ...extraWhere,
+      },
+      select: {
+        side: true,
+        reservedCash: true,
+      },
+    });
+
+    if (!currentOrder) {
+      return false;
+    }
+
+    const orderReservedCash =
+      currentOrder.side === "BUY" ? currentOrder.reservedCash : 0;
+
+    if (
+      currentOrder.side === "BUY" &&
+      portfolio.reservedCash.lt(orderReservedCash)
+    ) {
+      const error = new Error(
+        "Order reservation exceeds portfolio reserved cash.",
+      );
+      error.code = "RESERVATION_INCONSISTENCY";
+      throw error;
+    }
+
+    const transition = await tx.order.updateMany({
+      where: {
+        id: orderId,
+        status: "PENDING",
+        ...extraWhere,
+      },
+      data: {
+        status,
+        reservedCash: 0,
+      },
+    });
+
+    if (transition.count === 0) {
+      return false;
+    }
+
+    if (currentOrder.side === "BUY" && !orderReservedCash.isZero()) {
+      await tx.portfolio.update({
+        where: { id: orderRef.portfolioId },
+        data: {
+          reservedCash: {
+            decrement: orderReservedCash,
+          },
+        },
+      });
+    }
+
+    return true;
+  });
+}
+
+async function rejectPendingOrder(orderId) {
+  return transitionPendingOrder(orderId, "REJECTED");
 }
 
 // Returns "retry" while the order still has budget, "rejected" when this
 // attempt exhausted it, and "skipped" when another worker already moved the
 // order out of PENDING.
 async function recordTransientFailure(orderId, now, maxAttempts) {
-  const incremented = await prisma.order.updateMany({
-    where: {
-      id: orderId,
-      status: "PENDING",
-    },
-    data: {
-      executionAttempts: {
-        increment: 1,
+  return prisma.$transaction(async (tx) => {
+    const orderRef = await tx.order.findUnique({
+      where: { id: orderId },
+      select: { portfolioId: true },
+    });
+
+    if (!orderRef) {
+      return "skipped";
+    }
+
+    const portfolios = await tx.$queryRaw`
+      SELECT "id", "reservedCash"
+      FROM "Portfolio"
+      WHERE "id" = ${orderRef.portfolioId}
+      FOR UPDATE
+    `;
+
+    const portfolio = portfolios[0];
+
+    if (!portfolio) {
+      return "skipped";
+    }
+
+    const currentOrder = await tx.order.findFirst({
+      where: {
+        id: orderId,
+        status: "PENDING",
       },
-      lastExecutionAttemptAt: now,
-    },
-  });
-
-  if (incremented.count === 0) {
-    return "skipped";
-  }
-
-  const current = await prisma.order.findUnique({
-    where: { id: orderId },
-    select: { executionAttempts: true },
-  });
-
-  if (!current || current.executionAttempts < maxAttempts) {
-    return "retry";
-  }
-
-  // The condition is re-checked here so two workers observing the same order
-  // cannot reject it after another one already executed it.
-  const rejection = await prisma.order.updateMany({
-    where: {
-      id: orderId,
-      status: "PENDING",
-      executionAttempts: {
-        gte: maxAttempts,
+      select: {
+        executionAttempts: true,
+        side: true,
+        reservedCash: true,
       },
-    },
-    data: {
-      status: "REJECTED",
-    },
-  });
+    });
 
-  return rejection.count > 0 ? "rejected" : "skipped";
+    if (!currentOrder) {
+      return "skipped";
+    }
+
+    const nextAttempts = currentOrder.executionAttempts + 1;
+    const shouldReject = nextAttempts >= maxAttempts;
+
+    const orderReservedCash =
+      currentOrder.side === "BUY" ? currentOrder.reservedCash : 0;
+
+    if (
+      shouldReject &&
+      currentOrder.side === "BUY" &&
+      portfolio.reservedCash.lt(orderReservedCash)
+    ) {
+      const error = new Error(
+        "Order reservation exceeds portfolio reserved cash.",
+      );
+      error.code = "RESERVATION_INCONSISTENCY";
+      throw error;
+    }
+
+    const update = await tx.order.updateMany({
+      where: {
+        id: orderId,
+        status: "PENDING",
+        executionAttempts: currentOrder.executionAttempts,
+      },
+      data: {
+        executionAttempts: {
+          increment: 1,
+        },
+        lastExecutionAttemptAt: now,
+        ...(shouldReject
+          ? {
+              status: "REJECTED",
+              reservedCash: 0,
+            }
+          : {}),
+      },
+    });
+
+    if (update.count === 0) {
+      return "skipped";
+    }
+
+    if (
+      shouldReject &&
+      currentOrder.side === "BUY" &&
+      !orderReservedCash.isZero()
+    ) {
+      await tx.portfolio.update({
+        where: { id: orderRef.portfolioId },
+        data: {
+          reservedCash: {
+            decrement: orderReservedCash,
+          },
+        },
+      });
+    }
+
+    return shouldReject ? "rejected" : "retry";
+  });
 }
 
 /**
@@ -124,17 +257,9 @@ async function recordTransientFailure(orderId, now, maxAttempts) {
  */
 async function runOrder(order, { quoteProvider, now, retryLimit }) {
   if (order.expiresAt && order.expiresAt <= now) {
-    const expiration = await prisma.order.updateMany({
-      where: {
-        id: order.id,
-        status: "PENDING",
-      },
-      data: {
-        status: "EXPIRED",
-      },
-    });
+    const expired = await transitionPendingOrder(order.id, "EXPIRED");
 
-    return expiration.count > 0 ? "expired" : "skipped";
+    return expired ? "expired" : "skipped";
   }
 
   // Portfolios can be deactivated after the order was placed. Skip rather
