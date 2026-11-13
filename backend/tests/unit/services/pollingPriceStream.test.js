@@ -2,10 +2,7 @@ const {
   createPollingPriceStream,
   DEFAULT_INTERVAL_MS,
 } = require("../../../src/services/pollingPriceStream");
-const {
-  sleep,
-  waitFor,
-} = require("../../helpers/realtime");
+const { sleep, waitFor } = require("../../helpers/realtime");
 
 const QUOTE_TIME = "2026-11-11T10:00:00.000Z";
 
@@ -37,9 +34,9 @@ describe("Polling price stream", () => {
 
   it("requires a price source with getQuote()", () => {
     expect(() => createPollingPriceStream()).toThrow(TypeError);
-    expect(() =>
-      createPollingPriceStream({ priceSource: {} }),
-    ).toThrow(TypeError);
+    expect(() => createPollingPriceStream({ priceSource: {} })).toThrow(
+      TypeError,
+    );
   });
 
   it("rejects a non-function listener", () => {
@@ -89,6 +86,39 @@ describe("Polling price stream", () => {
     expect(getQuote).toHaveBeenCalledWith("BTCUSDT", {
       assetClass: "CRYPTO",
     });
+  });
+
+  it("uses an explicit CRYPTO override for WBTC", async () => {
+    const getQuote = jest.fn().mockResolvedValue({
+      price: "67000",
+      volume: "0.25",
+      timestamp: QUOTE_TIME,
+    });
+    const { stream } = buildStream({ getQuote });
+    const listener = jest.fn();
+
+    stream.subscribe("WBTC", listener, "CRYPTO");
+
+    await waitFor(() => listener.mock.calls.length === 1);
+
+    expect(getQuote).toHaveBeenCalledWith("WBTC", {
+      assetClass: "CRYPTO",
+    });
+  });
+
+  it("rejects conflicting asset classes for the same polling symbol", async () => {
+    const getQuote = jest.fn().mockResolvedValue({
+      price: "67000",
+      volume: "0.25",
+      timestamp: QUOTE_TIME,
+    });
+    const { stream } = buildStream({ getQuote });
+
+    stream.subscribe("WBTC", jest.fn(), "CRYPTO");
+
+    expect(() => stream.subscribe("WBTC", jest.fn(), "STOCK")).toThrow(
+      /asset-class conflict/i,
+    );
   });
 
   it("reports a missing volume as null and keeps price as a string", async () => {

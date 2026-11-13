@@ -125,9 +125,7 @@ describe("Live market-data broadcasting", () => {
   }
 
   function sendTrade(connection, symbol, price, quantity) {
-    connection.socket.send(
-      JSON.stringify(tradeFrame(symbol, price, quantity)),
-    );
+    connection.socket.send(JSON.stringify(tradeFrame(symbol, price, quantity)));
   }
 
   function subscriptionPredicate(symbol) {
@@ -432,7 +430,13 @@ describe("Live market-data broadcasting", () => {
       0,
     );
 
-    for (const payload of [null, {}, { symbol: "" }, { symbol: 7 }, { symbol: "!!" }]) {
+    for (const payload of [
+      null,
+      {},
+      { symbol: "" },
+      { symbol: 7 },
+      { symbol: "!!" },
+    ]) {
       await expect(subscribe(client, payload)).resolves.toMatchObject({
         ok: false,
         code: "VALIDATION_ERROR",
@@ -461,6 +465,48 @@ describe("Live market-data broadcasting", () => {
     });
 
     await waitForSubscription(symbol);
+  });
+
+  it("rejects conflicting asset classes without interrupting the active subscription", async () => {
+    const symbol = "WBTC";
+    const cryptoClient = await connectMarket();
+    const stockClient = await connectMarket();
+
+    await expect(
+      subscribe(cryptoClient, {
+        symbol,
+        assetClass: "CRYPTO",
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      symbol,
+      assetClass: "CRYPTO",
+    });
+
+    const { connection } = await waitForSubscription(symbol);
+
+    await expect(
+      subscribe(stockClient, {
+        symbol,
+        assetClass: "STOCK",
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "ASSET_CLASS_CONFLICT",
+      message: "Symbol WBTC is already subscribed as CRYPTO.",
+    });
+
+    const update = waitForEvent(cryptoClient, "price-update", {
+      predicate: (payload) => payload.symbol === symbol,
+    });
+
+    sendTrade(connection, symbol, "67000", "0.5");
+
+    await expect(update).resolves.toMatchObject({
+      symbol,
+      price: "67000",
+      volume: "0.5",
+    });
   });
 
   it("ignores provider ticks for symbols that nobody is watching", async () => {
@@ -586,7 +632,9 @@ describe("Live market-data broadcasting", () => {
 
     await waitFor(
       () =>
-        second.messages.some((message) => subscriptionPredicate(symbol)(message)),
+        second.messages.some((message) =>
+          subscriptionPredicate(symbol)(message),
+        ),
       { description: "resubscription after reconnect" },
     );
 

@@ -78,7 +78,9 @@ function createMarketRoomRegistry({
   now = () => Date.now(),
 } = {}) {
   if (!io) {
-    throw new TypeError("createMarketRoomRegistry requires a Socket.IO server.");
+    throw new TypeError(
+      "createMarketRoomRegistry requires a Socket.IO server.",
+    );
   }
 
   if (!priceStream || typeof priceStream.subscribe !== "function") {
@@ -117,7 +119,10 @@ function createMarketRoomRegistry({
         ok: false,
         code: "RATE_LIMITED",
         message: "Too many subscription requests. Try again shortly.",
-        retryAfterMs: Math.max(1, subscriptionRateWindowMs - (current - oldest)),
+        retryAfterMs: Math.max(
+          1,
+          subscriptionRateWindowMs - (current - oldest),
+        ),
       };
     }
 
@@ -222,6 +227,16 @@ function createMarketRoomRegistry({
 
     const { symbol, assetClass } = normalized;
 
+    const existingEntry = subscriptions.get(symbol);
+
+    if (existingEntry && existingEntry.assetClass !== assetClass) {
+      return {
+        ok: false,
+        code: "ASSET_CLASS_CONFLICT",
+        message: `Symbol ${symbol} is already subscribed as ${existingEntry.assetClass}.`,
+      };
+    }
+
     if (
       typeof priceStream.supportsAssetClass === "function" &&
       !priceStream.supportsAssetClass(assetClass)
@@ -251,7 +266,7 @@ function createMarketRoomRegistry({
       }
     }
 
-    let entry = subscriptions.get(symbol);
+    let entry = existingEntry;
 
     if (!entry) {
       entry = {
@@ -262,14 +277,14 @@ function createMarketRoomRegistry({
       subscriptions.set(symbol, entry);
 
       try {
-        priceStream.subscribe(symbol, listenerFor(symbol));
+        priceStream.subscribe(symbol, listenerFor(symbol), assetClass);
       } catch (error) {
         // Do not leave a symbol registered if the provider rejected the
         // subscription; otherwise the global cap slowly leaks phantom symbols.
         subscriptions.delete(symbol);
 
         try {
-          priceStream.unsubscribe(symbol);
+          priceStream.unsubscribe(symbol, assetClass);
         } catch (unsubscribeError) {
           log.warn("Price stream rollback failed", {
             symbol,
@@ -282,6 +297,7 @@ function createMarketRoomRegistry({
     }
 
     state.symbols.add(symbol);
+
     entry.sockets.add(socket.id);
     await socket.join(stockRoom(symbol));
 
@@ -331,7 +347,7 @@ function createMarketRoomRegistry({
       entry.sockets.delete(socket.id);
 
       if (entry.sockets.size === 0) {
-        priceStream.unsubscribe(symbol);
+        priceStream.unsubscribe(symbol, entry.assetClass);
         subscriptions.delete(symbol);
       }
     }
@@ -366,15 +382,15 @@ function createMarketRoomRegistry({
       entry.sockets.delete(socketId);
 
       if (entry.sockets.size === 0) {
-        priceStream.unsubscribe(symbol);
+        priceStream.unsubscribe(symbol, entry.assetClass);
         subscriptions.delete(symbol);
       }
     }
   }
 
   function stop() {
-    for (const symbol of subscriptions.keys()) {
-      priceStream.unsubscribe(symbol);
+    for (const [symbol, entry] of subscriptions) {
+      priceStream.unsubscribe(symbol, entry.assetClass);
     }
 
     subscriptions.clear();

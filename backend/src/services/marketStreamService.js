@@ -140,7 +140,9 @@ function createReconnectingSocket({
       return false;
     }
 
-    socket.send(typeof payload === "string" ? payload : JSON.stringify(payload));
+    socket.send(
+      typeof payload === "string" ? payload : JSON.stringify(payload),
+    );
     return true;
   }
 
@@ -217,6 +219,7 @@ function createMarketStream({
   const binanceUrl = config.binanceUrl || BINANCE_URL;
 
   const listeners = new Map();
+  const subscriptionAssetClasses = new Map();
   const providers = {
     stock: {
       enabled: Boolean(finnhubApiKey),
@@ -265,8 +268,8 @@ function createMarketStream({
     };
   }
 
-  function providerFor(symbol) {
-    return normalizeAssetClass(undefined, symbol) === "CRYPTO"
+  function providerFor(symbol, assetClass) {
+    return normalizeAssetClass(assetClass, symbol) === "CRYPTO"
       ? "crypto"
       : "stock";
   }
@@ -365,7 +368,7 @@ function createMarketStream({
     return state.connection;
   }
 
-  function subscribe(symbol, listener) {
+  function subscribe(symbol, listener, assetClass) {
     const internal = toInternalSymbol(symbol);
 
     if (!internal) {
@@ -376,6 +379,15 @@ function createMarketStream({
       throw new TypeError("A tick listener is required.");
     }
 
+    const resolvedAssetClass = normalizeAssetClass(assetClass, internal);
+    const existingAssetClass = subscriptionAssetClasses.get(internal);
+
+    if (existingAssetClass && existingAssetClass !== resolvedAssetClass) {
+      throw new Error(
+        `Asset-class conflict for ${internal}: already subscribed as ${existingAssetClass}.`,
+      );
+    }
+
     let symbolListeners = listeners.get(internal);
 
     if (!symbolListeners) {
@@ -384,8 +396,9 @@ function createMarketStream({
     }
 
     symbolListeners.add(listener);
+    subscriptionAssetClasses.set(internal, resolvedAssetClass);
 
-    const provider = providerFor(internal);
+    const provider = providerFor(internal, resolvedAssetClass);
     const state = providers[provider];
 
     if (!state.enabled) {
@@ -412,16 +425,32 @@ function createMarketStream({
     }
   }
 
-  function unsubscribe(symbol) {
+  function unsubscribe(symbol, assetClass) {
     const internal = toInternalSymbol(symbol);
 
     if (!internal) {
       return;
     }
 
-    listeners.delete(internal);
+    const storedAssetClass = subscriptionAssetClasses.get(internal);
 
-    const provider = providerFor(internal);
+    if (!storedAssetClass) {
+      return;
+    }
+
+    if (
+      assetClass !== undefined &&
+      normalizeAssetClass(assetClass, internal) !== storedAssetClass
+    ) {
+      throw new Error(
+        `Asset-class conflict for ${internal}: subscribed as ${storedAssetClass}.`,
+      );
+    }
+
+    listeners.delete(internal);
+    subscriptionAssetClasses.delete(internal);
+
+    const provider = providerFor(internal, storedAssetClass);
     const state = providers[provider];
 
     if (!state.symbols.delete(internal)) {

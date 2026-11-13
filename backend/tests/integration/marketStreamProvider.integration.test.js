@@ -5,14 +5,8 @@ const { WebSocketServer } = require("ws");
 const {
   createMarketStream,
 } = require("../../src/services/marketStreamService");
-const {
-  startProviderServer,
-} = require("../helpers/providerServer");
-const {
-  silentLogger,
-  sleep,
-  waitFor,
-} = require("../helpers/realtime");
+const { startProviderServer } = require("../helpers/providerServer");
+const { silentLogger, sleep, waitFor } = require("../helpers/realtime");
 
 const TICK_TIME = Date.UTC(2026, 10, 11, 10, 0, 0);
 const TICK_ISO = new Date(TICK_TIME).toISOString();
@@ -86,10 +80,9 @@ describe("Market stream provider connection", () => {
   }
 
   async function waitForMessage(connection, predicate, description) {
-    return waitFor(
-      () => connection.messages.find(predicate),
-      { description: description || "provider message" },
-    );
+    return waitFor(() => connection.messages.find(predicate), {
+      description: description || "provider message",
+    });
   }
 
   function stockSubscribe(symbol) {
@@ -143,6 +136,57 @@ describe("Market stream provider connection", () => {
       params: ["btcusdt@trade"],
       id: 1,
     });
+  });
+
+  it("honours an explicit CRYPTO override for WBTC", async () => {
+    const stream = buildStream();
+
+    stream.subscribe("WBTC", jest.fn(), "CRYPTO");
+
+    const connection = await waitForConnection("/binance");
+
+    await expect(
+      waitForMessage(connection, binanceSubscribe("WBTC")),
+    ).resolves.toEqual({
+      method: "SUBSCRIBE",
+      params: ["wbtc@trade"],
+      id: 1,
+    });
+  });
+
+  it("infers GBTC as a stock when no asset-class override is supplied", async () => {
+    const stream = buildStream();
+
+    stream.subscribe("GBTC", jest.fn());
+
+    const connection = await waitForConnection("/finnhub");
+
+    await expect(
+      waitForMessage(connection, stockSubscribe("GBTC")),
+    ).resolves.toEqual({
+      type: "subscribe",
+      symbol: "GBTC",
+    });
+  });
+
+  it("rejects conflicting asset classes for the same streamed symbol", async () => {
+    const stream = buildStream();
+
+    stream.subscribe("WBTC", jest.fn(), "CRYPTO");
+
+    expect(() => stream.subscribe("WBTC", jest.fn(), "STOCK")).toThrow(
+      /Asset-class conflict/i,
+    );
+
+    const connection = await waitForConnection("/binance");
+
+    await expect(
+      waitForMessage(connection, binanceSubscribe("WBTC")),
+    ).resolves.toBeDefined();
+
+    expect(
+      provider.connections.filter((entry) => entry.path === "/finnhub"),
+    ).toHaveLength(0);
   });
 
   it("streams arbitrary stock and crypto symbols without a catalog allow-list", async () => {
@@ -318,7 +362,10 @@ describe("Market stream provider connection", () => {
     await waitForMessage(connection, stockSubscribe("AAPL"));
 
     connection.socket.send(
-      JSON.stringify({ type: "trade", data: [{ s: "AAPL", p: 7.5, t: TICK_TIME }] }),
+      JSON.stringify({
+        type: "trade",
+        data: [{ s: "AAPL", p: 7.5, t: TICK_TIME }],
+      }),
     );
 
     await expect(
@@ -355,7 +402,10 @@ describe("Market stream provider connection", () => {
     expect(connection.closed).toBe(false);
 
     connection.socket.send(
-      JSON.stringify({ type: "trade", data: [{ s: "AAPL", p: 1, v: 1, t: TICK_TIME }] }),
+      JSON.stringify({
+        type: "trade",
+        data: [{ s: "AAPL", p: 1, v: 1, t: TICK_TIME }],
+      }),
     );
 
     await expect(
@@ -383,7 +433,10 @@ describe("Market stream provider connection", () => {
     await waitForMessage(connection, stockSubscribe("AAPL"));
 
     connection.socket.send(
-      JSON.stringify({ type: "trade", data: [{ s: "AAPL", p: 2, v: 1, t: TICK_TIME }] }),
+      JSON.stringify({
+        type: "trade",
+        data: [{ s: "AAPL", p: 2, v: 1, t: TICK_TIME }],
+      }),
     );
 
     await waitFor(() => healthy.mock.calls.length === 1, {
@@ -404,13 +457,15 @@ describe("Market stream provider connection", () => {
 
     await waitForMessage(
       connection,
-      (message) =>
-        message.type === "unsubscribe" && message.symbol === "AAPL",
+      (message) => message.type === "unsubscribe" && message.symbol === "AAPL",
       "AAPL unsubscribe",
     );
 
     connection.socket.send(
-      JSON.stringify({ type: "trade", data: [{ s: "AAPL", p: 2, v: 1, t: TICK_TIME }] }),
+      JSON.stringify({
+        type: "trade",
+        data: [{ s: "AAPL", p: 2, v: 1, t: TICK_TIME }],
+      }),
     );
 
     await sleep(50);
@@ -457,7 +512,10 @@ describe("Market stream provider connection", () => {
     );
 
     second.socket.send(
-      JSON.stringify({ type: "trade", data: [{ s: "AAPL", p: 42, v: 1, t: TICK_TIME }] }),
+      JSON.stringify({
+        type: "trade",
+        data: [{ s: "AAPL", p: 42, v: 1, t: TICK_TIME }],
+      }),
     );
 
     await waitFor(() => listener.mock.calls.length === 1, {
@@ -659,7 +717,9 @@ describe("Market stream provider connection", () => {
         },
       },
     });
-    expect(connected.providers.stock.lastConnectedAt).toEqual(expect.any(String));
+    expect(connected.providers.stock.lastConnectedAt).toEqual(
+      expect.any(String),
+    );
 
     connection.socket.terminate();
 
@@ -764,10 +824,7 @@ describe("Market stream provider connection", () => {
       description: "initial attempt plus two retries",
     });
 
-    const gaps = [
-      attempts[1] - attempts[0],
-      attempts[2] - attempts[1],
-    ];
+    const gaps = [attempts[1] - attempts[0], attempts[2] - attempts[1]];
 
     // Real timers cannot be earlier than the configured delay; the small
     // margin only absorbs scheduling overhead in the other direction.
