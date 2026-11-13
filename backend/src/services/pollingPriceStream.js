@@ -106,18 +106,26 @@ function createPollingPriceStream({
     }
   }
 
-  function subscribe(symbol, listener) {
+  function subscribe(symbol, listener, assetClass) {
     if (typeof listener !== "function") {
       throw new TypeError("A tick listener is required.");
     }
+
+    const resolvedAssetClass = normalizeAssetClass(assetClass, symbol);
 
     running = true;
 
     let entry = entries.get(symbol);
 
+    if (entry && entry.assetClass !== resolvedAssetClass) {
+      throw new Error(
+        `Asset-class conflict for ${symbol}: already subscribed as ${entry.assetClass}.`,
+      );
+    }
+
     if (!entry) {
       entry = {
-        assetClass: normalizeAssetClass(undefined, symbol),
+        assetClass: resolvedAssetClass,
         listeners: new Set(),
         timer: null,
         stopped: false,
