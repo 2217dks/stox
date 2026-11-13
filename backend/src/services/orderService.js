@@ -2,6 +2,78 @@ const prisma = require("../config/database");
 const { isExecutableAssetType } = require("../utils/assetSupport");
 const { AppError } = require("../utils/errors");
 const { hasEventBus, publishOrderStatus } = require("../realtime/orderEvents");
+const { Prisma } = require("@prisma/client");
+const marketDataService = require("./marketData");
+
+const ZERO = new Prisma.Decimal(0);
+const MAX_MONEY = new Prisma.Decimal("9999999999.99999999");
+const MONEY_SCALE = 8;
+
+/**
+ * Calculate the cash that must be reserved for a BUY order.
+ *
+ * MARKET      -> current market quote
+ * LIMIT       -> limitPrice
+ * STOP_LOSS   -> stopPrice
+ * TAKE_PROFIT -> stopPrice
+ * SELL        -> zero
+ */
+async function calculateOrderReservation({
+  side,
+  type,
+  symbol,
+  assetType,
+  quantity,
+  limitPrice,
+  stopPrice,
+}) {
+  if (side !== "BUY") {
+    return ZERO;
+  }
+
+  let referencePrice;
+
+  if (type === "MARKET") {
+    const quote = await marketDataService.getQuote(symbol, {
+      assetClass: assetType,
+    });
+
+    referencePrice = quote.price;
+  } else if (type === "LIMIT") {
+    referencePrice = limitPrice;
+  } else {
+    referencePrice = stopPrice;
+  }
+
+  const decimalQuantity = new Prisma.Decimal(quantity);
+  const decimalPrice = new Prisma.Decimal(referencePrice);
+
+  if (
+    !decimalQuantity.isFinite() ||
+    !decimalPrice.isFinite() ||
+    decimalQuantity.lte(ZERO) ||
+    decimalPrice.lte(ZERO)
+  ) {
+    throw AppError.badRequest(
+      "Unable to calculate the cash reservation for this order.",
+      "INVALID_RESERVATION_AMOUNT",
+    );
+  }
+
+  // Round upward to avoid reserving less than the calculated amount.
+  const reservation = decimalQuantity
+    .times(decimalPrice)
+    .toDecimalPlaces(MONEY_SCALE, Prisma.Decimal.ROUND_UP);
+
+  if (reservation.gt(MAX_MONEY)) {
+    throw AppError.badRequest(
+      "Order value exceeds the supported portfolio balance.",
+      "RESERVATION_AMOUNT_TOO_LARGE",
+    );
+  }
+
+  return reservation;
+}
 
 async function ensureActiveUser(userId) {
   const user = await prisma.user.findUnique({
@@ -57,6 +129,7 @@ const SERIALIZED_ORDER_FIELDS = {
   type: true,
   status: true,
   quantity: true,
+  reservedCash: true,
   limitPrice: true,
   stopPrice: true,
   executedPrice: true,
@@ -78,6 +151,7 @@ function serializeOrder(order) {
     type: order.type,
     status: order.status,
     quantity: order.quantity.toString(),
+    reservedCash: order.reservedCash.toString(),
     limitPrice: order.limitPrice ? order.limitPrice.toString() : null,
     stopPrice: order.stopPrice ? order.stopPrice.toString() : null,
     executedPrice: order.executedPrice ? order.executedPrice.toString() : null,
@@ -300,8 +374,6 @@ async function createOrder({
 
   await getOwnedActivePortfolio(userId, portfolioId);
 
-  // Reject unsupported classes before the row exists. Letting one through
-  // would create a PENDING order the worker can never quote or execute.
   if (!isExecutableAssetType(assetType)) {
     throw AppError.badRequest(
       `Orders are not supported for the ${assetType} asset class.`,
@@ -322,19 +394,87 @@ async function createOrder({
     );
   }
 
-  const order = await prisma.order.create({
-    data: {
-      portfolioId,
-      symbol: normalizedSymbol,
-      assetType,
-      side,
-      type,
-      status: "PENDING",
-      quantity,
-      limitPrice,
-      stopPrice,
-      source: "MANUAL",
-    },
+  // Calculate the reservation before opening the database transaction.
+  // This avoids holding a portfolio row lock while waiting for a market quote.
+  const reservation = await calculateOrderReservation({
+    side,
+    type,
+    symbol: normalizedSymbol,
+    assetType,
+    quantity,
+    limitPrice,
+    stopPrice,
+  });
+
+  const order = await prisma.$transaction(async (tx) => {
+    // Serialize financial updates for this portfolio.
+    const portfolios = await tx.$queryRaw`
+      SELECT
+        "id",
+        "isActive",
+        "cashBalance",
+        "reservedCash"
+      FROM "Portfolio"
+      WHERE "id" = ${portfolioId}
+        AND "userId" = ${userId}
+      FOR UPDATE
+    `;
+
+    const portfolio = portfolios[0];
+
+    if (!portfolio) {
+      throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+    }
+
+    if (!portfolio.isActive) {
+      throw AppError.badRequest("Portfolio is inactive.", "PORTFOLIO_INACTIVE");
+    }
+
+    const cashBalance = new Prisma.Decimal(portfolio.cashBalance);
+    const reservedCash = new Prisma.Decimal(portfolio.reservedCash);
+    const availableCash = cashBalance.minus(reservedCash);
+
+    if (availableCash.lt(reservation)) {
+      throw AppError.badRequest(
+        "Insufficient available portfolio cash.",
+        "INSUFFICIENT_BALANCE",
+        {
+          required: reservation.toString(),
+          available: availableCash.toString(),
+        },
+      );
+    }
+
+    // Increase the portfolio's aggregate reservation.
+    if (reservation.gt(ZERO)) {
+      await tx.portfolio.update({
+        where: {
+          id: portfolioId,
+        },
+        data: {
+          reservedCash: {
+            increment: reservation,
+          },
+        },
+      });
+    }
+
+    // Create the order and its reservation in the same transaction.
+    return tx.order.create({
+      data: {
+        portfolioId,
+        symbol: normalizedSymbol,
+        assetType,
+        side,
+        type,
+        status: "PENDING",
+        quantity,
+        reservedCash: reservation,
+        limitPrice,
+        stopPrice,
+        source: "MANUAL",
+      },
+    });
   });
 
   const serialized = serializeOrder(order);
