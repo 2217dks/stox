@@ -5,6 +5,7 @@ const { Prisma } = require("@prisma/client");
 const prisma = require("../config/database");
 const { createOrderExecutedNotification } = require("./notificationEvents");
 const { publishExecutionEvents } = require("../realtime/orderEvents");
+const { recordOrderEvent } = require("./orderEventService");
 const { AppError } = require("../utils/errors");
 const logger = require("../utils/logger");
 
@@ -548,6 +549,22 @@ async function executeOrder(orderOrId, price) {
           realizedPnl,
           realizedPnlPct,
           executedAt,
+        },
+      });
+
+      await recordOrderEvent(tx, {
+        orderId: order.id,
+        eventType: "EXECUTED",
+        previousStatus: "PENDING",
+        newStatus: "EXECUTED",
+        metadata: {
+          tradeId: trade.id,
+          executionPrice: executionPrice.toString(),
+          quantity: quantity.toString(),
+          totalValue: totalValue.toString(),
+          realizedPnl: realizedPnl ? realizedPnl.toString() : null,
+          realizedPnlPct: realizedPnlPct ? realizedPnlPct.toString() : null,
+          fees: ZERO.toString(),
         },
       });
 

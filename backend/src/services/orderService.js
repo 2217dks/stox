@@ -4,6 +4,7 @@ const { AppError } = require("../utils/errors");
 const { hasEventBus, publishOrderStatus } = require("../realtime/orderEvents");
 const { Prisma } = require("@prisma/client");
 const marketDataService = require("./marketData");
+const { recordOrderEvent, getOrderEvents } = require("./orderEventService");
 
 const ZERO = new Prisma.Decimal(0);
 const MAX_MONEY = new Prisma.Decimal("9999999999.99999999");
@@ -377,6 +378,20 @@ async function cancelOrder({ userId, orderId }) {
           },
         });
       }
+
+      await recordOrderEvent(tx, {
+        orderId,
+        eventType: "CANCELLED",
+        previousStatus: "PENDING",
+        newStatus: "CANCELLED",
+        metadata: {
+          reason: "USER_CANCELLED",
+          releasedReservedCash:
+            currentOrder.side === "BUY"
+              ? currentOrder.reservedCash.toString()
+              : "0",
+        },
+      });
     });
   } catch (error) {
     if (error.code !== "ORDER_NOT_CANCELLABLE") {
@@ -517,7 +532,7 @@ async function createOrder({
     }
 
     // Create the order and its reservation in the same transaction.
-    return tx.order.create({
+    const createdOrder = await tx.order.create({
       data: {
         portfolioId,
         symbol: normalizedSymbol,
@@ -532,6 +547,27 @@ async function createOrder({
         source: "MANUAL",
       },
     });
+
+    await recordOrderEvent(tx, {
+      orderId: createdOrder.id,
+      sequence: 1,
+      eventType: "CREATED",
+      previousStatus: null,
+      newStatus: "PENDING",
+      metadata: {
+        symbol: normalizedSymbol,
+        assetType,
+        side,
+        type,
+        quantity: createdOrder.quantity.toString(),
+        reservedCash: reservation.toString(),
+        limitPrice: limitPrice ? limitPrice.toString() : null,
+        stopPrice: stopPrice ? stopPrice.toString() : null,
+        source: "MANUAL",
+      },
+    });
+
+    return createdOrder;
   });
 
   const serialized = serializeOrder(order);
@@ -548,4 +584,5 @@ module.exports = {
   cancelOrder,
   createOrder,
   createMarketOrder: createOrder,
+  getOrderEvents,
 };
