@@ -5,6 +5,10 @@ const validate = require("../middleware/validation");
 const {
   portfolioIdParamsSchema,
   updatePortfolioSchema,
+  pnlHeatmapQuerySchema,
+  riskMetricsQuerySchema,
+  benchmarkQuerySchema,
+  benchmarkComparisonQuerySchema,
 } = require("../validators/portfolioValidator");
 const portfolioController = require("../controllers/portfolioController");
 
@@ -55,6 +59,38 @@ router.get(
   authMiddleware,
   validate(portfolioIdParamsSchema, "params", "validatedParams"),
   portfolioController.getPortfolioSummary,
+);
+
+router.get(
+  "/:portfolioId/pnl-heatmap",
+  authMiddleware,
+  validate(portfolioIdParamsSchema, "params", "validatedParams"),
+  validate(pnlHeatmapQuerySchema, "query", "validatedQuery"),
+  portfolioController.getPnlHeatmap,
+);
+
+router.get(
+  "/:portfolioId/risk-metrics",
+  authMiddleware,
+  validate(portfolioIdParamsSchema, "params", "validatedParams"),
+  validate(riskMetricsQuerySchema, "query", "validatedQuery"),
+  portfolioController.getRiskMetrics,
+);
+
+router.get(
+  "/:portfolioId/benchmark",
+  authMiddleware,
+  validate(portfolioIdParamsSchema, "params", "validatedParams"),
+  validate(benchmarkQuerySchema, "query", "validatedQuery"),
+  portfolioController.getBenchmark,
+);
+
+router.get(
+  "/:portfolioId/benchmark-comparison",
+  authMiddleware,
+  validate(portfolioIdParamsSchema, "params", "validatedParams"),
+  validate(benchmarkComparisonQuerySchema, "query", "validatedQuery"),
+  portfolioController.getBenchmarkComparison,
 );
 
 module.exports = router;

@@ -187,9 +187,10 @@ model Portfolio {
   isActive  Boolean @default(true)
 
   // Relations
-  holdings Holding[]
-  orders   Order[]
-  trades   Trade[]
+  holdings             Holding[]
+  orders               Order[]
+  trades               Trade[]
+  performanceSnapshots PerformanceSnapshot[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -371,6 +372,33 @@ model OrderEvent {
 
   @@unique([orderId, sequence])
   @@index([orderId, createdAt])
+}
+
+// ============================================================
+// PERFORMANCE SNAPSHOT
+// ============================================================
+
+model PerformanceSnapshot {
+  id String @id @default(uuid())
+
+  portfolioId String
+
+  portfolio Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  totalValue    Decimal @db.Decimal(18, 8)
+  cashBalance   Decimal @db.Decimal(18, 8)
+  holdingsValue Decimal @db.Decimal(18, 8)
+
+  dailyPnl    Decimal @db.Decimal(18, 8)
+  dailyPnlPct Decimal @db.Decimal(10, 4)
+
+  snapshotDate DateTime @db.Date
+
+  createdAt DateTime @default(now())
+
+  @@unique([portfolioId, snapshotDate])
+  @@index([portfolioId])
+  @@index([snapshotDate])
 }
 
 // ============================================================

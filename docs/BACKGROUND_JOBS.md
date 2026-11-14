@@ -400,3 +400,27 @@ app.use("/admin/queues", serverAdapter.getRouter());
 ```
 
 Access at: `http://localhost:5000/admin/queues`
+
+---
+
+## 📈 In-Process Scheduled Workers & Batch Scripts
+
+For environments running without full BullMQ / Redis worker clusters, or for daily market close rollups, Stox provides dedicated in-process workers and CLI batch scripts:
+
+### 1. Portfolio Snapshot Worker (`src/workers/portfolioSnapshotWorker.js`)
+- **Execution:** Started automatically by `npm run workers` (`src/workers/index.js`).
+- **Cadence & Window:** Evaluates once per interval (default 60s). Scheduled captures execute within the post-midnight UTC settlement window (`00:00 - 02:00 UTC`, configurable via `PORTFOLIO_SNAPSHOT_WINDOW_HOURS`).
+- **End-of-Day Semantics:** Targets yesterday's completed date ($D = T - 1$), computing valuations and P&L as of $D\text{T}23:59:59.999\text{Z}$ using historical closing prices (`getHistoricalPrice` / `getHistoricalPrices`), not live execution-time quotes, and persisting idempotently for `snapshotDate = D`.
+- **Per-Portfolio Restart & Retry Guardrails:** 
+  - On restart or interval poll, verifies coverage per active portfolio for the target date.
+  - If a prior run was partially successful, retries target ONLY the portfolios still missing snapshots.
+  - If a scheduled run was missed and execution occurs outside the settlement window, it logs an alert with missing counts and skips to avoid polluting historical EOD data with live intraday quotes.
+  - Current date ($T$) is never snapshotted mid-day before closing.
+- **Graceful Shutdown:** Handles `SIGINT` / `SIGTERM` signals cleanly with timer cancellation.
+
+### 2. Standalone Snapshot Scripts
+- **Leaderboard Snapshots:** `npm run leaderboard:snapshot` (`scripts/generate-leaderboard-snapshots.js`)
+- **Portfolio Snapshots:** `npm run portfolio:snapshot` (`scripts/generate-portfolio-snapshots.js`)
+  - Supports `--date=YYYY-MM-DD` to target a specific date's EOD valuation.
+  - Supports `--force` to bypass settlement window checks during operational backfills.
+

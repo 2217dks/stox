@@ -169,10 +169,10 @@ model Portfolio {
   isDefault       Boolean  @default(false)
   isActive        Boolean  @default(true)
 
-  holdings        Holding[]
-  orders          Order[]
-  trades          Trade[]
-  performance     PerformanceSnapshot[]
+  holdings             Holding[]
+  orders               Order[]
+  trades               Trade[]
+  performanceSnapshots PerformanceSnapshot[]
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt

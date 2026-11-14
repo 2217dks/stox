@@ -1,4 +1,8 @@
 const portfolioService = require("../services/portfolioService");
+const portfolioHeatmapService = require("../services/portfolioHeatmapService");
+const riskMetricsService = require("../services/riskMetricsService");
+const benchmarkService = require("../services/benchmarkService");
+const benchmarkComparisonService = require("../services/benchmarkComparisonService");
 
 async function listPortfolios(req, res, next) {
   try {
@@ -165,6 +169,98 @@ async function getCashBalance(req, res, next) {
   }
 }
 
+async function getPnlHeatmap(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+    const { period, year } = req.validatedQuery || {};
+
+    await portfolioService.getPortfolioById(userId, portfolioId);
+
+    const result = await portfolioHeatmapService.getPortfolioPnlHeatmap(
+      portfolioId,
+      { period, year },
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getRiskMetrics(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+    const { period, riskFreeRate } = req.validatedQuery || {};
+
+    await portfolioService.getPortfolioById(userId, portfolioId);
+
+    const result = await riskMetricsService.getPortfolioRiskMetrics(
+      portfolioId,
+      { period, riskFreeRate },
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getBenchmark(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+    const { symbol, period } = req.validatedQuery || {};
+
+    await portfolioService.getPortfolioById(userId, portfolioId);
+
+    const result = await benchmarkService.getBenchmarkData(symbol, {
+      period,
+      portfolioId,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getBenchmarkComparison(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+    const { symbol, period, riskFreeRate } = req.validatedQuery || {};
+
+    await portfolioService.getPortfolioById(userId, portfolioId);
+
+    const result = await benchmarkComparisonService.getBenchmarkComparison(
+      portfolioId,
+      {
+        symbol,
+        period,
+        riskFreeRate,
+      },
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   listPortfolios,
   createPortfolio,
@@ -174,4 +270,8 @@ module.exports = {
   getPortfolioHoldings,
   getCashBalance,
   getPortfolioSummary,
+  getPnlHeatmap,
+  getRiskMetrics,
+  getBenchmark,
+  getBenchmarkComparison,
 };
