@@ -190,5 +190,49 @@ describe("riskMetricsService - Volatility calculation", () => {
       expect(result.annualizedVolatility).toBe("0.0065");
       expect(result.sharpeRatio).toBe("54.70");
     });
+
+    test("handles monotonically declining series", () => {
+      const series = [
+        { date: "2026-11-01", totalValue: "10000", dailyReturn: "0" },
+        { date: "2026-11-02", totalValue: "8000", dailyReturn: "-0.20" },
+        { date: "2026-11-03", totalValue: "6000", dailyReturn: "-0.25" },
+        { date: "2026-11-04", totalValue: "5000", dailyReturn: "-0.1667" },
+      ];
+
+      const result = calculatePortfolioRiskMetrics(series);
+      expect(result.peakValue).toBe("10000.00000000");
+      expect(result.peakDate).toBe("2026-11-01");
+      expect(result.maxDrawdown).toBe("-0.5000");
+      expect(result.currentDrawdown).toBe("-0.5000");
+      // Sharpe ratio should be negative because returns are negative while Rf is positive
+      expect(Number(result.sharpeRatio)).toBeLessThan(0);
+    });
+
+    test("handles high-water mark recovery where peak updates and current drawdown returns to 0", () => {
+      const series = [
+        { date: "2026-11-01", totalValue: "10000" },
+        { date: "2026-11-02", totalValue: "5000" }, // 50% drop: DD = -0.5000
+        { date: "2026-11-03", totalValue: "7500" }, // recovery: DD = -0.2500
+        { date: "2026-11-04", totalValue: "15000" }, // new peak: DD = 0
+      ];
+
+      const result = calculatePortfolioRiskMetrics(series);
+      expect(result.peakValue).toBe("15000.00000000");
+      expect(result.peakDate).toBe("2026-11-04");
+      expect(result.maxDrawdown).toBe("-0.5000");
+      expect(result.currentDrawdown).toBe("0.0000");
+    });
+
+    test("supports custom risk-free rate override (e.g. 0% or 5%)", () => {
+      const series = [
+        { date: "2026-11-01", totalValue: "10000", dailyReturn: "0.001" },
+        { date: "2026-11-02", totalValue: "10020", dailyReturn: "0.002" },
+      ];
+
+      const zeroRfResult = calculatePortfolioRiskMetrics(series, { riskFreeRate: 0 });
+      const higherRfResult = calculatePortfolioRiskMetrics(series, { riskFreeRate: 0.05 });
+
+      expect(Number(zeroRfResult.sharpeRatio)).toBeGreaterThan(Number(higherRfResult.sharpeRatio));
+    });
   });
 });

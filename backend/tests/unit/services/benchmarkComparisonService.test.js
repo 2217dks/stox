@@ -132,4 +132,65 @@ describe("benchmarkComparisonService unit tests", () => {
       correlation: null,
     });
   });
+
+  test("calculates deterministic beta = 2.00 and correlation = 1.00 for perfectly 2x-correlated series", async () => {
+    getPortfolioReturnSeries.mockResolvedValue({
+      portfolioId,
+      period: "1M",
+      series: [
+        { date: "2026-11-01", totalValue: "10000", dailyReturn: "0.02" },
+        { date: "2026-11-02", totalValue: "10400", dailyReturn: "0.04" },
+        { date: "2026-11-03", totalValue: "10200", dailyReturn: "-0.02" },
+      ],
+    });
+
+    getBenchmarkPriceSeries.mockResolvedValue({
+      benchmark: "SPY",
+      period: "1M",
+      series: [
+        { date: "2026-11-01", price: "100", dailyReturn: "0.01" },
+        { date: "2026-11-02", price: "102", dailyReturn: "0.02" },
+        { date: "2026-11-03", price: "100", dailyReturn: "-0.01" },
+      ],
+    });
+
+    const result = await getBenchmarkComparison(portfolioId, {
+      symbol: "SPY",
+      period: "1M",
+      riskFreeRate: 0.02,
+    });
+
+    expect(result.summary.beta).toBe("2.00");
+    expect(result.summary.correlation).toBe("1.00");
+  });
+
+  test("returns null for beta, alpha, and correlation if benchmark has zero variance", async () => {
+    getPortfolioReturnSeries.mockResolvedValue({
+      portfolioId,
+      period: "1M",
+      series: [
+        { date: "2026-11-01", totalValue: "10000", dailyReturn: "0.01" },
+        { date: "2026-11-02", totalValue: "10200", dailyReturn: "0.02" },
+      ],
+    });
+
+    // Benchmark flat at 100 with 0 return each day (zero variance)
+    getBenchmarkPriceSeries.mockResolvedValue({
+      benchmark: "SPY",
+      period: "1M",
+      series: [
+        { date: "2026-11-01", price: "100", dailyReturn: "0" },
+        { date: "2026-11-02", price: "100", dailyReturn: "0" },
+      ],
+    });
+
+    const result = await getBenchmarkComparison(portfolioId, {
+      symbol: "SPY",
+      period: "1M",
+    });
+
+    expect(result.summary.beta).toBeNull();
+    expect(result.summary.alpha).toBeNull();
+    expect(result.summary.correlation).toBeNull();
+  });
 });

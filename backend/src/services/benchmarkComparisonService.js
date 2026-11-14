@@ -109,6 +109,14 @@ async function getBenchmarkComparison(portfolioId, {
     const pPoint = portfolioMap.get(date);
     const bPoint = benchmarkMap.get(date);
 
+    const pVal = pPoint.totalValue instanceof Prisma.Decimal
+      ? pPoint.totalValue
+      : new Prisma.Decimal(pPoint.totalValue || 0);
+
+    const bPrice = bPoint.price instanceof Prisma.Decimal
+      ? bPoint.price
+      : new Prisma.Decimal(bPoint.price || 0);
+
     const pRet = pPoint.dailyReturn instanceof Prisma.Decimal
       ? pPoint.dailyReturn
       : new Prisma.Decimal(pPoint.dailyReturn || 0);
@@ -119,9 +127,9 @@ async function getBenchmarkComparison(portfolioId, {
 
     comparison.push({
       date,
-      portfolioValue: pPoint.totalValue.toFixed(8),
+      portfolioValue: pVal.toFixed(8),
       portfolioReturn: pRet.toFixed(4),
-      benchmarkPrice: bPoint.price.toString(),
+      benchmarkPrice: bPrice.toString(),
       benchmarkReturn: bRet.toFixed(4),
     });
 
