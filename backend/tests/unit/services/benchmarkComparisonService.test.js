@@ -193,4 +193,122 @@ describe("benchmarkComparisonService unit tests", () => {
     expect(result.summary.alpha).toBeNull();
     expect(result.summary.correlation).toBeNull();
   });
+
+  test("first observation with no prior return is represented as null and excluded from statistics", async () => {
+    getPortfolioReturnSeries.mockResolvedValue({
+      portfolioId,
+      period: "1M",
+      series: [
+        { date: "2026-11-01", totalValue: "10000", dailyReturn: null }, // no prior close for portfolio
+        { date: "2026-11-02", totalValue: "10400", dailyReturn: "0.04" },
+        { date: "2026-11-03", totalValue: "10200", dailyReturn: "-0.02" },
+      ],
+    });
+
+    getBenchmarkPriceSeries.mockResolvedValue({
+      benchmark: "SPY",
+      period: "1M",
+      series: [
+        { date: "2026-11-01", price: "100", dailyReturn: null }, // no prior close for benchmark
+        { date: "2026-11-02", price: "102", dailyReturn: "0.02" },
+        { date: "2026-11-03", price: "100", dailyReturn: "-0.01" },
+      ],
+    });
+
+    const result = await getBenchmarkComparison(portfolioId, {
+      symbol: "SPY",
+      period: "1M",
+    });
+
+    // First observation return explicitly null, not "0.0000"
+    expect(result.comparison[0].portfolioReturn).toBeNull();
+    expect(result.comparison[0].benchmarkReturn).toBeNull();
+
+    // Nov 2 and Nov 3 have valid returns
+    expect(result.comparison[1].portfolioReturn).toBe("0.0400");
+    expect(result.comparison[1].benchmarkReturn).toBe("0.0200");
+    expect(result.comparison[2].portfolioReturn).toBe("-0.0200");
+    expect(result.comparison[2].benchmarkReturn).toBe("-0.0100");
+
+    // Statistics calculated over Nov 2 and Nov 3 only (2x slope)
+    expect(result.summary.beta).toBe("2.00");
+    expect(result.summary.correlation).toBe("1.00");
+  });
+
+  test("returns null for beta, alpha, correlation when mutual pairs with both returns defined < 2", async () => {
+    // 2 mutual dates, but date 1 has null return on benchmark
+    getPortfolioReturnSeries.mockResolvedValue({
+      portfolioId,
+      period: "1M",
+      series: [
+        { date: "2026-11-01", totalValue: "10000", dailyReturn: "0.01" },
+        { date: "2026-11-02", totalValue: "10200", dailyReturn: "0.02" },
+      ],
+    });
+
+    getBenchmarkPriceSeries.mockResolvedValue({
+      benchmark: "SPY",
+      period: "1M",
+      series: [
+        { date: "2026-11-01", price: "100", dailyReturn: null }, // missing/initial return
+        { date: "2026-11-02", price: "102", dailyReturn: "0.02" },
+      ],
+    });
+
+    const result = await getBenchmarkComparison(portfolioId, {
+      symbol: "SPY",
+      period: "1M",
+    });
+
+    expect(result.comparison).toHaveLength(2);
+    expect(result.comparison[0].benchmarkReturn).toBeNull();
+    expect(result.comparison[0].portfolioReturn).toBe("0.0100");
+
+    // Only 1 date (Nov 2) has both returns defined -> statistics cannot be computed
+    expect(result.summary.beta).toBeNull();
+    expect(result.summary.alpha).toBeNull();
+    expect(result.summary.correlation).toBeNull();
+
+    // Cumulative return over the 2 dates is still preserved
+    expect(result.summary.portfolioReturn).toBe("0.0200");
+    expect(result.summary.benchmarkReturn).toBe("0.0200");
+  });
+
+  test("excludes observations with gaps where either portfolio or benchmark return is undefined", async () => {
+    getPortfolioReturnSeries.mockResolvedValue({
+      portfolioId,
+      period: "1M",
+      series: [
+        { date: "2026-11-01", totalValue: "10000", dailyReturn: "0.02" },
+        { date: "2026-11-02", totalValue: "10100", dailyReturn: "0.01" },
+        { date: "2026-11-03", totalValue: "10300", dailyReturn: null },   // portfolio return gap
+        { date: "2026-11-04", totalValue: "10500", dailyReturn: "0.04" },
+      ],
+    });
+
+    getBenchmarkPriceSeries.mockResolvedValue({
+      benchmark: "SPY",
+      period: "1M",
+      series: [
+        { date: "2026-11-01", price: "100", dailyReturn: "0.01" },
+        { date: "2026-11-02", price: "101", dailyReturn: null },   // benchmark return gap
+        { date: "2026-11-03", price: "102", dailyReturn: "0.01" },
+        { date: "2026-11-04", price: "104", dailyReturn: "0.02" },
+      ],
+    });
+
+    const result = await getBenchmarkComparison(portfolioId, {
+      symbol: "SPY",
+      period: "1M",
+    });
+
+    expect(result.comparison).toHaveLength(4);
+    expect(result.comparison[1].benchmarkReturn).toBeNull();
+    expect(result.comparison[2].portfolioReturn).toBeNull();
+
+    // Aligned dates with both defined: Nov 1 (P=0.02, B=0.01) and Nov 4 (P=0.04, B=0.02)
+    // Beta = 2.00, Correlation = 1.00
+    expect(result.summary.beta).toBe("2.00");
+    expect(result.summary.correlation).toBe("1.00");
+  });
 });

@@ -102,8 +102,7 @@ async function getBenchmarkComparison(portfolioId, {
   mutualDates.sort();
 
   const comparison = [];
-  const pReturns = [];
-  const bReturns = [];
+  const alignedPairs = [];
 
   for (const date of mutualDates) {
     const pPoint = portfolioMap.get(date);
@@ -117,24 +116,41 @@ async function getBenchmarkComparison(portfolioId, {
       ? bPoint.price
       : new Prisma.Decimal(bPoint.price || 0);
 
-    const pRet = pPoint.dailyReturn instanceof Prisma.Decimal
-      ? pPoint.dailyReturn
-      : new Prisma.Decimal(pPoint.dailyReturn || 0);
+    let pRet = null;
+    if (pPoint.dailyReturn !== null && pPoint.dailyReturn !== undefined) {
+      const dec = pPoint.dailyReturn instanceof Prisma.Decimal
+        ? pPoint.dailyReturn
+        : new Prisma.Decimal(pPoint.dailyReturn);
+      if (!dec.isNaN()) {
+        pRet = dec;
+      }
+    }
 
-    const bRet = bPoint.dailyReturn instanceof Prisma.Decimal
-      ? bPoint.dailyReturn
-      : new Prisma.Decimal(bPoint.dailyReturn || 0);
+    let bRet = null;
+    if (bPoint.dailyReturn !== null && bPoint.dailyReturn !== undefined) {
+      const dec = bPoint.dailyReturn instanceof Prisma.Decimal
+        ? bPoint.dailyReturn
+        : new Prisma.Decimal(bPoint.dailyReturn);
+      if (!dec.isNaN()) {
+        bRet = dec;
+      }
+    }
 
     comparison.push({
       date,
       portfolioValue: pVal.toFixed(8),
-      portfolioReturn: pRet.toFixed(4),
+      portfolioReturn: pRet !== null ? pRet.toFixed(4) : null,
       benchmarkPrice: bPrice.toString(),
-      benchmarkReturn: bRet.toFixed(4),
+      benchmarkReturn: bRet !== null ? bRet.toFixed(4) : null,
     });
 
-    pReturns.push(pRet.toNumber());
-    bReturns.push(bRet.toNumber());
+    if (pRet !== null && bRet !== null) {
+      alignedPairs.push({
+        date,
+        pRet: pRet.toNumber(),
+        bRet: bRet.toNumber(),
+      });
+    }
   }
 
   // 5. Calculate cumulative returns over the mutual window
@@ -162,20 +178,24 @@ async function getBenchmarkComparison(portfolioId, {
     }
   }
 
-  // 6. Calculate statistical metrics (alpha, beta, correlation)
+  // 6. Calculate statistical metrics (alpha, beta, correlation) strictly over mutually defined returns
   let alpha = null;
   let beta = null;
   let correlation = null;
 
-  if (m >= 2) {
-    const meanP = pReturns.reduce((acc, v) => acc + v, 0) / m;
-    const meanB = bReturns.reduce((acc, v) => acc + v, 0) / m;
+  const validCount = alignedPairs.length;
+  if (validCount >= 2) {
+    const pReturns = alignedPairs.map((pair) => pair.pRet);
+    const bReturns = alignedPairs.map((pair) => pair.bRet);
+
+    const meanP = pReturns.reduce((acc, v) => acc + v, 0) / validCount;
+    const meanB = bReturns.reduce((acc, v) => acc + v, 0) / validCount;
 
     let cov = 0;
     let varP = 0;
     let varB = 0;
 
-    for (let i = 0; i < m; i++) {
+    for (let i = 0; i < validCount; i++) {
       const diffP = pReturns[i] - meanP;
       const diffB = bReturns[i] - meanB;
       cov += diffP * diffB;
@@ -183,9 +203,9 @@ async function getBenchmarkComparison(portfolioId, {
       varB += diffB * diffB;
     }
 
-    cov /= (m - 1);
-    varP /= (m - 1);
-    varB /= (m - 1);
+    cov /= (validCount - 1);
+    varP /= (validCount - 1);
+    varB /= (validCount - 1);
 
     if (varB > 0) {
       const betaVal = cov / varB;

@@ -166,7 +166,9 @@ async function getPortfolioReturnSeries(portfolioId, {
       cashBalance: new Prisma.Decimal(s.cashBalance),
       holdingsValue: new Prisma.Decimal(s.holdingsValue),
       dailyPnl: new Prisma.Decimal(s.dailyPnl),
-      dailyReturn: new Prisma.Decimal(s.dailyPnlPct),
+      dailyReturn: s.dailyPnlPct !== null && s.dailyPnlPct !== undefined
+        ? new Prisma.Decimal(s.dailyPnlPct)
+        : null,
     };
   });
 

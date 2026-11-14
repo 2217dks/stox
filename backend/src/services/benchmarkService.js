@@ -96,7 +96,7 @@ async function getBenchmarkPriceSeries(symbol = "SPY", {
   });
 
   const fullSeries = rawPoints.map((point, idx) => {
-    let dailyReturn = ZERO;
+    let dailyReturn = null;
     if (idx > 0) {
       const prevPrice = rawPoints[idx - 1].price;
       if (prevPrice.gt(ZERO)) {
@@ -149,7 +149,9 @@ async function getBenchmarkData(symbol = "SPY", options = {}) {
   const prices = result.series.map((p) => ({
     date: p.date,
     price: p.price.toString(),
-    dailyReturn: p.dailyReturn.toFixed(4),
+    dailyReturn: p.dailyReturn !== null && p.dailyReturn !== undefined
+      ? p.dailyReturn.toFixed(4)
+      : null,
   }));
 
   return {

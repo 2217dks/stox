@@ -59,7 +59,7 @@ describe("benchmarkService unit tests", () => {
     expect(result.prices[0]).toEqual({
       date: "2026-11-01",
       price: "500",
-      dailyReturn: "0.0000",
+      dailyReturn: null,
     });
 
     expect(result.prices[1]).toEqual({
