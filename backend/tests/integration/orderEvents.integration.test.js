@@ -3,6 +3,7 @@ const app = require("../../src/app");
 const prisma = require("../../src/config/database");
 const orderService = require("../../src/services/orderService");
 const tradeService = require("../../src/services/tradeService");
+const { recordOrderEvent } = require("../../src/services/orderEventService");
 const orderWorker = require("../../src/workers/orderWorker");
 const marketDataService = require("../../src/services/marketData");
 
@@ -500,6 +501,105 @@ describe("Order-Event Audit Trail Integration", () => {
 
       expect(events[1].sequence).toBe(2);
       expect(["EXECUTED", "CANCELLED"]).toContain(events[1].eventType);
+    });
+
+    test("two simultaneous event writes cannot produce duplicate or out-of-order sequence numbers", async () => {
+      const order = await orderService.createOrder({
+        userId: userA.id,
+        portfolioId: portfolioAId,
+        symbol: "NVDA",
+        assetType: "STOCK",
+        side: "BUY",
+        type: "MARKET",
+        quantity: "1",
+      });
+
+      // Verify initial CREATED event is sequence 1
+      const initialEvents = await prisma.orderEvent.findMany({
+        where: { orderId: order.id },
+      });
+      expect(initialEvents).toHaveLength(1);
+      expect(initialEvents[0].sequence).toBe(1);
+
+      // Execute two simultaneous transactions both recording an event on this order
+      const [res1, res2] = await Promise.all([
+        prisma.$transaction(async (tx) => {
+          return recordOrderEvent(tx, {
+            orderId: order.id,
+            eventType: "EXECUTED",
+            previousStatus: "PENDING",
+            newStatus: "EXECUTED",
+            metadata: { workerId: "worker-A" },
+          });
+        }),
+        prisma.$transaction(async (tx) => {
+          return recordOrderEvent(tx, {
+            orderId: order.id,
+            eventType: "REJECTED",
+            previousStatus: "PENDING",
+            newStatus: "REJECTED",
+            metadata: { workerId: "worker-B" },
+          });
+        }),
+      ]);
+
+      expect(res1).toBeDefined();
+      expect(res2).toBeDefined();
+
+      // Sequence numbers must be strictly unique and allocate 2 and 3
+      const returnedSequences = [res1.sequence, res2.sequence].sort((a, b) => a - b);
+      expect(returnedSequences).toEqual([2, 3]);
+
+      // Read back from database to verify all events in chronological sequence order
+      const allEvents = await prisma.orderEvent.findMany({
+        where: { orderId: order.id },
+        orderBy: [{ sequence: "asc" }],
+      });
+
+      expect(allEvents).toHaveLength(3);
+      expect(allEvents.map((e) => e.sequence)).toEqual([1, 2, 3]);
+      expect(allEvents[0].eventType).toBe("CREATED");
+      expect([allEvents[1].eventType, allEvents[2].eventType]).toEqual(
+        expect.arrayContaining(["EXECUTED", "REJECTED"]),
+      );
+    });
+
+    test("multiple (4) simultaneous event writes serialize correctly without deadlocks or collisions", async () => {
+      const order = await orderService.createOrder({
+        userId: userA.id,
+        portfolioId: portfolioAId,
+        symbol: "AMD",
+        assetType: "STOCK",
+        side: "BUY",
+        type: "MARKET",
+        quantity: "1",
+      });
+
+      const writePromises = [1, 2, 3, 4].map((i) =>
+        prisma.$transaction((tx) =>
+          recordOrderEvent(tx, {
+            orderId: order.id,
+            eventType: i % 2 === 0 ? "EXECUTED" : "CANCELLED",
+            previousStatus: "PENDING",
+            newStatus: i % 2 === 0 ? "EXECUTED" : "CANCELLED",
+            metadata: { batchIndex: i },
+          }),
+        ),
+      );
+
+      const results = await Promise.all(writePromises);
+      expect(results).toHaveLength(4);
+
+      const returnedSequences = results.map((r) => r.sequence).sort((a, b) => a - b);
+      expect(returnedSequences).toEqual([2, 3, 4, 5]);
+
+      const eventsInDb = await prisma.orderEvent.findMany({
+        where: { orderId: order.id },
+        orderBy: [{ sequence: "asc" }],
+      });
+
+      expect(eventsInDb).toHaveLength(5);
+      expect(eventsInDb.map((e) => e.sequence)).toEqual([1, 2, 3, 4, 5]);
     });
   });
 

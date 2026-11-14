@@ -550,7 +550,6 @@ async function createOrder({
 
     await recordOrderEvent(tx, {
       orderId: createdOrder.id,
-      sequence: 1,
       eventType: "CREATED",
       previousStatus: null,
       newStatus: "PENDING",

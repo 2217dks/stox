@@ -99,9 +99,26 @@ describe("orderEventService unit tests", () => {
       ).rejects.toThrow("newStatus is required");
     });
 
-    test("uses explicit sequence when provided", async () => {
+    test("throws ORDER_NOT_FOUND when parent order row is missing", async () => {
       const tx = {
-        $queryRaw: jest.fn(),
+        $queryRaw: jest.fn().mockResolvedValue([]),
+        orderEvent: { create: jest.fn() },
+      };
+
+      await expect(
+        recordOrderEvent(tx, {
+          orderId: "order-missing",
+          eventType: "CREATED",
+          newStatus: "PENDING",
+        }),
+      ).rejects.toMatchObject({
+        code: "ORDER_NOT_FOUND",
+      });
+    });
+
+    test("locks parent order and uses explicit sequence when provided", async () => {
+      const tx = {
+        $queryRaw: jest.fn().mockResolvedValue([{ id: "order-1" }]),
         orderEvent: {
           create: jest.fn().mockResolvedValue({ id: "e-1" }),
         },
@@ -115,7 +132,7 @@ describe("orderEventService unit tests", () => {
         newStatus: "PENDING",
       });
 
-      expect(tx.$queryRaw).not.toHaveBeenCalled();
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
       expect(tx.orderEvent.create).toHaveBeenCalledWith({
         data: {
           orderId: "order-1",
@@ -128,10 +145,11 @@ describe("orderEventService unit tests", () => {
       });
     });
 
-    test("queries latest sequence with row lock when sequence is omitted", async () => {
+    test("locks parent order and increments sequence via findFirst when sequence is omitted", async () => {
       const tx = {
-        $queryRaw: jest.fn().mockResolvedValue([{ sequence: 1 }]),
+        $queryRaw: jest.fn().mockResolvedValue([{ id: "order-1" }]),
         orderEvent: {
+          findFirst: jest.fn().mockResolvedValue({ sequence: 1 }),
           create: jest.fn().mockResolvedValue({ id: "e-2" }),
         },
       };
@@ -145,6 +163,11 @@ describe("orderEventService unit tests", () => {
       });
 
       expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+      expect(tx.orderEvent.findFirst).toHaveBeenCalledWith({
+        where: { orderId: "order-1" },
+        orderBy: { sequence: "desc" },
+        select: { sequence: true },
+      });
       expect(tx.orderEvent.create).toHaveBeenCalledWith({
         data: {
           orderId: "order-1",
@@ -159,8 +182,9 @@ describe("orderEventService unit tests", () => {
 
     test("allocates sequence 1 when no previous events exist and sequence is omitted", async () => {
       const tx = {
-        $queryRaw: jest.fn().mockResolvedValue([]),
+        $queryRaw: jest.fn().mockResolvedValue([{ id: "order-1" }]),
         orderEvent: {
+          findFirst: jest.fn().mockResolvedValue(null),
           create: jest.fn().mockResolvedValue({ id: "e-1" }),
         },
       };
@@ -172,6 +196,7 @@ describe("orderEventService unit tests", () => {
         newStatus: "PENDING",
       });
 
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
       expect(tx.orderEvent.create).toHaveBeenCalledWith({
         data: {
           orderId: "order-1",
@@ -179,6 +204,37 @@ describe("orderEventService unit tests", () => {
           eventType: "CREATED",
           previousStatus: null,
           newStatus: "PENDING",
+          metadata: undefined,
+        },
+      });
+    });
+
+    test("falls back to raw query when findFirst is not available on tx.orderEvent", async () => {
+      const tx = {
+        $queryRaw: jest
+          .fn()
+          .mockResolvedValueOnce([{ id: "order-1" }]) // order lock
+          .mockResolvedValueOnce([{ sequence: 3 }]), // latest sequence query
+        orderEvent: {
+          create: jest.fn().mockResolvedValue({ id: "e-4" }),
+        },
+      };
+
+      await recordOrderEvent(tx, {
+        orderId: "order-1",
+        eventType: "CANCELLED",
+        previousStatus: "PENDING",
+        newStatus: "CANCELLED",
+      });
+
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+      expect(tx.orderEvent.create).toHaveBeenCalledWith({
+        data: {
+          orderId: "order-1",
+          sequence: 4,
+          eventType: "CANCELLED",
+          previousStatus: "PENDING",
+          newStatus: "CANCELLED",
           metadata: undefined,
         },
       });
