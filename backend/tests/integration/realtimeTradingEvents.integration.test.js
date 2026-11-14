@@ -13,6 +13,7 @@ const { startRealtimeBridge } = require("../../src/realtime/realtimeBridge");
 const { createSocketServer } = require("../../src/sockets");
 const portfolioService = require("../../src/services/portfolioService");
 const tradeService = require("../../src/services/tradeService");
+const marketDataService = require("../../src/services/marketData");
 const { processPendingOrders } = require("../../src/workers/orderWorker");
 const {
   collectEvents,
@@ -46,6 +47,7 @@ describe("Trading realtime events", () => {
   let io;
   let bus;
   let bridge;
+  let getQuoteSpy;
   let baseUrl;
   let primary;
   let sameUserOther;
@@ -55,6 +57,10 @@ describe("Trading realtime events", () => {
 
   beforeAll(async () => {
     jest.setTimeout(60000);
+
+    getQuoteSpy = jest
+      .spyOn(marketDataService, "getQuote")
+      .mockResolvedValue({ price: "100" });
 
     server = http.createServer(app);
     ({ io } = createSocketServer(server));
@@ -109,27 +115,27 @@ describe("Trading realtime events", () => {
   });
 
   afterAll(async () => {
-    for (const client of [
-      primary?.client,
-      sameUserOther,
-      neverJoined,
-      otherUser?.client,
-    ]) {
-      if (client?.connected) {
-        client.close();
-      }
+    // Stop accepting new socket connections and close the Socket.IO server.
+    if (io) {
+      await new Promise((resolve) => io.close(resolve));
     }
 
-    bridge.stop();
+    // Stop the bridge and restore the default event bus.
+    if (bridge) {
+      bridge.stop();
+    }
+
     resetEventBus();
 
+    // Delete test users only after socket activity has stopped.
     for (const userId of [primary?.userId, otherUser?.userId]) {
       if (userId) {
         await prisma.user.delete({ where: { id: userId } });
       }
     }
 
-    await new Promise((resolve) => io.close(resolve));
+    getQuoteSpy?.mockRestore();
+
     await prisma.$disconnect();
   });
 
@@ -140,6 +146,14 @@ describe("Trading realtime events", () => {
       .post("/api/v1/portfolios")
       .set("Authorization", `Bearer ${primary.token}`)
       .send({ name: `${label}-${RUN_ID}-${portfolioCounter}` });
+
+    if (response.status !== 201) {
+      console.error("Portfolio creation failed:", {
+        label,
+        status: response.status,
+        body: response.body,
+      });
+    }
 
     expect(response.status).toBe(201);
 
@@ -250,6 +264,16 @@ describe("Trading realtime events", () => {
       symbol: "TSLA",
       quantity: "2",
     });
+
+    if (placed.status !== 201) {
+      console.error("TSLA order placement failed:", {
+        status: placed.status,
+        body: placed.body,
+      });
+    }
+
+    expect(placed.status).toBe(201);
+
     const orderId = placed.body.data.order.id;
 
     const status = waitForEvent(primary.client, "order-status", {
@@ -374,7 +398,11 @@ describe("Trading realtime events", () => {
     const portfolioId = await newPortfolio("sell");
     await join(primary.client, portfolioId);
 
-    const buy = await placeOrder({ portfolioId, symbol: "NVDA", quantity: "2" });
+    const buy = await placeOrder({
+      portfolioId,
+      symbol: "NVDA",
+      quantity: "2",
+    });
     const buyId = buy.body.data.order.id;
 
     const buyFilled = waitForEvent(primary.client, "order-status", {
@@ -425,7 +453,11 @@ describe("Trading realtime events", () => {
     const portfolioId = await newPortfolio("loss");
     await join(primary.client, portfolioId);
 
-    const buy = await placeOrder({ portfolioId, symbol: "PYPL", quantity: "2" });
+    const buy = await placeOrder({
+      portfolioId,
+      symbol: "PYPL",
+      quantity: "2",
+    });
     const buyId = buy.body.data.order.id;
 
     const buyFilled = waitForEvent(primary.client, "order-status", {

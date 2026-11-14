@@ -12,16 +12,16 @@
 
 # 📐 API Conventions
 
-| Property | Convention |
-|---|---|
-| Versioning | `/api/v1` |
-| Resource names | Plural nouns |
-| Authentication | Bearer JWT |
-| Pagination | `page` + `limit` |
-| Filtering | Query parameters |
-| Sorting | `sort` + `order` |
-| Success envelope | `{ success, data }` |
-| Error envelope | `{ success, error }` |
+| Property         | Convention           |
+| ---------------- | -------------------- |
+| Versioning       | `/api/v1`            |
+| Resource names   | Plural nouns         |
+| Authentication   | Bearer JWT           |
+| Pagination       | `page` + `limit`     |
+| Filtering        | Query parameters     |
+| Sorting          | `sort` + `order`     |
+| Success envelope | `{ success, data }`  |
+| Error envelope   | `{ success, error }` |
 
 ---
 
@@ -35,9 +35,9 @@ Create an account.
 
 ```json
 {
-  "name": "John Trader",
-  "email": "john@example.com",
-  "password": "SecurePass123!"
+    "name": "John Trader",
+    "email": "john@example.com",
+    "password": "SecurePass123!"
 }
 ```
 
@@ -45,13 +45,13 @@ Create an account.
 
 ```json
 {
-  "success": true,
-  "data": {
-    "user": {},
-    "accessToken": "...",
-    "refreshToken": "...",
-    "expiresAt": "..."
-  }
+    "success": true,
+    "data": {
+        "user": {},
+        "accessToken": "...",
+        "refreshToken": "...",
+        "expiresAt": "..."
+    }
 }
 ```
 
@@ -63,8 +63,8 @@ Authenticate an existing user.
 
 ```json
 {
-  "email": "john@example.com",
-  "password": "SecurePass123!"
+    "email": "john@example.com",
+    "password": "SecurePass123!"
 }
 ```
 
@@ -76,7 +76,7 @@ Authenticate using Google credentials.
 
 ```json
 {
-  "credential": "..."
+    "credential": "..."
 }
 ```
 
@@ -88,7 +88,7 @@ Refresh an access token.
 
 ```json
 {
-  "refreshToken": "..."
+    "refreshToken": "..."
 }
 ```
 
@@ -100,7 +100,7 @@ Log out using a refresh token.
 
 ```json
 {
-  "refreshToken": "..."
+    "refreshToken": "..."
 }
 ```
 
@@ -116,8 +116,8 @@ Updates profile information.
 
 ```json
 {
-  "name": "New Name",
-  "avatarUrl": "https://..."
+    "name": "New Name",
+    "avatarUrl": "https://..."
 }
 ```
 
@@ -147,13 +147,45 @@ Get publicly visible trading history.
 
 List the authenticated user's portfolios.
 
+Each portfolio includes its starting balance, cash balance, reserved cash, and available cash.
+
+### Balance fields
+
+| Field             | Type           | Description                                    |
+| ----------------- | -------------- | ---------------------------------------------- |
+| `startingBalance` | Decimal string | Portfolio's initial balance                    |
+| `cashBalance`     | Decimal string | Current cash balance                           |
+| `reservedCash`    | Decimal string | Cash currently reserved for pending BUY orders |
+| `availableCash`   | Decimal string | Cash available for placing new BUY orders      |
+
+`availableCash` is calculated as:
+
+```text
+availableCash = cashBalance - reservedCash
+```
+
+All monetary values are serialized as decimal strings to preserve precision.
+
+### Example portfolio balance
+
+```json
+{
+    "startingBalance": "10000",
+    "cashBalance": "5000",
+    "reservedCash": "1200",
+    "availableCash": "3800"
+}
+```
+
 ## `POST /portfolios`
 
 Create a portfolio.
 
+The response includes the portfolio's balance fields. Newly created portfolios have `reservedCash` set to `"0"` and `availableCash` equal to `cashBalance`.
+
 ## `GET /portfolios/:id`
 
-Get portfolio details.
+Get portfolio details, including its balance fields.
 
 ## `PATCH /portfolios/:id`
 
@@ -202,13 +234,13 @@ Place an order.
 
 ```json
 {
-  "portfolioId": "uuid",
-  "symbol": "AAPL",
-  "assetType": "STOCK",
-  "side": "BUY",
-  "type": "LIMIT",
-  "quantity": "10",
-  "limitPrice": "250"
+    "portfolioId": "uuid",
+    "symbol": "AAPL",
+    "assetType": "STOCK",
+    "side": "BUY",
+    "type": "LIMIT",
+    "quantity": "10",
+    "limitPrice": "250"
 }
 ```
 
@@ -248,11 +280,11 @@ This public, read-only endpoint uses the global API rate limit.
 
 ### Query parameters
 
-| Name | Required | Contract |
-|---|---|---|
-| `query` | Yes | Trimmed text from 2 to 50 characters |
-| `assetClass` | No | `STOCK` or `CRYPTO`; omitted searches both configured providers |
-| `limit` | No | Integer from 1 to 50; defaults to 20 |
+| Name         | Required | Contract                                                        |
+| ------------ | -------- | --------------------------------------------------------------- |
+| `query`      | Yes      | Trimmed text from 2 to 50 characters                            |
+| `assetClass` | No       | `STOCK` or `CRYPTO`; omitted searches both configured providers |
+| `limit`      | No       | Integer from 1 to 50; defaults to 20                            |
 
 Results are returned in the standard envelope as an array in `data`.
 
@@ -274,18 +306,18 @@ GET /api/v1/market/search?query=apple&assetClass=STOCK&limit=20
 
 ```json
 {
-  "success": true,
-  "data": [
-    {
-      "symbol": "AAPL",
-      "name": "Apple Inc.",
-      "assetClass": "STOCK",
-      "exchange": "NASDAQ",
-      "currency": "USD",
-      "type": "Common Stock",
-      "source": "finnhub"
-    }
-  ]
+    "success": true,
+    "data": [
+        {
+            "symbol": "AAPL",
+            "name": "Apple Inc.",
+            "assetClass": "STOCK",
+            "exchange": "NASDAQ",
+            "currency": "USD",
+            "type": "Common Stock",
+            "source": "finnhub"
+        }
+    ]
 }
 ```
 
@@ -303,22 +335,22 @@ The response uses the standard envelope, with the normalized quote DTO in `data`
 
 ```json
 {
-  "success": true,
-  "data": {
-    "symbol": "BINANCE:BTCUSDT",
-    "assetClass": "CRYPTO",
-    "price": "67123.45",
-    "change": "123.45",
-    "changePercent": "0.18",
-    "high": "68000",
-    "low": "66000",
-    "open": "67000",
-    "previousClose": "67000",
-    "volume": "1234.56",
-    "currency": "USDT",
-    "timestamp": "2026-11-02T12:00:00.000Z",
-    "source": "binance"
-  }
+    "success": true,
+    "data": {
+        "symbol": "BINANCE:BTCUSDT",
+        "assetClass": "CRYPTO",
+        "price": "67123.45",
+        "change": "123.45",
+        "changePercent": "0.18",
+        "high": "68000",
+        "low": "66000",
+        "open": "67000",
+        "previousClose": "67000",
+        "volume": "1234.56",
+        "currency": "USDT",
+        "timestamp": "2026-11-02T12:00:00.000Z",
+        "source": "binance"
+    }
 }
 ```
 
@@ -344,22 +376,22 @@ Finnhub does not return quote volume, so `volume` is `null`; optional quote fiel
 
 ```json
 {
-  "success": true,
-  "data": {
-    "symbol": "AAPL",
-    "assetClass": "STOCK",
-    "price": "226.5",
-    "change": "1.25",
-    "changePercent": "0.55",
-    "high": "228.1",
-    "low": "224.8",
-    "open": "225.3",
-    "previousClose": "225.25",
-    "volume": null,
-    "currency": "USD",
-    "timestamp": "2026-11-02T12:00:00.000Z",
-    "source": "finnhub"
-  }
+    "success": true,
+    "data": {
+        "symbol": "AAPL",
+        "assetClass": "STOCK",
+        "price": "226.5",
+        "change": "1.25",
+        "changePercent": "0.55",
+        "high": "228.1",
+        "low": "224.8",
+        "open": "225.3",
+        "previousClose": "225.25",
+        "volume": null,
+        "currency": "USD",
+        "timestamp": "2026-11-02T12:00:00.000Z",
+        "source": "finnhub"
+    }
 }
 ```
 
@@ -407,26 +439,26 @@ GET /api/v1/market/overview?assetClass=CRYPTO&limit=10
 
 ```json
 {
-  "success": true,
-  "data": {
-    "assetClass": "CRYPTO",
-    "asOf": "2026-11-02T12:00:00.000Z",
-    "marketStatus": {
-      "isOpen": true,
-      "session": "24/7",
-      "exchange": "BINANCE",
-      "timezone": "UTC"
-    },
-    "movers": [
-      {
-        "symbol": "BINANCE:BTCUSDT",
-        "price": "67123.45",
-        "changePercent": "2.5",
-        "quoteVolume": "1234567.89"
-      }
-    ],
-    "source": "binance"
-  }
+    "success": true,
+    "data": {
+        "assetClass": "CRYPTO",
+        "asOf": "2026-11-02T12:00:00.000Z",
+        "marketStatus": {
+            "isOpen": true,
+            "session": "24/7",
+            "exchange": "BINANCE",
+            "timezone": "UTC"
+        },
+        "movers": [
+            {
+                "symbol": "BINANCE:BTCUSDT",
+                "price": "67123.45",
+                "changePercent": "2.5",
+                "quoteVolume": "1234567.89"
+            }
+        ],
+        "source": "binance"
+    }
 }
 ```
 
@@ -438,13 +470,13 @@ This read-only endpoint is public and uses the configured provider for the reque
 
 ### Query parameters
 
-| Name | Required | Contract |
-|---|---|---|
-| `interval` | Yes | `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1d`, `1w`, or `1M` |
-| `from` | Yes | Inclusive Unix epoch timestamp in milliseconds |
-| `to` | Yes | Inclusive Unix epoch timestamp in milliseconds; must be after `from` and no later than the current time |
-| `limit` | No | Integer from 1 to 1000; defaults to 500 |
-| `assetClass` | No | `STOCK` or `CRYPTO`; omitted values use the market-data service's symbol inference |
+| Name         | Required | Contract                                                                                                |
+| ------------ | -------- | ------------------------------------------------------------------------------------------------------- |
+| `interval`   | Yes      | `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1d`, `1w`, or `1M`                                               |
+| `from`       | Yes      | Inclusive Unix epoch timestamp in milliseconds                                                          |
+| `to`         | Yes      | Inclusive Unix epoch timestamp in milliseconds; must be after `from` and no later than the current time |
+| `limit`      | No       | Integer from 1 to 1000; defaults to 500                                                                 |
+| `assetClass` | No       | `STOCK` or `CRYPTO`; omitted values use the market-data service's symbol inference                      |
 
 The range cannot exceed `limit` intervals (for `1M`, each interval is bounded as 31 days).
 
@@ -458,13 +490,13 @@ Successful responses use:
 
 ```json
 {
-  "success": true,
-  "data": {
-    "symbol": "...",
-    "assetClass": "...",
-    "interval": "...",
-    "prices": []
-  }
+    "success": true,
+    "data": {
+        "symbol": "...",
+        "assetClass": "...",
+        "interval": "...",
+        "prices": []
+    }
 }
 ```
 
@@ -484,22 +516,22 @@ GET /api/v1/market/history/AAPL?interval=1d&from=1793318400000&to=1793404800000&
 
 ```json
 {
-  "success": true,
-  "data": {
-    "symbol": "AAPL",
-    "assetClass": "STOCK",
-    "interval": "1d",
-    "prices": [
-      {
-        "timestamp": "2026-10-30T00:00:00.000Z",
-        "open": "100",
-        "high": "105",
-        "low": "99",
-        "close": "103.5",
-        "volume": "1000"
-      }
-    ]
-  }
+    "success": true,
+    "data": {
+        "symbol": "AAPL",
+        "assetClass": "STOCK",
+        "interval": "1d",
+        "prices": [
+            {
+                "timestamp": "2026-10-30T00:00:00.000Z",
+                "open": "100",
+                "high": "105",
+                "low": "99",
+                "close": "103.5",
+                "volume": "1000"
+            }
+        ]
+    }
 }
 ```
 
@@ -531,11 +563,11 @@ Create an alert.
 
 ```json
 {
-  "symbol": "AAPL",
-  "condition": "PRICE_ABOVE",
-  "targetPrice": "250",
-  "sendEmail": true,
-  "sendPush": false
+    "symbol": "AAPL",
+    "condition": "PRICE_ABOVE",
+    "targetPrice": "250",
+    "sendEmail": true,
+    "sendPush": false
 }
 ```
 
@@ -625,9 +657,9 @@ Start copying a trader.
 
 ```json
 {
-  "traderId": "uuid",
-  "allocationPct": "50",
-  "maxTradeSize": "1000"
+    "traderId": "uuid",
+    "allocationPct": "50",
+    "maxTradeSize": "1000"
 }
 ```
 
@@ -711,7 +743,7 @@ Submit or update a sentiment vote.
 
 ```json
 {
-  "sentiment": "BULLISH"
+    "sentiment": "BULLISH"
 }
 ```
 
@@ -747,17 +779,17 @@ If the user has no preferences record, one is created automatically with both no
 
 ```json
 {
-  "success": true,
-  "data": {
-    "preferences": {
-      "id": "clxxxxxxxxxxxxxxxxxxxx",
-      "userId": "user-uuid",
-      "emailNotifications": true,
-      "pushNotifications": true,
-      "createdAt": "2026-10-26T06:50:43.000Z",
-      "updatedAt": "2026-10-26T06:50:43.000Z"
+    "success": true,
+    "data": {
+        "preferences": {
+            "id": "clxxxxxxxxxxxxxxxxxxxx",
+            "userId": "user-uuid",
+            "emailNotifications": true,
+            "pushNotifications": true,
+            "createdAt": "2026-10-26T06:50:43.000Z",
+            "updatedAt": "2026-10-26T06:50:43.000Z"
+        }
     }
-  }
 }
 ```
 
@@ -773,16 +805,16 @@ At least one supported field must be supplied. Both fields are optional individu
 
 ```json
 {
-  "emailNotifications": false
+    "emailNotifications": false
 }
 ```
 
 ### Supported fields
 
-| Field | Type | Default |
-|---|---|---|
-| `emailNotifications` | Boolean | `true` |
-| `pushNotifications` | Boolean | `true` |
+| Field                | Type    | Default |
+| -------------------- | ------- | ------- |
+| `emailNotifications` | Boolean | `true`  |
+| `pushNotifications`  | Boolean | `true`  |
 
 Only the supplied fields are updated. Omitted fields retain their existing values.
 
@@ -816,18 +848,18 @@ Read-only: only `GET` is exposed on this path.
 
 ### Query parameters
 
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `page` | integer | No | `1` | Page number (`>= 1`) |
-| `limit` | integer | No | `20` | Page size (`1..100`) |
-| `status` | enum | No | — | One or more statuses, comma-separated |
-| `symbol` | string | No | — | Exact symbol match; trimmed and normalized to uppercase |
-| `side` | enum | No | — | `BUY` or `SELL` |
-| `type` | enum | No | — | `MARKET`, `LIMIT`, `STOP_LOSS`, or `TAKE_PROFIT` |
-| `portfolioId` | UUID | No | — | Restrict to a single portfolio |
-| `userId` | UUID | No | — | Restrict to the portfolios owned by a single user |
-| `from` | date | No | — | Inclusive lower bound on `createdAt` |
-| `to` | date | No | — | Exclusive upper bound on `createdAt` |
+| Parameter     | Type    | Required | Default | Description                                             |
+| ------------- | ------- | -------- | ------- | ------------------------------------------------------- |
+| `page`        | integer | No       | `1`     | Page number (`>= 1`)                                    |
+| `limit`       | integer | No       | `20`    | Page size (`1..100`)                                    |
+| `status`      | enum    | No       | —       | One or more statuses, comma-separated                   |
+| `symbol`      | string  | No       | —       | Exact symbol match; trimmed and normalized to uppercase |
+| `side`        | enum    | No       | —       | `BUY` or `SELL`                                         |
+| `type`        | enum    | No       | —       | `MARKET`, `LIMIT`, `STOP_LOSS`, or `TAKE_PROFIT`        |
+| `portfolioId` | UUID    | No       | —       | Restrict to a single portfolio                          |
+| `userId`      | UUID    | No       | —       | Restrict to the portfolios owned by a single user       |
+| `from`        | date    | No       | —       | Inclusive lower bound on `createdAt`                    |
+| `to`          | date    | No       | —       | Exclusive upper bound on `createdAt`                    |
 
 Filters combine with **AND**: supplying `userId` and `portfolioId` together returns only orders that satisfy both.
 
@@ -845,12 +877,12 @@ Orders that share a `createdAt` are ordered deterministically, so walking consec
 
 ### Errors
 
-| Status | Code | When |
-|---|---|---|
-| 401 | `UNAUTHORIZED` | No credentials supplied |
-| 401 | `INVALID_ACCESS_TOKEN` | Malformed or expired access token |
-| 403 | `FORBIDDEN` | Authenticated, but the caller is not an `ADMIN` |
-| 400 | `VALIDATION_ERROR` | Invalid query parameter; `details` lists `{ path, message }` |
+| Status | Code                   | When                                                         |
+| ------ | ---------------------- | ------------------------------------------------------------ |
+| 401    | `UNAUTHORIZED`         | No credentials supplied                                      |
+| 401    | `INVALID_ACCESS_TOKEN` | Malformed or expired access token                            |
+| 403    | `FORBIDDEN`            | Authenticated, but the caller is not an `ADMIN`              |
+| 400    | `VALIDATION_ERROR`     | Invalid query parameter; `details` lists `{ path, message }` |
 
 Authentication and authorization run before query validation, so a request without a valid admin token never reports validation errors.
 
@@ -858,46 +890,46 @@ Authentication and authorization run before query validation, so a request witho
 
 ```json
 {
-  "success": true,
-  "data": {
-    "orders": [
-      {
-        "id": "uuid",
-        "portfolioId": "uuid",
-        "symbol": "AAPL",
-        "assetType": "STOCK",
-        "side": "BUY",
-        "type": "LIMIT",
-        "status": "PENDING",
-        "quantity": "10",
-        "limitPrice": "250.5",
-        "stopPrice": null,
-        "executedPrice": null,
-        "executedAt": null,
-        "expiresAt": null,
-        "notes": null,
-        "source": "MANUAL",
-        "createdAt": "2026-10-09T10:00:00.000Z",
-        "updatedAt": "2026-10-09T10:00:00.000Z",
-        "portfolio": {
-          "id": "uuid",
-          "name": "Main Portfolio",
-          "isActive": true
-        },
-        "owner": {
-          "id": "uuid",
-          "name": "John Trader",
-          "email": "john@example.com"
+    "success": true,
+    "data": {
+        "orders": [
+            {
+                "id": "uuid",
+                "portfolioId": "uuid",
+                "symbol": "AAPL",
+                "assetType": "STOCK",
+                "side": "BUY",
+                "type": "LIMIT",
+                "status": "PENDING",
+                "quantity": "10",
+                "limitPrice": "250.5",
+                "stopPrice": null,
+                "executedPrice": null,
+                "executedAt": null,
+                "expiresAt": null,
+                "notes": null,
+                "source": "MANUAL",
+                "createdAt": "2026-10-09T10:00:00.000Z",
+                "updatedAt": "2026-10-09T10:00:00.000Z",
+                "portfolio": {
+                    "id": "uuid",
+                    "name": "Main Portfolio",
+                    "isActive": true
+                },
+                "owner": {
+                    "id": "uuid",
+                    "name": "John Trader",
+                    "email": "john@example.com"
+                }
+            }
+        ],
+        "pagination": {
+            "page": 1,
+            "limit": 20,
+            "total": 1,
+            "totalPages": 1
         }
-      }
-    ],
-    "pagination": {
-      "page": 1,
-      "limit": 20,
-      "total": 1,
-      "totalPages": 1
     }
-  }
 }
 ```
 
@@ -913,13 +945,13 @@ Requires a valid Bearer token with the `ADMIN` role.
 
 ### Query parameters
 
-| Name | Required | Contract |
-|---|---|---|
-| `page` | No | 1-based integer from 1 to 100,000; defaults to 1 |
-| `limit` | No | Integer from 1 to 100; defaults to 20 |
-| `userId` | No | UUID of the portfolio owner |
-| `isActive` | No | `true` or `false` |
-| `search` | No | Case-insensitive match on portfolio name, owner name, or owner email |
+| Name       | Required | Contract                                                             |
+| ---------- | -------- | -------------------------------------------------------------------- |
+| `page`     | No       | 1-based integer from 1 to 100,000; defaults to 1                     |
+| `limit`    | No       | Integer from 1 to 100; defaults to 20                                |
+| `userId`   | No       | UUID of the portfolio owner                                          |
+| `isActive` | No       | `true` or `false`                                                    |
+| `search`   | No       | Case-insensitive match on portfolio name, owner name, or owner email |
 
 ### Response
 
@@ -927,16 +959,16 @@ Returns:
 
 ```json
 {
-  "success": true,
-  "data": {
-    "portfolios": [],
-    "pagination": {
-      "page": 1,
-      "limit": 20,
-      "total": 0,
-      "totalPages": 0
+    "success": true,
+    "data": {
+        "portfolios": [],
+        "pagination": {
+            "page": 1,
+            "limit": 20,
+            "total": 0,
+            "totalPages": 0
+        }
     }
-  }
 }
 ```
 
@@ -1019,8 +1051,8 @@ Search audit activity.
 
 ```json
 {
-  "success": true,
-  "data": {}
+    "success": true,
+    "data": {}
 }
 ```
 
@@ -1028,15 +1060,15 @@ Search audit activity.
 
 ```json
 {
-  "success": false,
-  "error": {
-    "code": "INSUFFICIENT_BALANCE",
-    "message": "Insufficient portfolio cash.",
-    "details": {
-      "required": "2500",
-      "available": "1200"
+    "success": false,
+    "error": {
+        "code": "INSUFFICIENT_BALANCE",
+        "message": "Insufficient portfolio cash.",
+        "details": {
+            "required": "2500",
+            "available": "1200"
+        }
     }
-  }
 }
 ```
 
@@ -1054,16 +1086,16 @@ Paginated endpoints use:
 
 ```json
 {
-  "success": true,
-  "data": {
-    "items": [],
-    "pagination": {
-      "page": 1,
-      "limit": 20,
-      "total": 120,
-      "totalPages": 6
+    "success": true,
+    "data": {
+        "items": [],
+        "pagination": {
+            "page": 1,
+            "limit": 20,
+            "total": 120,
+            "totalPages": 6
+        }
     }
-  }
 }
 ```
 

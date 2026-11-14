@@ -26,6 +26,7 @@ async function resetPortfolio(cashBalance = "10000") {
     where: { id: portfolioId },
     data: {
       cashBalance,
+      reservedCash: "0",
       isActive: true,
     },
   });
@@ -41,6 +42,7 @@ async function createOrder(overrides = {}) {
       type: "MARKET",
       status: "PENDING",
       quantity: "1",
+      reservedCash: "0",
       ...overrides,
     },
   });
@@ -207,6 +209,88 @@ describe("executeOrder: BUY", () => {
     expect(tradeCount).toBe(0);
     expect(holdingCount).toBe(0);
     expect(portfolio.cashBalance.toString()).toBe("50");
+  });
+
+  test("consumes the order reservation and releases unused reserved cash", async () => {
+    await prisma.portfolio.update({
+      where: { id: portfolioId },
+      data: {
+        cashBalance: "10000",
+        reservedCash: "500",
+      },
+    });
+
+    const order = await createOrder({
+      quantity: "2",
+      reservedCash: "500",
+    });
+
+    await tradeService.executeOrder(order, "100");
+
+    const [storedOrder, portfolio] = await Promise.all([
+      prisma.order.findUnique({ where: { id: order.id } }),
+      prisma.portfolio.findUnique({ where: { id: portfolioId } }),
+    ]);
+
+    expect(storedOrder.status).toBe("EXECUTED");
+    expect(storedOrder.reservedCash.toString()).toBe("0");
+    expect(portfolio.cashBalance.toString()).toBe("9800");
+    expect(portfolio.reservedCash.toString()).toBe("0");
+  });
+
+  test("rejects execution when the price increase exceeds unreserved cash", async () => {
+    await prisma.portfolio.update({
+      where: { id: portfolioId },
+      data: {
+        cashBalance: "1000",
+        reservedCash: "700",
+      },
+    });
+
+    const order = await createOrder({
+      quantity: "10",
+      reservedCash: "500",
+    });
+
+    await expect(tradeService.executeOrder(order, "100")).rejects.toMatchObject(
+      {
+        code: "INSUFFICIENT_BALANCE",
+      },
+    );
+
+    const [storedOrder, portfolio, tradeCount, holdingCount] =
+      await Promise.all([
+        prisma.order.findUnique({ where: { id: order.id } }),
+        prisma.portfolio.findUnique({ where: { id: portfolioId } }),
+        prisma.trade.count({ where: { portfolioId } }),
+        prisma.holding.count({ where: { portfolioId } }),
+      ]);
+
+    expect(storedOrder.status).toBe("PENDING");
+    expect(storedOrder.reservedCash.toString()).toBe("500");
+    expect(portfolio.cashBalance.toString()).toBe("1000");
+    expect(portfolio.reservedCash.toString()).toBe("700");
+    expect(tradeCount).toBe(0);
+    expect(holdingCount).toBe(0);
+  });
+
+  test("supports an older pending BUY order with no reservation", async () => {
+    const order = await createOrder({
+      quantity: "2",
+      reservedCash: "0",
+    });
+
+    await tradeService.executeOrder(order, "100");
+
+    const [storedOrder, portfolio] = await Promise.all([
+      prisma.order.findUnique({ where: { id: order.id } }),
+      prisma.portfolio.findUnique({ where: { id: portfolioId } }),
+    ]);
+
+    expect(storedOrder.status).toBe("EXECUTED");
+    expect(storedOrder.reservedCash.toString()).toBe("0");
+    expect(portfolio.cashBalance.toString()).toBe("9800");
+    expect(portfolio.reservedCash.toString()).toBe("0");
   });
 });
 

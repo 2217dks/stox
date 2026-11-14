@@ -35,6 +35,8 @@ const PORTFOLIO_SUMMARY_KEYS = [
   "description",
   "startingBalance",
   "cashBalance",
+  "availableCash",
+  "reservedCash",
   "isDefault",
   "isActive",
   "holdingsValue",

@@ -119,7 +119,11 @@ function expectValidationError(body, expectedPath) {
   }
 
   const paths = body.error.details.map((issue) => issue.path);
-  expect(paths.some((path) => path === expectedPath || path.startsWith(`${expectedPath}.`))).toBe(true);
+  expect(
+    paths.some(
+      (path) => path === expectedPath || path.startsWith(`${expectedPath}.`),
+    ),
+  ).toBe(true);
 }
 
 function idsOf(response) {
@@ -249,8 +253,9 @@ beforeAll(async () => {
       symbol: apiSymbol,
       assetType: "STOCK",
       side: "BUY",
-      type: "MARKET",
+      type: "LIMIT",
       quantity: "1",
+      limitPrice: "100",
     });
 
   expect(apiOrder.status).toBe(201);
@@ -318,11 +323,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  const userIds = [
-    state.adminUserId,
-    state.ownerAId,
-    state.ownerBId,
-  ].filter(Boolean);
+  const userIds = [state.adminUserId, state.ownerAId, state.ownerBId].filter(
+    Boolean,
+  );
 
   if (userIds.length > 0) {
     // Portfolios, orders, and refresh tokens cascade from the user row.
@@ -415,7 +418,10 @@ describe("read-only surface", () => {
 
 describe("cross-user visibility", () => {
   test("returns orders belonging to more than one owner", async () => {
-    const response = await getAdminOrders({ symbol: stockSymbol, limit: "100" });
+    const response = await getAdminOrders({
+      symbol: stockSymbol,
+      limit: "100",
+    });
 
     expect(response.status).toBe(200);
 
@@ -752,7 +758,10 @@ describe("filters", () => {
   });
 
   test("unknown query parameters are ignored", async () => {
-    const plain = await getAdminOrders({ userId: state.ownerAId, limit: "100" });
+    const plain = await getAdminOrders({
+      userId: state.ownerAId,
+      limit: "100",
+    });
     const decorated = await getAdminOrders({
       userId: state.ownerAId,
       limit: "100",
@@ -791,7 +800,11 @@ describe("query validation", () => {
     { label: "limit below 1", query: { limit: "0" }, path: "limit" },
     { label: "limit above 100", query: { limit: "101" }, path: "limit" },
     { label: "unknown status", query: { status: "FILLED" }, path: "status" },
-    { label: "empty status segment", query: { status: "PENDING," }, path: "status" },
+    {
+      label: "empty status segment",
+      query: { status: "PENDING," },
+      path: "status",
+    },
     { label: "unknown side", query: { side: "HOLD" }, path: "side" },
     { label: "unknown type", query: { type: "ICEBERG" }, path: "type" },
     {
@@ -844,6 +857,7 @@ const DOCUMENTED_ORDER_FIELDS = [
   "type",
   "status",
   "quantity",
+  "reservedCash",
   "limitPrice",
   "stopPrice",
   "executedPrice",
@@ -877,7 +891,10 @@ describe("response contract", () => {
   });
 
   test("serializes exactly the documented order, portfolio, and owner fields", async () => {
-    const response = await getAdminOrders({ symbol: stockSymbol, limit: "100" });
+    const response = await getAdminOrders({
+      symbol: stockSymbol,
+      limit: "100",
+    });
 
     expect(response.status).toBe(200);
     expect(response.body.data.orders.length).toBeGreaterThan(0);

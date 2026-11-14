@@ -23,9 +23,14 @@ async function resetPortfolio({ cashBalance = "10000", isActive = true } = {}) {
   await prisma.trade.deleteMany({ where: { portfolioId } });
   await prisma.order.deleteMany({ where: { portfolioId } });
   await prisma.holding.deleteMany({ where: { portfolioId } });
+
   await prisma.portfolio.update({
     where: { id: portfolioId },
-    data: { cashBalance, isActive },
+    data: {
+      cashBalance,
+      reservedCash: "0",
+      isActive,
+    },
   });
 }
 
@@ -39,8 +44,29 @@ async function createOrder(overrides = {}) {
       type: "MARKET",
       status: "PENDING",
       quantity: "1",
+      reservedCash: "0",
       ...overrides,
     },
+  });
+}
+
+// Creates a BUY order and reserves the same amount on its portfolio.
+// This keeps the order-level and portfolio-level reservation totals aligned.
+async function createReservedBuyOrder(overrides = {}) {
+  const reservedCash = overrides.reservedCash ?? "100";
+
+  await prisma.portfolio.update({
+    where: { id: portfolioId },
+    data: {
+      reservedCash: {
+        increment: reservedCash,
+      },
+    },
+  });
+
+  return createOrder({
+    reservedCash,
+    ...overrides,
   });
 }
 
@@ -126,11 +152,16 @@ describe("processPendingOrders", () => {
       portfolioId,
     });
 
-    expect(aboveLimit).toMatchObject({ scanned: 1, executed: 0, skipped: 1 });
+    expect(aboveLimit).toMatchObject({
+      scanned: 1,
+      executed: 0,
+      skipped: 1,
+    });
 
     let storedOrder = await prisma.order.findUnique({
       where: { id: order.id },
     });
+
     expect(storedOrder.status).toBe("PENDING");
     expect(await prisma.trade.count({ where: { orderId: order.id } })).toBe(0);
 
@@ -141,15 +172,19 @@ describe("processPendingOrders", () => {
 
     expect(atLimit).toMatchObject({ scanned: 1, executed: 1 });
 
-    storedOrder = await prisma.order.findUnique({ where: { id: order.id } });
+    storedOrder = await prisma.order.findUnique({
+      where: { id: order.id },
+    });
+
     expect(storedOrder.status).toBe("EXECUTED");
     expect(storedOrder.executedPrice.toString()).toBe("250");
   });
 
-  test("expires an order whose expiry has passed without calling the provider", async () => {
-    const order = await createOrder({
+  test("expires an order and releases its reserved cash", async () => {
+    const order = await createReservedBuyOrder({
       expiresAt: new Date(Date.now() - 1000),
     });
+
     const quoteProvider = quoteAt("100");
 
     const summary = await processPendingOrders({
@@ -158,35 +193,57 @@ describe("processPendingOrders", () => {
       now: new Date(),
     });
 
-    expect(summary).toMatchObject({ scanned: 1, expired: 1, executed: 0 });
+    expect(summary).toMatchObject({
+      scanned: 1,
+      expired: 1,
+      executed: 0,
+    });
+
     expect(quoteProvider.getQuote).not.toHaveBeenCalled();
 
-    const storedOrder = await prisma.order.findUnique({
-      where: { id: order.id },
-    });
+    const [storedOrder, portfolio] = await Promise.all([
+      prisma.order.findUnique({ where: { id: order.id } }),
+      prisma.portfolio.findUnique({ where: { id: portfolioId } }),
+    ]);
+
     expect(storedOrder.status).toBe("EXPIRED");
+    expect(storedOrder.reservedCash.toString()).toBe("0");
+    expect(portfolio.reservedCash.toString()).toBe("0");
   });
 
-  test("rejects an order that cannot be funded instead of retrying forever", async () => {
+  test("rejects an order that cannot be funded and releases its reservation", async () => {
     await resetPortfolio({ cashBalance: "50" });
-    const order = await createOrder({ quantity: "1" });
+
+    const order = await createReservedBuyOrder({
+      quantity: "1",
+      reservedCash: "40",
+    });
 
     const summary = await processPendingOrders({
       quoteProvider: quoteAt("100"),
       portfolioId,
     });
 
-    expect(summary).toMatchObject({ scanned: 1, rejected: 1, executed: 0 });
-
-    const storedOrder = await prisma.order.findUnique({
-      where: { id: order.id },
+    expect(summary).toMatchObject({
+      scanned: 1,
+      rejected: 1,
+      executed: 0,
     });
+
+    const [storedOrder, portfolio] = await Promise.all([
+      prisma.order.findUnique({ where: { id: order.id } }),
+      prisma.portfolio.findUnique({ where: { id: portfolioId } }),
+    ]);
+
     expect(storedOrder.status).toBe("REJECTED");
+    expect(storedOrder.reservedCash.toString()).toBe("0");
+    expect(portfolio.reservedCash.toString()).toBe("0");
     expect(await prisma.trade.count({ where: { orderId: order.id } })).toBe(0);
   });
 
   test("leaves an order pending when the provider fails", async () => {
     const order = await createOrder();
+
     const quoteProvider = {
       getQuote: jest.fn(async () => {
         throw new Error("provider unavailable");
@@ -198,16 +255,22 @@ describe("processPendingOrders", () => {
       portfolioId,
     });
 
-    expect(summary).toMatchObject({ scanned: 1, failed: 1, executed: 0 });
+    expect(summary).toMatchObject({
+      scanned: 1,
+      failed: 1,
+      executed: 0,
+    });
 
     const storedOrder = await prisma.order.findUnique({
       where: { id: order.id },
     });
+
     expect(storedOrder.status).toBe("PENDING");
   });
 
   test("excludes orders belonging to an inactive portfolio from the batch", async () => {
     await resetPortfolio({ isActive: false });
+
     const order = await createOrder();
     const quoteProvider = quoteAt("100");
 
@@ -216,18 +279,18 @@ describe("processPendingOrders", () => {
       portfolioId,
     });
 
-    // The portfolio is filtered in the query, so the order is never fetched:
-    // it neither executes nor consumes a slot in `limit`.
     expect(summary).toMatchObject({
       scanned: 0,
       skipped: 0,
       executed: 0,
     });
+
     expect(quoteProvider.getQuote).not.toHaveBeenCalled();
 
     const storedOrder = await prisma.order.findUnique({
       where: { id: order.id },
     });
+
     expect(storedOrder.status).toBe("PENDING");
   });
 
@@ -252,7 +315,6 @@ describe("processPendingOrders", () => {
           type: "MARKET",
           status: "PENDING",
           quantity: "1",
-          // Deliberately older than the active order.
           createdAt: new Date("2000-01-01T00:00:00.000Z"),
         },
       });
@@ -263,7 +325,6 @@ describe("processPendingOrders", () => {
 
       const quoteProvider = quoteAt("100");
 
-      // No portfolioId restriction: this is the normal worker query.
       const summary = await processPendingOrders({
         quoteProvider,
         limit: 1,
@@ -275,6 +336,7 @@ describe("processPendingOrders", () => {
         skipped: 0,
         failed: 0,
       });
+
       expect(quoteProvider.getQuote).toHaveBeenCalledTimes(1);
 
       const [storedActive, storedInactive] = await Promise.all([
@@ -293,13 +355,11 @@ describe("processPendingOrders", () => {
   });
 
   test("rejects an already-pending FOREX order instead of retrying it forever", async () => {
-    // Defence in depth: new FOREX orders are rejected at placement, but a row
-    // written before that guard (or by another process) must not occupy a
-    // queue slot on every poll.
     const order = await createOrder({
       symbol: "EURUSD",
       assetType: "FOREX",
     });
+
     const quoteProvider = quoteAt("100");
 
     const summary = await processPendingOrders({
@@ -307,21 +367,29 @@ describe("processPendingOrders", () => {
       portfolioId,
     });
 
-    expect(summary).toMatchObject({ scanned: 1, rejected: 1, executed: 0 });
+    expect(summary).toMatchObject({
+      scanned: 1,
+      rejected: 1,
+      executed: 0,
+    });
+
     expect(quoteProvider.getQuote).not.toHaveBeenCalled();
 
     const storedOrder = await prisma.order.findUnique({
       where: { id: order.id },
     });
+
     expect(storedOrder.status).toBe("REJECTED");
   });
 
-  test("rejects an order immediately when the provider reports a permanent error", async () => {
-    const order = await createOrder();
+  test("rejects an order immediately on a permanent provider error and releases its reservation", async () => {
+    const order = await createReservedBuyOrder();
+
     const permanentError = Object.assign(new Error("unsupported symbol"), {
       statusCode: 404,
       code: "MARKET_DATA_NOT_FOUND",
     });
+
     const quoteProvider = {
       getQuote: jest.fn(async () => {
         throw permanentError;
@@ -334,16 +402,25 @@ describe("processPendingOrders", () => {
       maxAttempts: 5,
     });
 
-    expect(summary).toMatchObject({ scanned: 1, rejected: 1, failed: 0 });
-
-    const storedOrder = await prisma.order.findUnique({
-      where: { id: order.id },
+    expect(summary).toMatchObject({
+      scanned: 1,
+      rejected: 1,
+      failed: 0,
     });
+
+    const [storedOrder, portfolio] = await Promise.all([
+      prisma.order.findUnique({ where: { id: order.id } }),
+      prisma.portfolio.findUnique({ where: { id: portfolioId } }),
+    ]);
+
     expect(storedOrder.status).toBe("REJECTED");
+    expect(storedOrder.reservedCash.toString()).toBe("0");
+    expect(portfolio.reservedCash.toString()).toBe("0");
   });
 
   test("counts a transient provider failure and keeps the order pending below the retry limit", async () => {
     const order = await createOrder();
+
     const quoteProvider = {
       getQuote: jest.fn(async () => {
         throw new Error("provider unavailable");
@@ -356,18 +433,24 @@ describe("processPendingOrders", () => {
       maxAttempts: 3,
     });
 
-    expect(summary).toMatchObject({ scanned: 1, failed: 1, rejected: 0 });
+    expect(summary).toMatchObject({
+      scanned: 1,
+      failed: 1,
+      rejected: 0,
+    });
 
     const storedOrder = await prisma.order.findUnique({
       where: { id: order.id },
     });
+
     expect(storedOrder.status).toBe("PENDING");
     expect(storedOrder.executionAttempts).toBe(1);
     expect(storedOrder.lastExecutionAttemptAt).toBeInstanceOf(Date);
   });
 
-  test("rejects an order after the maximum number of transient failures", async () => {
-    const order = await createOrder();
+  test("rejects an order after the maximum transient failures and releases its reservation", async () => {
+    const order = await createReservedBuyOrder();
+
     const quoteProvider = {
       getQuote: jest.fn(async () => {
         throw new Error("provider unavailable");
@@ -379,30 +462,36 @@ describe("processPendingOrders", () => {
       portfolioId,
       maxAttempts: 2,
     });
+
     const summary = await processPendingOrders({
       quoteProvider,
       portfolioId,
       maxAttempts: 2,
     });
 
-    expect(summary).toMatchObject({ scanned: 1, rejected: 1, failed: 0 });
-
-    const storedOrder = await prisma.order.findUnique({
-      where: { id: order.id },
+    expect(summary).toMatchObject({
+      scanned: 1,
+      rejected: 1,
+      failed: 0,
     });
+
+    const [storedOrder, portfolio] = await Promise.all([
+      prisma.order.findUnique({ where: { id: order.id } }),
+      prisma.portfolio.findUnique({ where: { id: portfolioId } }),
+    ]);
+
     expect(storedOrder.status).toBe("REJECTED");
     expect(storedOrder.executionAttempts).toBe(2);
+    expect(storedOrder.reservedCash.toString()).toBe("0");
+    expect(portfolio.reservedCash.toString()).toBe("0");
   });
 
   test("a permanently failing order cannot starve newer valid orders", async () => {
-    // `limit: 1` forces the worker to see only the oldest pending order on
-    // each pass, which is exactly how a poisoned order used to monopolise the
-    // queue. Once the retry budget is spent it must leave the queue so the
-    // newer order can execute.
     const failingOrder = await createOrder({
       symbol: "FAIL",
       createdAt: new Date(Date.now() - 10_000),
     });
+
     const validOrder = await createOrder({
       createdAt: new Date(Date.now() - 1_000),
     });
@@ -423,12 +512,14 @@ describe("processPendingOrders", () => {
       limit: 1,
       maxAttempts: 2,
     });
+
     const second = await processPendingOrders({
       quoteProvider,
       portfolioId,
       limit: 1,
       maxAttempts: 2,
     });
+
     const third = await processPendingOrders({
       quoteProvider,
       portfolioId,

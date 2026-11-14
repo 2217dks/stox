@@ -255,13 +255,40 @@ function evaluateOrder(order, currentPrice) {
   }
 }
 
-async function applyBuy(tx, order, quantity, price, totalValue) {
-  // Read-modify-write in one statement. PostgreSQL evaluates every right-hand
-  // side against the row's CURRENT values while holding its row lock, so two
-  // concurrent buys cannot both base their totals on the same stale snapshot.
-  // ON CONFLICT also resolves the first-time race where two transactions try
-  // to insert the same (portfolioId, symbol) holding at once; the loser turns
-  // into an update instead of failing on the unique constraint.
+async function applyBuy(tx, order, quantity, price, totalValue, portfolio) {
+  const orderReservedCash = new Prisma.Decimal(order.reservedCash ?? ZERO);
+  const portfolioReservedCash = new Prisma.Decimal(
+    portfolio.reservedCash ?? ZERO,
+  );
+  const cashBalance = new Prisma.Decimal(portfolio.cashBalance);
+
+  // Only the portion above this order's reservation needs additional
+  // unreserved cash.
+  const additionalCashRequired = Prisma.Decimal.max(
+    totalValue.minus(orderReservedCash),
+    ZERO,
+  );
+
+  const availableCash = cashBalance.minus(portfolioReservedCash);
+
+  if (availableCash.lt(additionalCashRequired)) {
+    throw AppError.badRequest(
+      "Insufficient available portfolio cash.",
+      "INSUFFICIENT_BALANCE",
+      {
+        required: additionalCashRequired.toString(),
+        available: availableCash.toString(),
+      },
+    );
+  }
+
+  if (portfolioReservedCash.lt(orderReservedCash)) {
+    throw AppError.badRequest(
+      "Order reservation exceeds portfolio reservation.",
+      "RESERVATION_INCONSISTENCY",
+    );
+  }
+
   await tx.$executeRaw`
     INSERT INTO "Holding" (
       "id",
@@ -298,43 +325,24 @@ async function applyBuy(tx, order, quantity, price, totalValue) {
       "updatedAt" = now()
   `;
 
-  // The cash condition lives in the UPDATE itself, so two concurrent buys
-  // cannot both pass an earlier check and overdraw the portfolio. This runs
-  // after the holding write; if it fails, the whole transaction — including
-  // the holding change above — rolls back.
-  const cashUpdate = await tx.portfolio.updateMany({
-    where: {
-      id: order.portfolioId,
-      cashBalance: {
-        gte: totalValue,
-      },
-    },
+  await tx.portfolio.update({
+    where: { id: order.portfolioId },
     data: {
       cashBalance: {
         decrement: totalValue,
       },
+      reservedCash: {
+        decrement: orderReservedCash,
+      },
     },
   });
 
-  if (cashUpdate.count === 0) {
-    const portfolio = await tx.portfolio.findUnique({
-      where: { id: order.portfolioId },
-      select: { cashBalance: true },
-    });
-
-    if (!portfolio) {
-      throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
-    }
-
-    throw AppError.badRequest(
-      "Insufficient portfolio cash.",
-      "INSUFFICIENT_BALANCE",
-      {
-        required: totalValue.toString(),
-        available: portfolio.cashBalance.toString(),
-      },
-    );
-  }
+  await tx.order.update({
+    where: { id: order.id },
+    data: {
+      reservedCash: ZERO,
+    },
+  });
 }
 
 async function applySell(tx, order, quantity, totalValue) {
@@ -460,11 +468,11 @@ async function executeOrder(orderOrId, price) {
       // A concurrent deactivatePortfolio() update must wait until this
       // transaction commits or rolls back.
       const portfolios = await tx.$queryRaw`
-        SELECT "id", "isActive"
-        FROM "Portfolio"
-        WHERE "id" = ${order.portfolioId}
-        FOR UPDATE
-      `;
+            SELECT "id", "isActive", "cashBalance", "reservedCash"
+            FROM "Portfolio"
+            WHERE "id" = ${order.portfolioId}
+            FOR UPDATE
+          `;
 
       const portfolio = portfolios[0];
 
@@ -509,7 +517,14 @@ async function executeOrder(orderOrId, price) {
       let realizedPnlPct = null;
 
       if (order.side === "BUY") {
-        await applyBuy(tx, order, quantity, executionPrice, totalValue);
+        await applyBuy(
+          tx,
+          order,
+          quantity,
+          executionPrice,
+          totalValue,
+          portfolio,
+        );
       } else if (order.side === "SELL") {
         const realized = await applySell(tx, order, quantity, totalValue);
 

@@ -73,7 +73,9 @@ function placeOrder(app, token, portfolioId) {
       symbol: "AAPL",
       assetType: "STOCK",
       side: "BUY",
+      type: "LIMIT",
       quantity: 1,
+      limitPrice: 100,
     });
 }
 

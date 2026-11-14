@@ -2,6 +2,7 @@ const request = require("supertest");
 
 const app = require("../../src/app");
 const prisma = require("../../src/config/database");
+const marketDataService = require("../../src/services/marketData");
 
 // Black-box tests for order validation, exercised through the HTTP layer only.
 // Contract invariants (docs/ERROR_HANDLING.md + docs/API.md + the repo-wide
@@ -22,6 +23,7 @@ let userId;
 let accessToken;
 let mainPortfolioId;
 const createdOrderIds = [];
+let getQuoteSpy;
 
 // Second user, used to prove orders are invisible across accounts.
 let userBId;
@@ -30,6 +32,10 @@ let userBOrderId;
 
 beforeAll(async () => {
   jest.setTimeout(30000);
+
+  getQuoteSpy = jest
+    .spyOn(marketDataService, "getQuote")
+    .mockResolvedValue({ price: "100" });
 
   const register = await request(app)
     .post("/api/v1/auth/register")
@@ -64,6 +70,8 @@ afterAll(async () => {
   if (userId) {
     await prisma.user.delete({ where: { id: userId } });
   }
+
+  getQuoteSpy?.mockRestore();
 
   await prisma.$disconnect();
 });
@@ -170,16 +178,19 @@ describe("order creation validation (black-box via POST /orders)", () => {
       { case: "zero numeric quantity", override: { quantity: 0 } },
       { case: "negative quantity", override: { quantity: "-1" } },
       { case: "negative tiny quantity", override: { quantity: "-0.00000001" } },
-      { case: "quantity with 9 decimal places", override: { quantity: "1.123456789" } },
+      {
+        case: "quantity with 9 decimal places",
+        override: { quantity: "1.123456789" },
+      },
+      {
+        case: "quantity overflowing Decimal(18,8) integer digits",
+        override: { quantity: "12345678901" },
+      },
       { case: "non-numeric quantity", override: { quantity: "abc" } },
       { case: "empty-string quantity", override: { quantity: "" } },
       { case: "boolean quantity", override: { quantity: true } },
       { case: "null quantity", override: { quantity: null } },
       { case: "exponent-notation quantity", override: { quantity: 1e-8 } },
-      {
-        case: "quantity overflowing Decimal(18,8) integer digits",
-        override: { quantity: "12345678901" },
-      },
     ];
 
     for (const { case: label, override } of invalidOrders) {
@@ -193,7 +204,10 @@ describe("order creation validation (black-box via POST /orders)", () => {
     }
 
     test("all issues for one field collapse into that field's path", async () => {
-      const response = await postOrder({ ...marketBase(), quantity: "-5.123456789" });
+      const response = await postOrder({
+        ...marketBase(),
+        quantity: "-5.123456789",
+      });
 
       expect(response.status).toBe(400);
       expectValidationDetails(response.body);
@@ -288,7 +302,10 @@ describe("order creation validation (black-box via POST /orders)", () => {
     });
 
     test("TAKE_PROFIT without stopPrice is rejected", async () => {
-      const response = await postOrder({ ...marketBase(), type: "TAKE_PROFIT" });
+      const response = await postOrder({
+        ...marketBase(),
+        type: "TAKE_PROFIT",
+      });
 
       expect(response.status).toBe(400);
       expectValidationDetails(response.body);
@@ -464,6 +481,8 @@ describe("order creation validation (black-box via POST /orders)", () => {
         ...marketBase(),
         assetType: "CRYPTO",
         symbol: "btcusdt",
+        type: "LIMIT",
+        limitPrice: "100",
       });
 
       expect(response.status).toBe(201);
@@ -478,6 +497,8 @@ describe("order creation validation (black-box via POST /orders)", () => {
       const response = await postOrder({
         ...marketBase(),
         symbol: "A".repeat(20),
+        type: "LIMIT",
+        limitPrice: "100",
       });
 
       expect(response.status).toBe(201);
@@ -500,7 +521,10 @@ describe("order creation validation (black-box via POST /orders)", () => {
     });
 
     test("whitespace-padded quantity is accepted after trimming", async () => {
-      const response = await postOrder({ ...marketBase(), quantity: "  2.5  " });
+      const response = await postOrder({
+        ...marketBase(),
+        quantity: "  2.5  ",
+      });
 
       expect(response.status).toBe(201);
       expect(response.body.data.order.quantity).toBe("2.5");
@@ -528,6 +552,8 @@ describe("order creation validation (black-box via POST /orders)", () => {
       const response = await postOrder({
         ...marketBase(),
         quantity: "9999999999.99999999",
+        type: "LIMIT",
+        limitPrice: "0.00000001",
       });
 
       expect(response.status).toBe(201);
@@ -546,6 +572,76 @@ describe("order creation validation (black-box via POST /orders)", () => {
       if (response.status === 201) {
         createdOrderIds.push(response.body.data.order.id);
       }
+    });
+  });
+
+  describe("concurrent cash reservations", () => {
+    test("only one concurrent BUY order can reserve the same available cash", async () => {
+      // Create an isolated portfolio so this test does not depend on
+      // reservations left behind by other order-creation tests.
+      const portfolioResponse = await request(app)
+        .post("/api/v1/portfolios")
+        .set("Authorization", `Bearer ${accessToken}`)
+        .send({
+          name: `Concurrent Reservation ${timestamp}`,
+        });
+
+      expect(portfolioResponse.status).toBe(201);
+
+      const portfolioId = portfolioResponse.body.data.portfolio.id;
+
+      // Each order requires 700, but the portfolio has only 1,000 available.
+      await prisma.portfolio.update({
+        where: { id: portfolioId },
+        data: {
+          cashBalance: "1000",
+          reservedCash: "0",
+        },
+      });
+
+      const orderPayload = {
+        portfolioId,
+        symbol: "AAPL",
+        assetType: "STOCK",
+        side: "BUY",
+        type: "LIMIT",
+        quantity: "1",
+        limitPrice: "700",
+      };
+
+      const responses = await Promise.all([
+        postOrder(orderPayload),
+        postOrder(orderPayload),
+      ]);
+
+      const successful = responses.filter(
+        (response) => response.status === 201,
+      );
+      const rejected = responses.filter((response) => response.status === 400);
+
+      expect(successful).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expectErrorEnvelope(rejected[0].body);
+      expect(rejected[0].body.error.code).toBe("INSUFFICIENT_BALANCE");
+
+      const successfulOrder = successful[0].body.data.order;
+      createdOrderIds.push(successfulOrder.id);
+
+      const [portfolio, orders] = await Promise.all([
+        prisma.portfolio.findUnique({
+          where: { id: portfolioId },
+        }),
+        prisma.order.findMany({
+          where: { portfolioId },
+        }),
+      ]);
+
+      expect(portfolio).not.toBeNull();
+      expect(portfolio.reservedCash.toString()).toBe("700");
+
+      expect(orders).toHaveLength(1);
+      expect(orders[0].reservedCash.toString()).toBe("700");
+      expect(orders[0].status).toBe("PENDING");
     });
   });
 
@@ -593,6 +689,7 @@ describe("order detail endpoint (black-box via GET /orders/:id)", () => {
     "type",
     "status",
     "quantity",
+    "reservedCash",
     "limitPrice",
     "stopPrice",
     "executedPrice",
@@ -771,23 +868,30 @@ describe("order list endpoint (black-box via GET /orders)", () => {
   beforeAll(async () => {
     jest.setTimeout(30000);
 
-    // Newest last-created; created in order third -> second -> newest.
-    for (const [suffix, field] of [
-      ["3", "thirdOrderId"],
-      ["2", "secondOrderId"],
-      ["1", "newestOrderId"],
-    ]) {
+    const symbols = [
+      `L${timestamp.toString().slice(-10)}3`,
+      `L${timestamp.toString().slice(-10)}2`,
+      `L${timestamp.toString().slice(-10)}1`,
+    ];
+
+    const created = [];
+
+    for (const symbol of symbols) {
       const response = await postOrder({
         ...marketBase(),
-        symbol: `L${timestamp}${suffix}`,
+        symbol,
+        type: "LIMIT",
+        limitPrice: "100",
       });
 
-      createdOrderIds.push(response.body.data.order.id);
+      expect(response.status).toBe(201);
 
-      if (field === "thirdOrderId") thirdOrderId = response.body.data.order.id;
-      if (field === "secondOrderId") secondOrderId = response.body.data.order.id;
-      if (field === "newestOrderId") newestOrderId = response.body.data.order.id;
+      const orderId = response.body.data.order.id;
+      createdOrderIds.push(orderId);
+      created.push(orderId);
     }
+
+    [thirdOrderId, secondOrderId, newestOrderId] = created;
   });
 
   describe("middleware chain order (contract: identity before validity)", () => {
@@ -816,7 +920,11 @@ describe("order list endpoint (black-box via GET /orders)", () => {
       { case: "limit zero", query: { limit: "0" }, path: "limit" },
       { case: "limit over max", query: { limit: "101" }, path: "limit" },
       { case: "unknown status", query: { status: "FILLED" }, path: "status" },
-      { case: "empty status segment", query: { status: "PENDING," }, path: "status" },
+      {
+        case: "empty status segment",
+        query: { status: "PENDING," },
+        path: "status",
+      },
     ];
 
     for (const { case: label, query, path } of invalidQueries) {
@@ -891,8 +999,16 @@ describe("order list endpoint (black-box via GET /orders)", () => {
     });
 
     test("pagination walks the newest-first stream page by page", async () => {
-      const page1 = await listOrders({ status: "PENDING", limit: "1", page: "1" });
-      const page2 = await listOrders({ status: "PENDING", limit: "1", page: "2" });
+      const page1 = await listOrders({
+        status: "PENDING",
+        limit: "1",
+        page: "1",
+      });
+      const page2 = await listOrders({
+        status: "PENDING",
+        limit: "1",
+        page: "2",
+      });
 
       expect(page1.status).toBe(200);
       expect(page2.status).toBe(200);
@@ -940,7 +1056,7 @@ describe("order history filters (black-box via GET /orders filters)", () => {
     quantity: "1",
   });
 
-  let historyMarketBuyId;
+  let historyConditionalBuyId;
   let historyMarketSellId;
   let historyLimitBuyId;
   let userBPortfolioId;
@@ -950,7 +1066,7 @@ describe("order history filters (black-box via GET /orders filters)", () => {
 
     const created = [];
     for (const [suffix, extra] of [
-      ["1", {}],
+      ["1", { type: "STOP_LOSS", stopPrice: "10" }],
       ["2", { side: "SELL" }],
       ["3", { type: "LIMIT", limitPrice: "10" }],
     ]) {
@@ -964,7 +1080,7 @@ describe("order history filters (black-box via GET /orders filters)", () => {
       createdOrderIds.push(response.body.data.order.id);
     }
 
-    [historyMarketBuyId, historyMarketSellId, historyLimitBuyId] = created;
+    [historyConditionalBuyId, historyMarketSellId, historyLimitBuyId] = created;
 
     const portfoliosB = await request(app)
       .get("/api/v1/portfolios")
@@ -983,7 +1099,7 @@ describe("order history filters (black-box via GET /orders filters)", () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data.orders).toHaveLength(1);
-    expect(response.body.data.orders[0].id).toBe(historyMarketBuyId);
+    expect(response.body.data.orders[0].id).toBe(historyConditionalBuyId);
   });
 
   test("symbol filter normalizes case", async () => {
@@ -994,7 +1110,7 @@ describe("order history filters (black-box via GET /orders filters)", () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data.orders).toHaveLength(1);
-    expect(response.body.data.orders[0].id).toBe(historyMarketBuyId);
+    expect(response.body.data.orders[0].id).toBe(historyConditionalBuyId);
   });
 
   test("side filter returns only that side", async () => {
@@ -1012,7 +1128,7 @@ describe("order history filters (black-box via GET /orders filters)", () => {
       expect(order.side).toBe("SELL");
     }
     expect(ids).toContain(historyMarketSellId);
-    expect(ids).not.toContain(historyMarketBuyId);
+    expect(ids).not.toContain(historyConditionalBuyId);
   });
 
   test("type filter returns only that type", async () => {
@@ -1030,7 +1146,7 @@ describe("order history filters (black-box via GET /orders filters)", () => {
       expect(order.type).toBe("LIMIT");
     }
     expect(ids).toContain(historyLimitBuyId);
-    expect(ids).not.toContain(historyMarketBuyId);
+    expect(ids).not.toContain(historyConditionalBuyId);
   });
 
   test("filters compose (side AND type)", async () => {
@@ -1060,7 +1176,7 @@ describe("order history filters (black-box via GET /orders filters)", () => {
       expect(order.portfolioId).toBe(mainPortfolioId);
     }
     expect(response.body.data.orders.map((o) => o.id)).toContain(
-      historyMarketBuyId,
+      historyConditionalBuyId,
     );
   });
 
@@ -1102,7 +1218,7 @@ describe("order history filters (black-box via GET /orders filters)", () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data.orders.map((o) => o.id)).toContain(
-      historyMarketBuyId,
+      historyConditionalBuyId,
     );
   });
 
@@ -1203,6 +1319,8 @@ describe("order history filters (black-box via GET /orders filters)", () => {
       assetType: "STOCK",
       side: "BUY",
       quantity: "1",
+      type: "LIMIT",
+      limitPrice: "0.00000001",
     });
 
     expect(created.status).toBe(201);
@@ -1222,18 +1340,16 @@ describe("order history filters (black-box via GET /orders filters)", () => {
     );
 
     // One millisecond later must include it.
-    const justAfter = new Date(
-      new Date(createdAt).getTime() + 1,
-    ).toISOString();
+    const justAfter = new Date(new Date(createdAt).getTime() + 1).toISOString();
     const justAfterBoundary = await request(app)
       .get("/api/v1/orders")
       .query({ to: justAfter, limit: "100" })
       .set("Authorization", `Bearer ${accessToken}`);
 
     expect(justAfterBoundary.status).toBe(200);
-    expect(
-      justAfterBoundary.body.data.orders.map((o) => o.id),
-    ).toContain(created.body.data.order.id);
+    expect(justAfterBoundary.body.data.orders.map((o) => o.id)).toContain(
+      created.body.data.order.id,
+    );
   });
 
   test("history view combines status and date range", async () => {
@@ -1248,7 +1364,7 @@ describe("order history filters (black-box via GET /orders filters)", () => {
 
     expect(response.status).toBe(200);
     expect(response.body.data.orders.map((o) => o.id)).toContain(
-      historyMarketBuyId,
+      historyConditionalBuyId,
     );
   });
 });
@@ -1280,9 +1396,13 @@ describe("cancel order endpoint (black-box via DELETE /orders/:id)", () => {
     jest.setTimeout(30000);
 
     for (const [suffix, extra, assign] of [
-      ["1", {}, (id) => (cancelMarketOrderId = id)],
-      ["2", { type: "LIMIT", limitPrice: "12" }, (id) => (cancelLimitOrderId = id)],
-      ["3", {}, (id) => (cancelOrderId = id)],
+      ["1", { side: "SELL" }, (id) => (cancelMarketOrderId = id)],
+      [
+        "2",
+        { type: "LIMIT", limitPrice: "12" },
+        (id) => (cancelLimitOrderId = id),
+      ],
+      ["3", { side: "SELL" }, (id) => (cancelOrderId = id)],
     ]) {
       const response = await postOrder({
         ...marketBase(),
@@ -1417,7 +1537,7 @@ describe("cancel order endpoint (black-box via DELETE /orders/:id)", () => {
         portfolioId: mainPortfolioId,
         symbol: `C${timestamp}RACE`,
         assetType: "STOCK",
-        side: "BUY",
+        side: "SELL",
         quantity: "1",
       });
 

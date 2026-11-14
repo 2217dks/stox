@@ -48,7 +48,12 @@ async function startServer(env = {}) {
     cwd: BACKEND,
     // setupEnv.js sets RATE_LIMIT_ENABLED=false in the Jest process; children
     // must default the kill switch back ON unless a phase overrides it
-    env: { ...process.env, RATE_LIMIT_ENABLED: "true", PORT: String(port), ...env },
+    env: {
+      ...process.env,
+      RATE_LIMIT_ENABLED: "true",
+      PORT: String(port),
+      ...env,
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   let out = "";
@@ -138,7 +143,9 @@ const placeOrder = (base, token, portfolioId) =>
       symbol: "AAPL",
       assetType: "STOCK",
       side: "BUY",
-      quantity: 1,
+      type: "LIMIT",
+      limitPrice: "0.00000001",
+      quantity: "1",
     },
   });
 
@@ -167,19 +174,15 @@ describe("rateLimitV2: auth tier (production defaults, black-box)", () => {
     await stopServer(server);
   });
 
-  test(
-    "measured limit: 10 failed logins pass, the 11th is rejected",
-    async () => {
-      const { fired, last } = await measureUntil429(
-        () => badLogin(server.base),
-        30,
-      );
-      expect(fired).toBe(11);
-      expect(last.status).toBe(429);
-      expect(last.json.success).toBe(false);
-    },
-    30000,
-  );
+  test("measured limit: 10 failed logins pass, the 11th is rejected", async () => {
+    const { fired, last } = await measureUntil429(
+      () => badLogin(server.base),
+      30,
+    );
+    expect(fired).toBe(11);
+    expect(last.status).toBe(429);
+    expect(last.json.success).toBe(false);
+  }, 30000);
 
   test("429 uses the standard envelope with code RATE_LIMITED", async () => {
     const r = await badLogin(server.base);
@@ -231,28 +234,24 @@ describe("rateLimitV2: order tier + per-user keying (production defaults)", () =
     await stopServer(server);
   });
 
-  test(
-    "measured per-user limit: 30 orders pass, the 31st is rejected",
-    async () => {
-      // user A has a fresh 30-order budget here; this test is the phase's
-      // first order traffic, so the count starts from zero
-      const first = await placeOrder(server.base, userA.accessToken, portfolioA);
-      expect(first.status).toBe(201);
-      expect(first.h.get("ratelimit-remaining")).toBe("29");
+  test("measured per-user limit: 30 orders pass, the 31st is rejected", async () => {
+    // user A has a fresh 30-order budget here; this test is the phase's
+    // first order traffic, so the count starts from zero
+    const first = await placeOrder(server.base, userA.accessToken, portfolioA);
+    expect(first.status).toBe(201);
+    expect(first.h.get("ratelimit-remaining")).toBe("29");
 
-      let attempts = 1;
-      let last = first;
-      while (attempts < 40 && last.status !== 429) {
-        attempts += 1;
-        last = await placeOrder(server.base, userA.accessToken, portfolioA);
-      }
-      expect(attempts).toBe(31); // 30 passed, the 31st rejected
-      expect(last.status).toBe(429);
-      expect(last.json.error.code).toBe("RATE_LIMITED");
-      expect(hasDraft8Headers(last, 30)).toBe(true);
-    },
-    30000,
-  );
+    let attempts = 1;
+    let last = first;
+    while (attempts < 40 && last.status !== 429) {
+      attempts += 1;
+      last = await placeOrder(server.base, userA.accessToken, portfolioA);
+    }
+    expect(attempts).toBe(31); // 30 passed, the 31st rejected
+    expect(last.status).toBe(429);
+    expect(last.json.error.code).toBe("RATE_LIMITED");
+    expect(hasDraft8Headers(last, 30)).toBe(true);
+  }, 30000);
 
   test("user B is unaffected while user A is blocked (per-USER keying)", async () => {
     const r = await placeOrder(server.base, userB.accessToken, portfolioB);
@@ -289,17 +288,13 @@ describe("rateLimitV2: global tier (production defaults, black-box)", () => {
     await stopServer(server);
   });
 
-  test(
-    "measured limit: 100 requests pass, the 101st is rejected",
-    async () => {
-      const { fired } = await measureUntil429(
-        () => request(server.base, "GET", "/api/v1/health"),
-        150,
-      );
-      expect(fired).toBe(101);
-    },
-    30000,
-  );
+  test("measured limit: 100 requests pass, the 101st is rejected", async () => {
+    const { fired } = await measureUntil429(
+      () => request(server.base, "GET", "/api/v1/health"),
+      150,
+    );
+    expect(fired).toBe(101);
+  }, 30000);
 
   test("429 envelope + draft-8 headers on the global tier", async () => {
     const r = await request(server.base, "GET", "/api/v1/health");
@@ -414,24 +409,20 @@ describe("rateLimitV2: fixed-window rollover semantics (1000ms)", () => {
     ).toBe(429);
   });
 
-  test(
-    "requests SPANNING the window do not trip the limiter (rollover)",
-    async () => {
-      // Fixed-window contract: each window counts independently. Requests
-      // spread across a window boundary belong to different windows, so a
-      // slow burst can legitimately pass. This documents the mechanism that
-      // makes timing-sensitive assertions on small windows flaky.
-      const t1 = await placeOrder(server.base, userB.accessToken, portfolioB);
-      await wait(600);
-      const t2 = await placeOrder(server.base, userB.accessToken, portfolioB);
-      await wait(700);
-      const t3 = await placeOrder(server.base, userB.accessToken, portfolioB);
-      expect(t1.status).toBe(201);
-      expect(t2.status).toBe(201);
-      expect(t3.status).toBe(201);
-    },
-    30000,
-  );
+  test("requests SPANNING the window do not trip the limiter (rollover)", async () => {
+    // Fixed-window contract: each window counts independently. Requests
+    // spread across a window boundary belong to different windows, so a
+    // slow burst can legitimately pass. This documents the mechanism that
+    // makes timing-sensitive assertions on small windows flaky.
+    const t1 = await placeOrder(server.base, userB.accessToken, portfolioB);
+    await wait(600);
+    const t2 = await placeOrder(server.base, userB.accessToken, portfolioB);
+    await wait(700);
+    const t3 = await placeOrder(server.base, userB.accessToken, portfolioB);
+    expect(t1.status).toBe(201);
+    expect(t2.status).toBe(201);
+    expect(t3.status).toBe(201);
+  }, 30000);
 });
 
 // ---------------------------------------------------------------------------

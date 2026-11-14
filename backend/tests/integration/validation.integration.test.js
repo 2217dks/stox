@@ -2,6 +2,7 @@ const request = require("supertest");
 
 const app = require("../../src/app");
 const prisma = require("../../src/config/database");
+const marketDataService = require("../../src/services/marketData");
 
 const timestamp = Date.now();
 
@@ -15,9 +16,14 @@ let userId;
 let accessToken;
 let mainPortfolioId;
 const createdOrderIds = [];
+let getQuoteSpy;
 
 beforeAll(async () => {
   jest.setTimeout(20000);
+
+  getQuoteSpy = jest
+    .spyOn(marketDataService, "getQuote")
+    .mockResolvedValue({ price: "100" });
 });
 
 afterAll(async () => {
@@ -32,6 +38,8 @@ afterAll(async () => {
       },
     });
   }
+
+  getQuoteSpy?.mockRestore();
 
   await prisma.$disconnect();
 });
@@ -65,13 +73,60 @@ function pathsOf(body) {
 describe("request validation middleware", () => {
   describe("rejecting invalid payloads (contract: 400 VALIDATION_ERROR)", () => {
     const invalidRegisters = [
-      { case: "too-short name", body: { name: "A", email: `ok-${timestamp}@stox.local`, password: validUser.password }, paths: ["name"] },
-      { case: "invalid email", body: { name: "Ok Name", email: "not-an-email", password: validUser.password }, paths: ["email"] },
-      { case: "missing name", body: { email: `ok2-${timestamp}@stox.local`, password: validUser.password }, paths: ["name"] },
-      { case: "missing email", body: { name: "Ok Name", password: validUser.password }, paths: ["email"] },
-      { case: "missing password", body: { name: "Ok Name", email: `ok3-${timestamp}@stox.local` }, paths: ["password"] },
-      { case: "wrong-type name (number)", body: { name: 123, email: `ok4-${timestamp}@stox.local`, password: validUser.password }, paths: ["name"] },
-      { case: "wrong-type email (object)", body: { name: "Ok Name", email: { a: 1 }, password: validUser.password }, paths: ["email"] },
+      {
+        case: "too-short name",
+        body: {
+          name: "A",
+          email: `ok-${timestamp}@stox.local`,
+          password: validUser.password,
+        },
+        paths: ["name"],
+      },
+      {
+        case: "invalid email",
+        body: {
+          name: "Ok Name",
+          email: "not-an-email",
+          password: validUser.password,
+        },
+        paths: ["email"],
+      },
+      {
+        case: "missing name",
+        body: {
+          email: `ok2-${timestamp}@stox.local`,
+          password: validUser.password,
+        },
+        paths: ["name"],
+      },
+      {
+        case: "missing email",
+        body: { name: "Ok Name", password: validUser.password },
+        paths: ["email"],
+      },
+      {
+        case: "missing password",
+        body: { name: "Ok Name", email: `ok3-${timestamp}@stox.local` },
+        paths: ["password"],
+      },
+      {
+        case: "wrong-type name (number)",
+        body: {
+          name: 123,
+          email: `ok4-${timestamp}@stox.local`,
+          password: validUser.password,
+        },
+        paths: ["name"],
+      },
+      {
+        case: "wrong-type email (object)",
+        body: {
+          name: "Ok Name",
+          email: { a: 1 },
+          password: validUser.password,
+        },
+        paths: ["email"],
+      },
     ];
 
     for (const { case: label, body, paths } of invalidRegisters) {
@@ -143,13 +198,11 @@ describe("request validation middleware", () => {
       const maxEmail = `${"a".repeat(243)}@stox.local`;
       const overEmail = `${"a".repeat(244)}@stox.local`;
 
-      const accepted = await request(app)
-        .post("/api/v1/auth/register")
-        .send({
-          name: "Max Email User",
-          email: maxEmail,
-          password: validUser.password,
-        });
+      const accepted = await request(app).post("/api/v1/auth/register").send({
+        name: "Max Email User",
+        email: maxEmail,
+        password: validUser.password,
+      });
 
       expect(accepted.status).toBe(201);
 
@@ -157,13 +210,11 @@ describe("request validation middleware", () => {
         await prisma.user.delete({ where: { id: accepted.body.data.user.id } });
       }
 
-      const rejected = await request(app)
-        .post("/api/v1/auth/register")
-        .send({
-          name: "Over Email User",
-          email: overEmail,
-          password: validUser.password,
-        });
+      const rejected = await request(app).post("/api/v1/auth/register").send({
+        name: "Over Email User",
+        email: overEmail,
+        password: validUser.password,
+      });
 
       expect(rejected.status).toBe(400);
       expectValidationDetails(rejected.body);
@@ -181,9 +232,7 @@ describe("request validation middleware", () => {
     });
 
     test("refresh with missing token returns 400", async () => {
-      const response = await request(app)
-        .post("/api/v1/auth/refresh")
-        .send({});
+      const response = await request(app).post("/api/v1/auth/refresh").send({});
 
       expect(response.status).toBe(400);
       expectValidationDetails(response.body);
@@ -191,9 +240,7 @@ describe("request validation middleware", () => {
     });
 
     test("logout with missing token returns 400", async () => {
-      const response = await request(app)
-        .post("/api/v1/auth/logout")
-        .send({});
+      const response = await request(app).post("/api/v1/auth/logout").send({});
 
       expect(response.status).toBe(400);
       expectValidationDetails(response.body);
@@ -325,7 +372,10 @@ describe("request validation middleware", () => {
       { case: "invalid side enum", override: { side: "HOLD" } },
       { case: "zero quantity", override: { quantity: "0" } },
       { case: "negative quantity", override: { quantity: "-1" } },
-      { case: "quantity with 9 decimal places", override: { quantity: "1.123456789" } },
+      {
+        case: "quantity with 9 decimal places",
+        override: { quantity: "1.123456789" },
+      },
       { case: "non-numeric quantity", override: { quantity: "abc" } },
     ];
 
