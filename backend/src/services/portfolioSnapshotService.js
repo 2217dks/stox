@@ -33,7 +33,7 @@ function getUtcEndOfDay(dateInput) {
  * Capture and persist a performance snapshot for a portfolio as of a specific UTC date.
  *
  * Rules:
- * 1. Computes live market valuation (throws if prices are unavailable).
+ * 1. Computes market valuation as of asOf (uses historical close for past dates).
  * 2. Compares against the previous snapshot to calculate dailyPnl and dailyPnlPct.
  * 3. If no previous snapshot exists, compares against startingBalance as baseline.
  * 4. Upserts into PerformanceSnapshot idempotently for (portfolioId, snapshotDate).
@@ -43,6 +43,7 @@ async function capturePortfolioSnapshot(
   {
     asOf = null,
     snapshotDate = null,
+    historical = true,
     priceProvider,
     client = prisma,
   } = {},
@@ -69,6 +70,7 @@ async function capturePortfolioSnapshot(
     client,
     priceProvider,
     asOf: asOfDate,
+    historical,
   });
 
   // Find the most recent snapshot strictly before this date
@@ -120,18 +122,24 @@ async function capturePortfolioSnapshot(
 }
 
 /**
- * Capture performance snapshots for all active portfolios as of a specific date.
- * Used by scheduled background workers and batch scripts.
+ * Capture performance snapshots for active portfolios as of a specific date.
+ * If portfolioIds is specified, only those portfolios are processed.
+ * Otherwise, inspects active portfolios and skips those that already have a snapshot
+ * for targetDate (unless force: true is specified).
  *
  * @param {Object} [options]
  * @param {string|Date} [options.targetDate]
  * @param {Date} [options.asOf]
+ * @param {Array<string>} [options.portfolioIds]
+ * @param {boolean} [options.force=false]
  * @param {Object} [options.priceProvider]
  * @param {Object} [options.client]
  * @returns {Promise<{
  *   snapshotDate: string,
  *   asOf: string,
  *   totalPortfolios: number,
+ *   alreadyCaptured: number,
+ *   attempted: number,
  *   successful: number,
  *   failed: number,
  *   errors: Array<{ portfolioId: string, error: string }>
@@ -140,14 +148,11 @@ async function capturePortfolioSnapshot(
 async function captureAllPortfolioSnapshots({
   targetDate = null,
   asOf = null,
+  portfolioIds = null,
+  force = false,
   priceProvider,
   client = prisma,
 } = {}) {
-  const portfolios = await client.portfolio.findMany({
-    where: { isActive: true },
-    select: { id: true },
-  });
-
   let snapshotDateStr;
   let asOfDate;
 
@@ -166,16 +171,47 @@ async function captureAllPortfolioSnapshots({
     asOfDate = getUtcEndOfDay(snapshotDateStr);
   }
 
+  const snapshotDateObj = new Date(`${snapshotDateStr}T00:00:00.000Z`);
+
+  const portfolioWhere = { isActive: true };
+  if (Array.isArray(portfolioIds) && portfolioIds.length > 0) {
+    portfolioWhere.id = { in: portfolioIds };
+  }
+
+  const activePortfolios = await client.portfolio.findMany({
+    where: portfolioWhere,
+    select: { id: true },
+  });
+
+  // Query existing snapshots for this target date among candidate portfolios
+  let existingSnapshots = [];
+  if (activePortfolios.length > 0) {
+    existingSnapshots = await client.performanceSnapshot.findMany({
+      where: {
+        snapshotDate: snapshotDateObj,
+        portfolioId: { in: activePortfolios.map((p) => p.id) },
+      },
+      select: { portfolioId: true },
+    });
+  }
+
+  const existingSet = new Set(existingSnapshots.map((s) => s.portfolioId));
+  const portfoliosToCapture = force
+    ? activePortfolios
+    : activePortfolios.filter((p) => !existingSet.has(p.id));
+
   const results = {
     snapshotDate: snapshotDateStr,
     asOf: asOfDate.toISOString(),
-    totalPortfolios: portfolios.length,
+    totalPortfolios: activePortfolios.length,
+    alreadyCaptured: existingSet.size,
+    attempted: portfoliosToCapture.length,
     successful: 0,
     failed: 0,
     errors: [],
   };
 
-  for (const portfolio of portfolios) {
+  for (const portfolio of portfoliosToCapture) {
     try {
       await capturePortfolioSnapshot(portfolio.id, {
         asOf: asOfDate,
@@ -205,4 +241,3 @@ module.exports = {
   capturePortfolioSnapshot,
   captureAllPortfolioSnapshots,
 };
-

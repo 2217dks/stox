@@ -136,43 +136,34 @@ describe("portfolioSeriesService unit tests", () => {
       expect(result.cumulativeReturn.toString()).toBe("0");
     });
 
-    test("attempts to capture today's snapshot when ensureToday is true and today is missing", async () => {
+    test("does not attempt to capture intraday snapshot and remains purely read-only", async () => {
       const asOf = new Date("2026-11-15T10:00:00.000Z");
 
       const mockClient = {
         performanceSnapshot: {
-          findMany: jest
-            .fn()
-            // First call: checking today's snapshot
-            .mockResolvedValueOnce([])
-            // Second call: fetching series range
-            .mockResolvedValueOnce([
-              {
-                snapshotDate: new Date("2026-11-15T00:00:00.000Z"),
-                totalValue: new Prisma.Decimal("10000"),
-                cashBalance: new Prisma.Decimal("10000"),
-                holdingsValue: new Prisma.Decimal("0"),
-                dailyPnl: new Prisma.Decimal("0"),
-                dailyPnlPct: new Prisma.Decimal("0"),
-              },
-            ]),
+          findMany: jest.fn().mockResolvedValue([
+            {
+              snapshotDate: new Date("2026-11-14T00:00:00.000Z"),
+              totalValue: new Prisma.Decimal("10000"),
+              cashBalance: new Prisma.Decimal("10000"),
+              holdingsValue: new Prisma.Decimal("0"),
+              dailyPnl: new Prisma.Decimal("0"),
+              dailyPnlPct: new Prisma.Decimal("0"),
+            },
+          ]),
         },
       };
 
-      capturePortfolioSnapshot.mockResolvedValue({});
-
-      await getPortfolioReturnSeries(portfolioId, {
+      const result = await getPortfolioReturnSeries(portfolioId, {
         period: "1M",
         asOf,
-        ensureToday: true,
         client: mockClient,
       });
 
-      expect(capturePortfolioSnapshot).toHaveBeenCalledTimes(1);
-      expect(capturePortfolioSnapshot).toHaveBeenCalledWith(
-        portfolioId,
-        expect.objectContaining({ asOf }),
-      );
+      expect(result.series).toHaveLength(1);
+      expect(result.series[0].date).toBe("2026-11-14");
+      // Proves capturePortfolioSnapshot is NEVER called from read path
+      expect(capturePortfolioSnapshot).not.toHaveBeenCalled();
     });
   });
 });

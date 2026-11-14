@@ -4,7 +4,6 @@ const {
   findSnapshots,
   findLatestSnapshot,
 } = require("./portfolioSnapshotRepository");
-const { capturePortfolioSnapshot } = require("./portfolioSnapshotService");
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -82,13 +81,14 @@ function resolveDateRange({ period = "1M", year = null, asOf = new Date() } = {}
 /**
  * Fetch and normalize the chronological performance return series for a portfolio.
  *
+ * Invariant: Read-only query over finalized PerformanceSnapshot records. Never
+ * fabricates or captures intraday snapshots for unfinished calendar days.
+ *
  * @param {string} portfolioId
  * @param {Object} options
  * @param {string} [options.period="1M"]
  * @param {number|string} [options.year]
  * @param {Date} [options.asOf]
- * @param {boolean} [options.ensureToday=true]
- * @param {Object} [options.priceProvider]
  * @param {Object} [options.client]
  * @returns {Promise<{
  *   portfolioId: string,
@@ -110,38 +110,9 @@ async function getPortfolioReturnSeries(portfolioId, {
   period = "1M",
   year = null,
   asOf = new Date(),
-  ensureToday = true,
-  priceProvider = null,
   client = prisma,
 } = {}) {
   const reference = asOf instanceof Date ? asOf : new Date(asOf);
-
-  if (ensureToday) {
-    const todayStr = reference.toISOString().slice(0, 10);
-    const todayDate = new Date(`${todayStr}T00:00:00.000Z`);
-
-    const existingToday = await findSnapshots({
-      portfolioId,
-      fromDate: todayDate,
-      toDate: todayDate,
-    }, client);
-
-    if (existingToday.length === 0) {
-      try {
-        await capturePortfolioSnapshot(portfolioId, {
-          asOf: reference,
-          priceProvider,
-          client,
-        });
-      } catch (err) {
-        // If live valuation fails, check if prior historical snapshots exist
-        const prior = await findLatestSnapshot(portfolioId, null, client);
-        if (!prior) {
-          throw err;
-        }
-      }
-    }
-  }
 
   const { startDate, endDate, normalizedPeriod } = resolveDateRange({
     period,
@@ -195,4 +166,3 @@ module.exports = {
   resolveDateRange,
   getPortfolioReturnSeries,
 };
-

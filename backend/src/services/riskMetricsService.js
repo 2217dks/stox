@@ -333,14 +333,12 @@ async function getPortfolioRiskMetrics(
     period = "1M",
     riskFreeRate = DEFAULT_RISK_FREE_RATE,
     asOf = new Date(),
-    ensureToday = true,
     client = prisma,
   } = {},
 ) {
   const seriesResult = await getPortfolioReturnSeries(portfolioId, {
     period,
     asOf,
-    ensureToday,
     client,
   });
 

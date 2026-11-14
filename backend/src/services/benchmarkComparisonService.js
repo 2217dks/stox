@@ -51,7 +51,6 @@ async function getBenchmarkComparison(portfolioId, {
   period = "1M",
   riskFreeRate = DEFAULT_RISK_FREE_RATE,
   asOf = new Date(),
-  ensureToday = true,
   marketDataProvider = null,
   client = prisma,
 } = {}) {
@@ -62,7 +61,6 @@ async function getBenchmarkComparison(portfolioId, {
   const portfolioResult = await getPortfolioReturnSeries(portfolioId, {
     period,
     asOf: reference,
-    ensureToday,
     client,
   });
 

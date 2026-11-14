@@ -116,6 +116,7 @@ describe("portfolioSnapshotService unit tests", () => {
         findMany: jest.fn().mockResolvedValue([]),
       },
       performanceSnapshot: {
+        findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn().mockResolvedValue(null),
         upsert: jest.fn().mockImplementation(({ create }) =>
           Promise.resolve({
@@ -155,6 +156,7 @@ describe("portfolioSnapshotService unit tests", () => {
         findMany: jest.fn().mockResolvedValue([]),
       },
       performanceSnapshot: {
+        findMany: jest.fn().mockResolvedValue([]),
         findFirst: jest.fn().mockResolvedValue(null),
         upsert: jest.fn().mockImplementation(({ create }) =>
           Promise.resolve({
@@ -177,6 +179,58 @@ describe("portfolioSnapshotService unit tests", () => {
       expect.objectContaining({
         create: expect.objectContaining({
           snapshotDate: new Date("2026-11-14T00:00:00.000Z"),
+        }),
+      }),
+    );
+  });
+
+  test("captureAllPortfolioSnapshots skips already captured portfolios and targets only missing ones", async () => {
+    const mockClient = {
+      portfolio: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "port-1" },
+          { id: "port-2" },
+        ]),
+        findUnique: jest.fn().mockImplementation(({ where }) => {
+          return Promise.resolve({
+            id: where.id,
+            cashBalance: new Prisma.Decimal("10000"),
+            startingBalance: new Prisma.Decimal("10000"),
+            isActive: true,
+          });
+        }),
+      },
+      holding: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      performanceSnapshot: {
+        // port-1 already has snapshot for 2026-11-14
+        findMany: jest.fn().mockResolvedValue([{ portfolioId: "port-1" }]),
+        findFirst: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn().mockImplementation(({ create }) =>
+          Promise.resolve({
+            id: "snap-new",
+            ...create,
+          }),
+        ),
+      },
+    };
+
+    const result = await captureAllPortfolioSnapshots({
+      targetDate: "2026-11-14",
+      client: mockClient,
+    });
+
+    expect(result.totalPortfolios).toBe(2);
+    expect(result.alreadyCaptured).toBe(1);
+    expect(result.attempted).toBe(1);
+    expect(result.successful).toBe(1);
+    // port-1 was not re-upserted; only port-2 was processed
+    expect(mockClient.performanceSnapshot.upsert).toHaveBeenCalledTimes(1);
+    expect(mockClient.performanceSnapshot.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          portfolioId: "port-2",
         }),
       }),
     );

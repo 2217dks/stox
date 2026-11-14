@@ -36,16 +36,12 @@ async function getPortfolioPnlHeatmap(portfolioId, {
   period = "1M",
   year = null,
   asOf = new Date(),
-  ensureToday = true,
-  priceProvider = null,
   client = prisma,
 } = {}) {
   const seriesResult = await getPortfolioReturnSeries(portfolioId, {
     period,
     year,
     asOf,
-    ensureToday,
-    priceProvider,
     client,
   });
 
