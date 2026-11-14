@@ -8,6 +8,7 @@ const {
   pnlHeatmapQuerySchema,
   riskMetricsQuerySchema,
   benchmarkQuerySchema,
+  benchmarkComparisonQuerySchema,
 } = require("../validators/portfolioValidator");
 const portfolioController = require("../controllers/portfolioController");
 
@@ -82,6 +83,14 @@ router.get(
   validate(portfolioIdParamsSchema, "params", "validatedParams"),
   validate(benchmarkQuerySchema, "query", "validatedQuery"),
   portfolioController.getBenchmark,
+);
+
+router.get(
+  "/:portfolioId/benchmark-comparison",
+  authMiddleware,
+  validate(portfolioIdParamsSchema, "params", "validatedParams"),
+  validate(benchmarkComparisonQuerySchema, "query", "validatedQuery"),
+  portfolioController.getBenchmarkComparison,
 );
 
 module.exports = router;

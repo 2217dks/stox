@@ -3,11 +3,13 @@ const portfolioService = require("../../../src/services/portfolioService");
 const portfolioHeatmapService = require("../../../src/services/portfolioHeatmapService");
 const riskMetricsService = require("../../../src/services/riskMetricsService");
 const benchmarkService = require("../../../src/services/benchmarkService");
+const benchmarkComparisonService = require("../../../src/services/benchmarkComparisonService");
 
 jest.mock("../../../src/services/portfolioService");
 jest.mock("../../../src/services/portfolioHeatmapService");
 jest.mock("../../../src/services/riskMetricsService");
 jest.mock("../../../src/services/benchmarkService");
+jest.mock("../../../src/services/benchmarkComparisonService");
 
 describe("portfolioController - Analytics endpoints", () => {
   const userId = "user-123";
@@ -148,6 +150,50 @@ describe("portfolioController - Analytics endpoints", () => {
 
       expect(next).toHaveBeenCalledWith(error);
       expect(benchmarkService.getBenchmarkData).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("getBenchmarkComparison", () => {
+    test("verifies ownership and returns benchmark comparison data", async () => {
+      req.validatedQuery = { symbol: "SPY", period: "1M", riskFreeRate: 0.02 };
+      portfolioService.getPortfolioById.mockResolvedValue({ id: portfolioId, userId });
+      benchmarkComparisonService.getBenchmarkComparison.mockResolvedValue({
+        portfolioId,
+        benchmark: "SPY",
+        period: "1M",
+        summary: {
+          portfolioReturn: "0.0450",
+          benchmarkReturn: "0.0210",
+          alpha: "0.0240",
+          beta: "1.15",
+          correlation: "0.85",
+        },
+        comparison: [],
+      });
+
+      await portfolioController.getBenchmarkComparison(req, res, next);
+
+      expect(portfolioService.getPortfolioById).toHaveBeenCalledWith(userId, portfolioId);
+      expect(benchmarkComparisonService.getBenchmarkComparison).toHaveBeenCalledWith(
+        portfolioId,
+        { symbol: "SPY", period: "1M", riskFreeRate: 0.02 },
+      );
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({ portfolioId, benchmark: "SPY" }),
+      });
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    test("passes error to next when ownership check fails", async () => {
+      const error = new Error("Portfolio not found.");
+      portfolioService.getPortfolioById.mockRejectedValue(error);
+
+      await portfolioController.getBenchmarkComparison(req, res, next);
+
+      expect(next).toHaveBeenCalledWith(error);
+      expect(benchmarkComparisonService.getBenchmarkComparison).not.toHaveBeenCalled();
     });
   });
 });
