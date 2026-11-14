@@ -205,7 +205,143 @@ Get performance history and statistics.
 
 ## `GET /portfolios/:id/pnl-heatmap`
 
-Get daily P&L heatmap data.
+Get daily P&L heatmap data and win/loss performance summary.
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `period`  | enum | `1M`    | Observation window: `1W`, `1M`, `3M`, `6M`, `1Y`, `YTD`, `ALL` |
+| `year`    | int  | -       | Optional calendar year filter (e.g. `2026`) |
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolioId": "uuid",
+    "period": "1Y",
+    "heatmap": [
+      {
+        "date": "2026-11-01",
+        "pnl": "120.00000000",
+        "pnlPercent": "0.0120",
+        "totalValue": "10120.00000000"
+      }
+    ],
+    "summary": {
+      "totalPnl": "120.00000000",
+      "winDays": 1,
+      "lossDays": 0,
+      "flatDays": 0
+    }
+  }
+}
+```
+
+## `GET /portfolios/:id/benchmark`
+
+Get historical daily price and return series for a market benchmark.
+
+### Query Parameters
+
+| Parameter | Type   | Default | Description |
+|-----------|--------|---------|-------------|
+| `symbol`  | string | `SPY`   | Validated market ticker symbol (e.g. `SPY`, `QQQ`) |
+| `period`  | enum   | `1M`    | Observation window: `1W`, `1M`, `3M`, `6M`, `1Y`, `YTD`, `ALL` |
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "benchmark": "SPY",
+    "period": "1M",
+    "prices": [
+      {
+        "date": "2026-11-01",
+        "price": "570.25",
+        "dailyReturn": "0.0050"
+      }
+    ]
+  }
+}
+```
+
+## `GET /portfolios/:id/risk-metrics`
+
+Get computed quantitative risk metrics including annualized volatility, drawdown, and Sharpe ratio.
+
+### Query Parameters
+
+| Parameter      | Type   | Default | Description |
+|----------------|--------|---------|-------------|
+| `period`       | enum   | `1M`    | Observation window: `1W`, `1M`, `3M`, `6M`, `1Y`, `YTD`, `ALL` |
+| `riskFreeRate` | number | `0.02`  | Annualized risk-free rate decimal fraction ($0 \le R_f \le 1.0$) |
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolioId": "uuid",
+    "period": "1M",
+    "metrics": {
+      "annualizedVolatility": "0.1852",
+      "maxDrawdown": "-0.0825",
+      "currentDrawdown": "-0.0120",
+      "peakValue": "10500.00000000",
+      "peakDate": "2026-11-05",
+      "sharpeRatio": "1.42",
+      "observationCount": 22
+    }
+  }
+}
+```
+
+## `GET /portfolios/:id/benchmark-comparison`
+
+Compare portfolio performance directly against a benchmark symbol over mutually available dates.
+
+### Query Parameters
+
+| Parameter      | Type   | Default | Description |
+|----------------|--------|---------|-------------|
+| `symbol`       | string | `SPY`   | Validated benchmark symbol |
+| `period`       | enum   | `1M`    | Observation window: `1W`, `1M`, `3M`, `6M`, `1Y`, `YTD`, `ALL` |
+| `riskFreeRate` | number | `0.02`  | Annualized risk-free rate decimal fraction |
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolioId": "uuid",
+    "benchmark": "SPY",
+    "period": "1M",
+    "summary": {
+      "portfolioReturn": "0.0450",
+      "benchmarkReturn": "0.0210",
+      "alpha": "0.0240",
+      "beta": "1.15",
+      "correlation": "0.85"
+    },
+    "comparison": [
+      {
+        "date": "2026-11-01",
+        "portfolioValue": "10450.00000000",
+        "portfolioReturn": "0.0450",
+        "benchmarkPrice": "570.25",
+        "benchmarkReturn": "0.0210"
+      }
+    ]
+  }
+}
+```
 
 ---
 

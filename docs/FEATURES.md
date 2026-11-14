@@ -142,10 +142,13 @@ Each holding includes:
 
 ## Risk
 
-- Volatility
-- Maximum drawdown
-- Sharpe ratio
-- Risk-adjusted performance
+- Volatility (annualized sample standard deviation, factor 252)
+- Maximum drawdown (running high-water mark peak and current drawdown)
+- Sharpe-like ratio (annualized excess return over risk-free rate, default 2%)
+- Risk-adjusted performance against benchmarks (Alpha, Beta, Correlation)
+- P&L Calendar Heatmap (daily P&L, return %, win/loss/flat days summary)
+
+> Detailed mathematical specifications and implementation contracts are documented in [docs/ANALYTICS.md](ANALYTICS.md).
 
 ## Trading Statistics
 
