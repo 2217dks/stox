@@ -1,5 +1,8 @@
 const { Prisma } = require("@prisma/client");
-const { capturePortfolioSnapshot } = require("../../../src/services/portfolioSnapshotService");
+const {
+  capturePortfolioSnapshot,
+  captureAllPortfolioSnapshots,
+} = require("../../../src/services/portfolioSnapshotService");
 
 describe("portfolioSnapshotService unit tests", () => {
   const portfolioId = "11111111-1111-4111-8111-111111111111";
@@ -87,6 +90,54 @@ describe("portfolioSnapshotService unit tests", () => {
     expect(result.dailyPnl).toBe("500"); // 11000 - 10500
     // 500 / 10500 = 0.047619...
     expect(new Prisma.Decimal(result.dailyPnlPct).toDecimalPlaces(4).toString()).toBe("0.0476");
+  });
+
+  test("captureAllPortfolioSnapshots iterates over active portfolios and handles errors gracefully", async () => {
+    const mockClient = {
+      portfolio: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: "port-1" },
+          { id: "port-2" },
+        ]),
+        findUnique: jest.fn().mockImplementation(({ where }) => {
+          if (where.id === "port-1") {
+            return Promise.resolve({
+              id: "port-1",
+              cashBalance: new Prisma.Decimal("10000"),
+              startingBalance: new Prisma.Decimal("10000"),
+              isActive: true,
+            });
+          }
+          // port-2 will simulate an error during lookup
+          throw new Error("Simulated quote failure");
+        }),
+      },
+      holding: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      performanceSnapshot: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn().mockImplementation(({ create }) =>
+          Promise.resolve({
+            id: "snap-1",
+            ...create,
+          }),
+        ),
+      },
+    };
+
+    const asOf = new Date("2026-11-12T12:00:00.000Z");
+    const result = await captureAllPortfolioSnapshots({
+      asOf,
+      client: mockClient,
+    });
+
+    expect(result.snapshotDate).toBe("2026-11-12");
+    expect(result.totalPortfolios).toBe(2);
+    expect(result.successful).toBe(1);
+    expect(result.failed).toBe(1);
+    expect(result.errors).toHaveLength(1);
+    expect(result.errors[0].portfolioId).toBe("port-2");
   });
 });
 

@@ -1,5 +1,6 @@
 const { Prisma } = require("@prisma/client");
 const prisma = require("../config/database");
+const logger = require("../utils/logger");
 const { calculatePortfolioValuation } = require("./portfolioValuationService");
 const {
   upsertSnapshot,
@@ -81,7 +82,69 @@ async function capturePortfolioSnapshot(
   return serializeSnapshot(snapshot);
 }
 
+/**
+ * Capture performance snapshots for all active portfolios as of a specific date.
+ * Used by scheduled background workers and batch scripts.
+ *
+ * @param {Object} [options]
+ * @param {Date} [options.asOf]
+ * @param {Object} [options.priceProvider]
+ * @param {Object} [options.client]
+ * @returns {Promise<{
+ *   snapshotDate: string,
+ *   totalPortfolios: number,
+ *   successful: number,
+ *   failed: number,
+ *   errors: Array<{ portfolioId: string, error: string }>
+ * }>}
+ */
+async function captureAllPortfolioSnapshots({
+  asOf = new Date(),
+  priceProvider,
+  client = prisma,
+} = {}) {
+  const portfolios = await client.portfolio.findMany({
+    where: { isActive: true },
+    select: { id: true },
+  });
+
+  const snapshotDateStr = asOf instanceof Date
+    ? asOf.toISOString().slice(0, 10)
+    : String(asOf).slice(0, 10);
+
+  const results = {
+    snapshotDate: snapshotDateStr,
+    totalPortfolios: portfolios.length,
+    successful: 0,
+    failed: 0,
+    errors: [],
+  };
+
+  for (const portfolio of portfolios) {
+    try {
+      await capturePortfolioSnapshot(portfolio.id, {
+        asOf,
+        priceProvider,
+        client,
+      });
+      results.successful += 1;
+    } catch (err) {
+      results.failed += 1;
+      results.errors.push({
+        portfolioId: portfolio.id,
+        error: err.message,
+      });
+      logger.warn(
+        `Failed to capture daily snapshot for portfolio ${portfolio.id}: ${err.message}`,
+      );
+    }
+  }
+
+  return results;
+}
+
 module.exports = {
   capturePortfolioSnapshot,
+  captureAllPortfolioSnapshots,
 };
 

@@ -8,6 +8,7 @@
     "start": "node src/server.js",
     "workers": "node src/workers/index.js",
     "leaderboard:snapshot": "node scripts/generate-leaderboard-snapshots.js",
+    "portfolio:snapshot": "node scripts/generate-portfolio-snapshots.js",
     "prisma:format": "prisma format",
     "prisma:validate": "prisma validate",
     "prisma:migrate": "prisma migrate dev",
