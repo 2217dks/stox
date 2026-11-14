@@ -1,6 +1,7 @@
 const portfolioService = require("../services/portfolioService");
 const portfolioHeatmapService = require("../services/portfolioHeatmapService");
 const riskMetricsService = require("../services/riskMetricsService");
+const benchmarkService = require("../services/benchmarkService");
 
 async function listPortfolios(req, res, next) {
   try {
@@ -211,6 +212,28 @@ async function getRiskMetrics(req, res, next) {
   }
 }
 
+async function getBenchmark(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+    const { symbol, period } = req.validatedQuery || {};
+
+    await portfolioService.getPortfolioById(userId, portfolioId);
+
+    const result = await benchmarkService.getBenchmarkData(symbol, {
+      period,
+      portfolioId,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   listPortfolios,
   createPortfolio,
@@ -222,4 +245,5 @@ module.exports = {
   getPortfolioSummary,
   getPnlHeatmap,
   getRiskMetrics,
+  getBenchmark,
 };

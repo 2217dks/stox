@@ -2,10 +2,12 @@ const portfolioController = require("../../../src/controllers/portfolioControlle
 const portfolioService = require("../../../src/services/portfolioService");
 const portfolioHeatmapService = require("../../../src/services/portfolioHeatmapService");
 const riskMetricsService = require("../../../src/services/riskMetricsService");
+const benchmarkService = require("../../../src/services/benchmarkService");
 
 jest.mock("../../../src/services/portfolioService");
 jest.mock("../../../src/services/portfolioHeatmapService");
 jest.mock("../../../src/services/riskMetricsService");
+jest.mock("../../../src/services/benchmarkService");
 
 describe("portfolioController - Analytics endpoints", () => {
   const userId = "user-123";
@@ -110,6 +112,42 @@ describe("portfolioController - Analytics endpoints", () => {
       await portfolioController.getRiskMetrics(req, res, next);
 
       expect(next).toHaveBeenCalledWith(error);
+    });
+  });
+
+  describe("getBenchmark", () => {
+    test("verifies ownership and returns benchmark data", async () => {
+      req.validatedQuery = { symbol: "SPY", period: "1M" };
+      portfolioService.getPortfolioById.mockResolvedValue({ id: portfolioId, userId });
+      benchmarkService.getBenchmarkData.mockResolvedValue({
+        benchmark: "SPY",
+        period: "1M",
+        prices: [{ date: "2026-11-01", price: "500.00", dailyReturn: "0.0100" }],
+      });
+
+      await portfolioController.getBenchmark(req, res, next);
+
+      expect(portfolioService.getPortfolioById).toHaveBeenCalledWith(userId, portfolioId);
+      expect(benchmarkService.getBenchmarkData).toHaveBeenCalledWith(
+        "SPY",
+        { period: "1M", portfolioId },
+      );
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({ benchmark: "SPY", period: "1M" }),
+      });
+      expect(next).not.toHaveBeenCalled();
+    });
+
+    test("passes error to next when ownership check fails", async () => {
+      const error = new Error("Portfolio not found.");
+      portfolioService.getPortfolioById.mockRejectedValue(error);
+
+      await portfolioController.getBenchmark(req, res, next);
+
+      expect(next).toHaveBeenCalledWith(error);
+      expect(benchmarkService.getBenchmarkData).not.toHaveBeenCalled();
     });
   });
 });
