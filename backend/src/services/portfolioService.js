@@ -39,6 +39,10 @@ function serializePortfolio(portfolio) {
     description: portfolio.description,
     startingBalance: portfolio.startingBalance.toString(),
     cashBalance: portfolio.cashBalance.toString(),
+    reservedCash: portfolio.reservedCash.toString(),
+    availableCash: portfolio.cashBalance
+      .minus(portfolio.reservedCash)
+      .toString(),
     isDefault: portfolio.isDefault,
     isActive: portfolio.isActive,
     createdAt: portfolio.createdAt,
@@ -409,6 +413,7 @@ async function getPortfolioCashBalance(userId, portfolioId) {
     select: {
       id: true,
       cashBalance: true,
+      reservedCash: true,
     },
   });
 
@@ -423,6 +428,10 @@ async function getPortfolioCashBalance(userId, portfolioId) {
   return {
     portfolioId: portfolio.id,
     cashBalance: portfolio.cashBalance.toString(),
+    reservedCash: portfolio.reservedCash.toString(),
+    availableCash: portfolio.cashBalance
+      .minus(portfolio.reservedCash)
+      .toString(),
   };
 }
 

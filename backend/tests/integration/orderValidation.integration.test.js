@@ -182,15 +182,15 @@ describe("order creation validation (black-box via POST /orders)", () => {
         case: "quantity with 9 decimal places",
         override: { quantity: "1.123456789" },
       },
+      {
+        case: "quantity overflowing Decimal(18,8) integer digits",
+        override: { quantity: "12345678901" },
+      },
       { case: "non-numeric quantity", override: { quantity: "abc" } },
       { case: "empty-string quantity", override: { quantity: "" } },
       { case: "boolean quantity", override: { quantity: true } },
       { case: "null quantity", override: { quantity: null } },
       { case: "exponent-notation quantity", override: { quantity: 1e-8 } },
-      {
-        case: "quantity overflowing Decimal(18,8) integer digits",
-        override: { quantity: "12345678901" },
-      },
     ];
 
     for (const { case: label, override } of invalidOrders) {
@@ -572,6 +572,76 @@ describe("order creation validation (black-box via POST /orders)", () => {
       if (response.status === 201) {
         createdOrderIds.push(response.body.data.order.id);
       }
+    });
+  });
+
+  describe("concurrent cash reservations", () => {
+    test("only one concurrent BUY order can reserve the same available cash", async () => {
+      // Create an isolated portfolio so this test does not depend on
+      // reservations left behind by other order-creation tests.
+      const portfolioResponse = await request(app)
+        .post("/api/v1/portfolios")
+        .set("Authorization", `Bearer ${accessToken}`)
+        .send({
+          name: `Concurrent Reservation ${timestamp}`,
+        });
+
+      expect(portfolioResponse.status).toBe(201);
+
+      const portfolioId = portfolioResponse.body.data.portfolio.id;
+
+      // Each order requires 700, but the portfolio has only 1,000 available.
+      await prisma.portfolio.update({
+        where: { id: portfolioId },
+        data: {
+          cashBalance: "1000",
+          reservedCash: "0",
+        },
+      });
+
+      const orderPayload = {
+        portfolioId,
+        symbol: "AAPL",
+        assetType: "STOCK",
+        side: "BUY",
+        type: "LIMIT",
+        quantity: "1",
+        limitPrice: "700",
+      };
+
+      const responses = await Promise.all([
+        postOrder(orderPayload),
+        postOrder(orderPayload),
+      ]);
+
+      const successful = responses.filter(
+        (response) => response.status === 201,
+      );
+      const rejected = responses.filter((response) => response.status === 400);
+
+      expect(successful).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expectErrorEnvelope(rejected[0].body);
+      expect(rejected[0].body.error.code).toBe("INSUFFICIENT_BALANCE");
+
+      const successfulOrder = successful[0].body.data.order;
+      createdOrderIds.push(successfulOrder.id);
+
+      const [portfolio, orders] = await Promise.all([
+        prisma.portfolio.findUnique({
+          where: { id: portfolioId },
+        }),
+        prisma.order.findMany({
+          where: { portfolioId },
+        }),
+      ]);
+
+      expect(portfolio).not.toBeNull();
+      expect(portfolio.reservedCash.toString()).toBe("700");
+
+      expect(orders).toHaveLength(1);
+      expect(orders[0].reservedCash.toString()).toBe("700");
+      expect(orders[0].status).toBe("PENDING");
     });
   });
 
