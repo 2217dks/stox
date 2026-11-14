@@ -4,6 +4,7 @@ const {
   calculateMean,
   calculateSampleStdDev,
   calculateVolatility,
+  calculateDrawdown,
 } = require("../../../src/services/riskMetricsService");
 
 describe("riskMetricsService - Volatility calculation", () => {
@@ -54,5 +55,64 @@ describe("riskMetricsService - Volatility calculation", () => {
 
     const result = calculateVolatility(returns, { annualizationFactor: 252 });
     expect(result).toBe("0.3043");
+  });
+
+  describe("Drawdown calculation", () => {
+    test("returns nulls for empty or invalid series", () => {
+      expect(calculateDrawdown([])).toEqual({
+        maxDrawdown: null,
+        currentDrawdown: null,
+        peakValue: null,
+        peakDate: null,
+      });
+      expect(calculateDrawdown(null)).toEqual({
+        maxDrawdown: null,
+        currentDrawdown: null,
+        peakValue: null,
+        peakDate: null,
+      });
+    });
+
+    test("handles single observation series correctly", () => {
+      const series = [
+        { date: "2026-11-01", totalValue: new Prisma.Decimal("10000") },
+      ];
+      const result = calculateDrawdown(series);
+      expect(result).toEqual({
+        maxDrawdown: "0.0000",
+        currentDrawdown: "0.0000",
+        peakValue: "10000.00000000",
+        peakDate: "2026-11-01",
+      });
+    });
+
+    test("accurately calculates running peak, max drawdown, and current drawdown", () => {
+      const series = [
+        { date: "2026-11-01", totalValue: "10000" },
+        { date: "2026-11-02", totalValue: "12000" }, // Peak = 12000, DD = 0
+        { date: "2026-11-03", totalValue: "9600" },  // DD = (9600 - 12000)/12000 = -0.2000
+        { date: "2026-11-04", totalValue: "10800" }, // DD = (10800 - 12000)/12000 = -0.1000
+      ];
+
+      const result = calculateDrawdown(series);
+      expect(result).toEqual({
+        maxDrawdown: "-0.2000",
+        currentDrawdown: "-0.1000",
+        peakValue: "12000.00000000",
+        peakDate: "2026-11-02",
+      });
+    });
+
+    test("supports series with .value property and Date objects", () => {
+      const series = [
+        { date: new Date("2026-11-01T00:00:00.000Z"), value: 500 },
+        { date: new Date("2026-11-02T00:00:00.000Z"), value: 450 },
+      ];
+      const result = calculateDrawdown(series);
+      expect(result.peakDate).toBe("2026-11-01");
+      expect(result.peakValue).toBe("500.00000000");
+      expect(result.maxDrawdown).toBe("-0.1000");
+      expect(result.currentDrawdown).toBe("-0.1000");
+    });
   });
 });

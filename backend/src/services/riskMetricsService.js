@@ -1,3 +1,5 @@
+const { Prisma } = require("@prisma/client");
+
 const DEFAULT_ANNUALIZATION_FACTOR = 252;
 
 /**
@@ -101,10 +103,101 @@ function calculateVolatility(
   return annualized.toFixed(precision);
 }
 
+/**
+ * Calculate portfolio drawdown statistics across a chronological series.
+ *
+ * Running Peak: P_t = max_{0 <= s <= t} V_s
+ * Drawdown: DD_t = (V_t - P_t) / P_t
+ * Max Drawdown: MDD = min_{0 <= t <= T} DD_t
+ * Current Drawdown: DD_T
+ *
+ * @param {Array<{ date: string|Date, totalValue?: number|string|Decimal, value?: number|string|Decimal }>} series
+ * @param {Object} [options]
+ * @param {number} [options.precision=4]
+ * @param {number} [options.valuePrecision=8]
+ * @returns {{
+ *   maxDrawdown: string|null,
+ *   currentDrawdown: string|null,
+ *   peakValue: string|null,
+ *   peakDate: string|null
+ * }}
+ */
+function calculateDrawdown(
+  series,
+  {
+    precision = 4,
+    valuePrecision = 8,
+  } = {},
+) {
+  if (!Array.isArray(series) || series.length === 0) {
+    return {
+      maxDrawdown: null,
+      currentDrawdown: null,
+      peakValue: null,
+      peakDate: null,
+    };
+  }
+
+  let runningPeak = null;
+  let peakDate = null;
+  let maxDrawdown = 0;
+  let currentDrawdown = 0;
+
+  for (let i = 0; i < series.length; i++) {
+    const point = series[i];
+    const rawVal = point.totalValue !== undefined ? point.totalValue : point.value;
+    if (rawVal === null || rawVal === undefined) continue;
+
+    const val = new Prisma.Decimal(rawVal);
+    const date = point.date instanceof Date
+      ? point.date.toISOString().slice(0, 10)
+      : String(point.date).slice(0, 10);
+
+    if (runningPeak === null || val.gt(runningPeak)) {
+      runningPeak = val;
+      peakDate = date;
+    }
+
+    if (runningPeak.gt(0)) {
+      const dd = val.minus(runningPeak).dividedBy(runningPeak).toNumber();
+      if (dd < maxDrawdown) {
+        maxDrawdown = dd;
+      }
+      if (i === series.length - 1) {
+        currentDrawdown = dd;
+      }
+    }
+  }
+
+  if (runningPeak === null) {
+    return {
+      maxDrawdown: null,
+      currentDrawdown: null,
+      peakValue: null,
+      peakDate: null,
+    };
+  }
+
+  const formatDd = (n) => {
+    if (n === 0 || Object.is(n, -0) || Math.abs(n) < 1e-12) {
+      return (0).toFixed(precision);
+    }
+    return n.toFixed(precision);
+  };
+
+  return {
+    maxDrawdown: formatDd(maxDrawdown),
+    currentDrawdown: formatDd(currentDrawdown),
+    peakValue: runningPeak.toFixed(valuePrecision),
+    peakDate,
+  };
+}
+
 module.exports = {
   DEFAULT_ANNUALIZATION_FACTOR,
   extractNumbers,
   calculateMean,
   calculateSampleStdDev,
   calculateVolatility,
+  calculateDrawdown,
 };
