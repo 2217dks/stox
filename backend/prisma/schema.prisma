@@ -42,6 +42,14 @@ enum OrderStatus {
   REJECTED
 }
 
+enum OrderEventType {
+  CREATED
+  EXECUTED
+  CANCELLED
+  EXPIRED
+  REJECTED
+}
+
 enum OrderSource {
   MANUAL
   COPY_TRADE
@@ -259,8 +267,9 @@ model Order {
 
   notes String?
 
-  source OrderSource @default(MANUAL)
+  source OrderSource  @default(MANUAL)
   trade  Trade?
+  events OrderEvent[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -336,6 +345,32 @@ model Trade {
   @@index([portfolioId])
   @@index([symbol])
   @@index([executedAt])
+}
+
+// ============================================================
+// ORDER EVENT (AUDIT TRAIL)
+// ============================================================
+
+model OrderEvent {
+  id String @id @default(uuid())
+
+  orderId String
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  // Causal, monotonic sequence number per order (1, 2, 3...)
+  sequence Int @default(1)
+
+  eventType      OrderEventType
+  previousStatus OrderStatus?
+  newStatus      OrderStatus
+
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  @@unique([orderId, sequence])
+  @@index([orderId, createdAt])
 }
 
 // ============================================================

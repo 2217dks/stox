@@ -3,6 +3,7 @@ const marketDataService = require("../services/marketData");
 const { evaluateOrder, executeOrder } = require("../services/tradeService");
 const { isExecutableAssetType } = require("../utils/assetSupport");
 const { hasEventBus, publishOrderStatus } = require("../realtime/orderEvents");
+const { recordOrderEvent } = require("../services/orderEventService");
 const logger = require("../utils/logger");
 
 const DEFAULT_INTERVAL_MS = 5000;
@@ -52,7 +53,12 @@ function isPermanentProviderError(error) {
   );
 }
 
-async function transitionPendingOrder(orderId, status, extraWhere = {}) {
+async function transitionPendingOrder(
+  orderId,
+  status,
+  extraWhere = {},
+  metadata = null,
+) {
   return prisma.$transaction(async (tx) => {
     // Read the portfolio ID first. This is only a lookup, not a row lock.
     const orderRef = await tx.order.findUnique({
@@ -135,12 +141,31 @@ async function transitionPendingOrder(orderId, status, extraWhere = {}) {
       });
     }
 
+    await recordOrderEvent(tx, {
+      orderId,
+      eventType: status,
+      previousStatus: "PENDING",
+      newStatus: status,
+      metadata: {
+        ...(metadata || {}),
+        releasedReservedCash:
+          currentOrder.side === "BUY"
+            ? orderReservedCash.toString()
+            : "0",
+      },
+    });
+
     return true;
   });
 }
 
-async function rejectPendingOrder(orderId) {
-  return transitionPendingOrder(orderId, "REJECTED");
+async function rejectPendingOrder(orderId, metadata = null) {
+  return transitionPendingOrder(
+    orderId,
+    "REJECTED",
+    {},
+    typeof metadata === "string" ? { reason: metadata } : metadata,
+  );
 }
 
 // Returns "retry" while the order still has budget, "rejected" when this
@@ -243,6 +268,24 @@ async function recordTransientFailure(orderId, now, maxAttempts) {
       });
     }
 
+    if (shouldReject) {
+      await recordOrderEvent(tx, {
+        orderId,
+        eventType: "REJECTED",
+        previousStatus: "PENDING",
+        newStatus: "REJECTED",
+        metadata: {
+          reason: "MAX_ATTEMPTS_EXCEEDED",
+          executionAttempts: nextAttempts,
+          maxAttempts,
+          releasedReservedCash:
+            currentOrder.side === "BUY"
+              ? orderReservedCash.toString()
+              : "0",
+        },
+      });
+    }
+
     return shouldReject ? "rejected" : "retry";
   });
 }
@@ -257,7 +300,12 @@ async function recordTransientFailure(orderId, now, maxAttempts) {
  */
 async function runOrder(order, { quoteProvider, now, retryLimit }) {
   if (order.expiresAt && order.expiresAt <= now) {
-    const expired = await transitionPendingOrder(order.id, "EXPIRED");
+    const expired = await transitionPendingOrder(
+      order.id,
+      "EXPIRED",
+      {},
+      { reason: "ORDER_EXPIRED", expiresAt: order.expiresAt },
+    );
 
     return expired ? "expired" : "skipped";
   }
@@ -271,7 +319,9 @@ async function runOrder(order, { quoteProvider, now, retryLimit }) {
   // Defence in depth: placement rejects these already, but a legacy or
   // externally written row must not be retried forever.
   if (!isExecutableAssetType(order.assetType)) {
-    return (await rejectPendingOrder(order.id)) ? "rejected" : "skipped";
+    return (await rejectPendingOrder(order.id, "UNSUPPORTED_ASSET_TYPE"))
+      ? "rejected"
+      : "skipped";
   }
 
   let quote;
@@ -282,7 +332,9 @@ async function runOrder(order, { quoteProvider, now, retryLimit }) {
     });
   } catch (error) {
     if (isPermanentProviderError(error)) {
-      return (await rejectPendingOrder(order.id)) ? "rejected" : "skipped";
+      return (await rejectPendingOrder(order.id, error.code || "MARKET_DATA_ERROR"))
+        ? "rejected"
+        : "skipped";
     }
 
     return recordTransientFailure(order.id, now, retryLimit);
@@ -297,7 +349,15 @@ async function runOrder(order, { quoteProvider, now, retryLimit }) {
     return "executed";
   } catch (error) {
     if (REJECTION_CODES.has(error.code)) {
-      return (await rejectPendingOrder(order.id)) ? "rejected" : "skipped";
+      return (await rejectPendingOrder(
+        order.id,
+        {
+          reason: error.code || "EXECUTION_REJECTED",
+          ...(error.details ? { details: error.details } : {}),
+        },
+      ))
+        ? "rejected"
+        : "skipped";
     }
 
     // A concurrent worker won the PENDING -> EXECUTED transition, or the

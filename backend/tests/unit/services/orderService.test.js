@@ -29,6 +29,10 @@ jest.mock("../../../src/config/database", () => ({
     update: jest.fn(),
     updateMany: jest.fn(),
   },
+  orderEvent: {
+    create: jest.fn(),
+    findMany: jest.fn(),
+  },
 }));
 
 jest.mock("../../../src/services/marketData", () => ({
@@ -81,6 +85,10 @@ function createTransactionMock({
     ]),
     portfolio: {
       update: jest.fn().mockResolvedValue({}),
+    },
+    orderEvent: {
+      create: jest.fn().mockResolvedValue({}),
+      findFirst: jest.fn().mockResolvedValue(null),
     },
     order: {
       findFirst: jest.fn().mockResolvedValue(transactionOrder),
@@ -421,7 +429,8 @@ describe("createOrder cash reservations", () => {
     });
 
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
-    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+    // 2 raw queries: 1 for portfolio lock, 1 for order lock in recordOrderEvent
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
     expect(tx.portfolio.update).toHaveBeenCalledTimes(1);
     expect(tx.order.create).toHaveBeenCalledTimes(1);
   });

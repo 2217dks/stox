@@ -241,6 +241,7 @@ model Order {
   source          OrderSource @default(MANUAL)
 
   trade           Trade?
+  events          OrderEvent[]
 
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
@@ -249,6 +250,30 @@ model Order {
   @@index([status])
   @@index([symbol])
   @@index([createdAt])
+}
+```
+
+## OrderEvent
+
+Persistent, monotonic audit log for the order lifecycle (`CREATED`, `EXECUTED`, `CANCELLED`, `EXPIRED`, `REJECTED`). Every transition is recorded inside the exact same database transaction that updates the order status. Sequence numbers are strictly incremented per order using pessimistic row locking.
+
+```prisma
+model OrderEvent {
+  id             String         @id @default(uuid())
+  orderId        String
+  order          Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  sequence       Int            @default(1)
+  eventType      OrderEventType
+  previousStatus OrderStatus?
+  newStatus      OrderStatus
+
+  metadata       Json?
+
+  createdAt      DateTime       @default(now())
+
+  @@unique([orderId, sequence])
+  @@index([orderId, createdAt])
 }
 ```
 
@@ -713,6 +738,14 @@ enum OrderType {
 
 enum OrderStatus {
   PENDING
+  EXECUTED
+  CANCELLED
+  EXPIRED
+  REJECTED
+}
+
+enum OrderEventType {
+  CREATED
   EXECUTED
   CANCELLED
   EXPIRED

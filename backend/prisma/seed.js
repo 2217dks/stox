@@ -544,6 +544,70 @@ async function seedTrades(executedOrders) {
   return trades;
 }
 
+async function seedOrderEvents(orders) {
+  let createdCount = 0;
+
+  for (const order of orders) {
+    const createdEventId = fixtureId("order-event-created", order.id);
+    const existingCreated = await prisma.orderEvent.findUnique({
+      where: { id: createdEventId },
+    });
+
+    if (!existingCreated) {
+      await prisma.orderEvent.create({
+        data: {
+          id: createdEventId,
+          orderId: order.id,
+          sequence: 1,
+          eventType: "CREATED",
+          previousStatus: null,
+          newStatus: "PENDING",
+          metadata: {
+            symbol: order.symbol,
+            assetType: order.assetType,
+            side: order.side,
+            type: order.type,
+            quantity: order.quantity.toString(),
+            source: order.source,
+          },
+          createdAt: order.createdAt,
+        },
+      });
+      createdCount += 1;
+    }
+
+    if (order.status !== "PENDING") {
+      const terminalEventId = fixtureId("order-event-terminal", order.id);
+      const existingTerminal = await prisma.orderEvent.findUnique({
+        where: { id: terminalEventId },
+      });
+
+      if (!existingTerminal) {
+        await prisma.orderEvent.create({
+          data: {
+            id: terminalEventId,
+            orderId: order.id,
+            sequence: 2,
+            eventType: order.status,
+            previousStatus: "PENDING",
+            newStatus: order.status,
+            metadata: {
+              ...(order.executedPrice
+                ? { executionPrice: order.executedPrice.toString() }
+                : {}),
+              ...(order.notes ? { notes: order.notes } : {}),
+            },
+            createdAt: order.executedAt || order.updatedAt,
+          },
+        });
+        createdCount += 1;
+      }
+    }
+  }
+
+  return createdCount;
+}
+
 async function main() {
   console.log("Seeding stox development data...");
 
@@ -577,6 +641,9 @@ async function main() {
 
   const trades = await seedTrades(executedOrders);
   console.log(`Trades: ${trades.length}`);
+
+  const seededEventsCount = await seedOrderEvents(orders);
+  console.log(`Order events: ${seededEventsCount} created or verified`);
 
   console.log("Seed complete. Demo password:", DEMO_PASSWORD);
   console.log(

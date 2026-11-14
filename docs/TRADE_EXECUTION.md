@@ -128,6 +128,7 @@ orderWorker.processPendingOrders()      every 5s (DEFAULT_INTERVAL_MS)
        atomic holding create / merge / decrement
        cash debit / credit
        trade.create (totalValue = quantity × price)
+       orderEvent.create (audit trail: PENDING → EXECUTED, sequence locked)
      COMMIT
           │
           ├── success ───────────────────► executed
@@ -195,6 +196,10 @@ Inside `prisma.$transaction`:
    Zero rows matched means `INSUFFICIENT_BALANCE`.
 5. **`trade.create`** with `totalValue = quantity × price`, `fees = 0`, and
    realized P&L for sells.
+6. **`orderEvent.create`** (audit trail) recording `PENDING → EXECUTED` with
+   causally monotonic sequence numbers per order (allocated via `SELECT FOR UPDATE`
+   on the latest order event) and execution metadata (`tradeId`, `executionPrice`,
+   `quantity`, `totalValue`, `realizedPnl`, `fees`).
 
 Holding is written before cash so every execution takes locks in the same
 order (`holding → portfolio`). A `BUY` and a `SELL` on the same symbol
@@ -448,8 +453,21 @@ never execute afterwards.
 | `POST` | `/api/v1/orders` | `createOrder` | Implemented — validates and stores `PENDING`; the worker executes |
 | `GET` | `/api/v1/orders` | `listOrders` | Implemented — order history and open orders |
 | `GET` | `/api/v1/orders/:id` | `getOrder` | Implemented |
+| `GET` | `/api/v1/orders/:id/events` | `getOrderEvents` | Implemented — chronological order-event audit trail |
 | `DELETE` | `/api/v1/orders/:id` | `cancelOrder` | Implemented — conditional `PENDING → CANCELLED` |
 | `PATCH` | `/api/v1/orders/:id` | — | **Not implemented** (documented in `docs/API.md`; see below) |
+
+### Order-event audit trail
+
+Every order lifecycle transition persists a row to `OrderEvent` within the exact same database transaction that alters order status:
+
+- **Order creation:** Persists `CREATED` with `sequence: 1`, `previousStatus: null`, `newStatus: "PENDING"`.
+- **Order execution:** Persists `EXECUTED` with `previousStatus: "PENDING"`, `newStatus: "EXECUTED"`, and trade metadata.
+- **Order cancellation:** Persists `CANCELLED` with `previousStatus: "PENDING"`, `newStatus: "CANCELLED"`.
+- **Worker expiration:** Persists `EXPIRED` with `previousStatus: "PENDING"`, `newStatus: "EXPIRED"`.
+- **Worker rejection:** Persists `REJECTED` with `previousStatus: "PENDING"`, `newStatus: "REJECTED"`, and rejection reason.
+
+Sequence numbers are protected against concurrent writers via row-level locks on the latest event (`SELECT ... FOR UPDATE`) and database-level `@@unique([orderId, sequence])` constraint. Retrievals via `GET /api/v1/orders/:id/events` are scoped strictly to the authenticated order owner.
 
 ### Open orders
 
