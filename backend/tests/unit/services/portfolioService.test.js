@@ -25,7 +25,7 @@ function mockActiveUser() {
   });
 }
 
-function mockPortfolio(cashBalance = "10000") {
+function mockPortfolio(cashBalance = "10000", reservedCash = "0") {
   prisma.portfolio.findFirst.mockResolvedValue({
     id: PORTFOLIO_ID,
     userId: USER_ID,
@@ -33,6 +33,7 @@ function mockPortfolio(cashBalance = "10000") {
     description: null,
     startingBalance: new Prisma.Decimal("10000"),
     cashBalance: new Prisma.Decimal(cashBalance),
+    reservedCash: new Prisma.Decimal(reservedCash),
     isDefault: true,
     isActive: true,
     createdAt: CREATED_AT,
@@ -51,7 +52,7 @@ beforeEach(() => {
 
 describe("getPortfolioSummary", () => {
   test("returns a zero holdings summary for an empty portfolio", async () => {
-    mockPortfolio("123.45");
+    mockPortfolio("123.45", "0");
     prisma.holding.aggregate.mockResolvedValue({
       _count: 0,
       _sum: { totalInvested: null },
@@ -63,9 +64,12 @@ describe("getPortfolioSummary", () => {
     );
 
     expect(summary.cashBalance).toBe("123.45");
+    expect(summary.reservedCash).toBe("0");
+    expect(summary.availableCash).toBe("123.45");
     expect(summary.holdingsValue).toBe("0");
     expect(summary.totalValue).toBe("123.45");
     expect(summary.holdingsCount).toBe(0);
+
     expect(prisma.holding.aggregate).toHaveBeenCalledWith({
       where: { portfolioId: PORTFOLIO_ID },
       _count: true,
@@ -74,7 +78,7 @@ describe("getPortfolioSummary", () => {
   });
 
   test("adds decimal cash and holdings values without floating-point loss", async () => {
-    mockPortfolio("0.10000001");
+    mockPortfolio("0.10000001", "0.00000001");
     prisma.holding.aggregate.mockResolvedValue({
       _count: 2,
       _sum: { totalInvested: new Prisma.Decimal("0.20000002") },
@@ -85,10 +89,18 @@ describe("getPortfolioSummary", () => {
       PORTFOLIO_ID,
     );
 
+    expect(summary.cashBalance).toBe("0.10000001");
+    expect(new Prisma.Decimal(summary.reservedCash).toFixed(8)).toBe(
+      "0.00000001",
+    );
+    expect(summary.availableCash).toBe("0.1");
     expect(summary.holdingsValue).toBe("0.20000002");
     expect(summary.totalValue).toBe("0.30000003");
     expect(summary.holdingsCount).toBe(2);
+
     expect(typeof summary.cashBalance).toBe("string");
+    expect(typeof summary.reservedCash).toBe("string");
+    expect(typeof summary.availableCash).toBe("string");
     expect(typeof summary.holdingsValue).toBe("string");
     expect(typeof summary.totalValue).toBe("string");
   });
@@ -126,6 +138,8 @@ describe("getPortfolioSummary", () => {
     const cachedSummary = {
       id: PORTFOLIO_ID,
       cashBalance: "10000",
+      reservedCash: "0",
+      availableCash: "10000",
       holdingsValue: "2500",
       totalValue: "12500",
       holdingsCount: 1,
