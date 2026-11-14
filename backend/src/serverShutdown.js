@@ -36,6 +36,7 @@ function createShutdown({
   marketRooms,
   realtimeBridge,
   eventBus,
+  closeQueues,
   logger: log = logger,
   exit = (code) => process.exit(code),
 } = {}) {
@@ -79,6 +80,14 @@ function createShutdown({
         await eventBus?.close?.();
       } catch (error) {
         log.warn("Realtime bus shutdown failed", {
+          message: error.message,
+        });
+      }
+
+      try {
+        await closeQueues?.();
+      } catch (error) {
+        log.warn("Queue shutdown failed", {
           message: error.message,
         });
       }

@@ -28,7 +28,94 @@ Slow operations (order execution, alerts, reports, emails) are pushed to **BullM
 
 ---
 
+## ✅ Implementation status
+
+The BullMQ foundation and the **orders** queue are implemented. The
+notification and alert queues are registered with their retry policies, but
+their workers land in the follow-up tasks.
+
+### Registered queues
+
+| Queue | Redis name | Default attempts | Backoff |
+| --- | --- | --- | --- |
+| Orders | `orders` | 5 | exponential, 1s |
+| Notifications | `notifications` | 5 | exponential, 5s |
+| Alerts | `alerts` | 2 | exponential, 1s |
+
+Redis keys are namespaced with `QUEUE_PREFIX` (default `stox`), so test runs
+can use a unique prefix without touching real queues. Queues use their own
+ioredis connection with `maxRetriesPerRequest: null`; the cache client's `1`
+would make BullMQ throw at construction time.
+
+### Orders job contracts
+
+| Job | Payload | Attempts | What it does |
+| --- | --- | --- | --- |
+| `execute-order` | `{ orderId, portfolioId? }` | 5 | Re-reads the order, skips if it is no longer `PENDING`, then runs the shared `processOrder` |
+| `scan-pending` | `{ portfolioId?, limit? }` | 3 | Runs one `processPendingOrders` pass |
+
+Payloads are validated with Zod at enqueue time
+(`src/queues/orderQueue.js`). `execute-order` uses the order id as its
+`jobId`, so enqueueing the same order twice returns the existing job instead
+of stacking duplicate work. Execution is also conditional on `PENDING`, so a
+duplicate would be a no-op regardless.
+
+`POST /orders` enqueues `execute-order` best-effort after the transaction
+commits. A Redis outage logs a warning and returns a result instead of failing
+the request; the repeatable scan and the polling fallback still pick the order
+up.
+
+### Transport selection
+
+| `QUEUES_ENABLED` | Order processing |
+| --- | --- |
+| `true` (default) | BullMQ worker consumes `execute-order` / `scan-pending`; a single scheduler (`orders:scan-pending`) enqueues a scan every `ORDER_SCAN_INTERVAL_MS` (default 5s) |
+| `false` | In-process polling loop (`startOrderWorker`) runs instead; no Redis queue connection is opened |
+
+Both transports call the same `processOrder` / `processPendingOrders`
+functions, so transaction boundaries and financial invariants do not depend on
+the transport. Running both at once would only duplicate scans.
+
+### Retry and failure semantics
+
+- **Transient** provider/execution failures throw a normal error; BullMQ backs
+  off exponentially up to the attempt budget. The shared processor also
+  increments `Order.executionAttempts` and rejects the order once
+  `maxAttempts` is reached, so the two budgets cannot loop forever.
+- **Permanent** failures (`UnrecoverableError`): a missing order or an unknown
+  job name. No retry.
+- **Terminal business outcomes** (`rejected`) complete the job normally; the
+  order row is the record, and duplicating it in the queue history would be
+  noise.
+- Failed jobs stay in Redis under `removeOnFail` with their payload, attempt
+  count, and reason. Inspect and replay them with
+  `listFailedOrderJobs()` / `retryFailedOrderJob(jobId)` from
+  `src/queues/orderQueue.js`.
+
+### Adding a queue
+
+1. Add the name to `QUEUE_NAMES` and a policy to `QUEUE_POLICIES` in
+   `src/queues/definitions.js`.
+2. Add an enqueue module with a Zod payload schema (follow `orderQueue.js`).
+3. Add a worker that routes job names to a processor and exports the handler
+   separately so it can be unit tested without Redis.
+4. Register the worker in `src/workers/index.js` and close it on `SIGINT` /
+   `SIGTERM`.
+5. Add unit tests for payload validation and job routing, plus an integration
+   test that uses a unique `QUEUE_PREFIX`.
+
+### Running it
+
+```bash
+cd backend
+npm run workers        # starts the BullMQ order worker (or polling if disabled)
+```
+
+---
+
 ## 🏗️ Queue Architecture
+
+
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐

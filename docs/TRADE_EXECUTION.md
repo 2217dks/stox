@@ -58,7 +58,8 @@ Shipped:
 
 Not shipped:
 
-- BullMQ/Redis queues, retries, persistence, dashboard, repeatable jobs.
+- BullMQ dashboard (`@bull-board/express`); failed jobs are inspected through
+  `listFailedOrderJobs()` and replayable with `retryFailedOrderJob()`.
 - Analytics event publication for downstream analytics consumers.
 - Durable realtime event history, replay, or guaranteed delivery.
 - Email and push delivery for `ORDER_EXECUTED` (in-app row only).
@@ -377,10 +378,13 @@ immediately, then on an interval. Ticks never overlap: a slow provider call
 delays the next pass instead of stacking a second one. `SIGINT`/`SIGTERM` stop
 the loop.
 
-There is **no BullMQ transport**. `src/queues/*.js` and
-`src/workers/{alert,notification}Worker.js` are still empty. Because
-`processPendingOrders` takes its quote provider and clock as options, a BullMQ
-`Worker` can wrap the same function later without changing execution logic.
+BullMQ is the production transport. `src/queues/` defines the queue registry,
+retry policies, and the orders job contracts; `src/workers/orderQueueWorker.js`
+consumes `execute-order` and `scan-pending` jobs and calls the same
+`processOrder` / `processPendingOrders` functions used by the polling loop.
+`QUEUES_ENABLED=false` selects the polling loop for local development. The
+notification and alert queues are registered but their workers are still
+pending.
 
 ### Behavioural caveats
 
@@ -588,9 +592,9 @@ Last verified: `42 suites, 799 tests passed` on the full backend suite.
 
 | Area | Gap | Impact |
 | --- | --- | --- |
-| Queues | `orderQueue`, `notificationQueue`, `alertQueue`, `queues/index.js` are empty | No transport-level retries, backoff, job persistence, or dashboard (the in-process worker has a bounded attempt counter, not a queue) |
+| Queues | Notification and alert queues are registered but their workers are not implemented yet | Orders use BullMQ; other async work still runs inline |
 | Asset classes | `FOREX` exists in the enum but has no market-data provider | FOREX orders are rejected at placement; only `STOCK` and `CRYPTO` execute |
-| Transport | In-process `setInterval` instead of BullMQ | Execution stops when the worker process stops; no horizontal scaling |
+| Transport | BullMQ is the default; the in-process `setInterval` loop is a `QUEUES_ENABLED=false` fallback | Execution continues in the worker process; a stopped worker means no fills |
 | Analytics | No analytics event publication on execution | Analytics consumers see trades through database reads |
 | Realtime delivery | Redis Pub/Sub is best-effort and has no durable replay | Events can be missed during disconnection; clients must resynchronise from the API/database |
 | Analytics | No analytics event on execution | Analytics consumers see trades only via database reads |
@@ -633,7 +637,7 @@ would extend the contract beyond the docs.
 
 - `docs/ARCHITECTURE.md` — target order-execution flow and the financial
   consistency invariant.
-- `docs/BACKGROUND_JOBS.md` — target BullMQ/Redis worker design.
+- `docs/BACKGROUND_JOBS.md` — BullMQ queue names, job contracts, retry policies.
 - `docs/API.md` — order and trade contracts, error categories.
 - `docs/DATABASE.md` — `Order`, `Holding`, `Trade`, `Notification` models.
 - `docs/NOTIFICATIONS.md` — target notification pipeline and channels.

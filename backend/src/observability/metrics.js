@@ -344,6 +344,11 @@ registry.describe(
 registry.describe("http_requests_in_flight", "HTTP requests currently being processed.");
 registry.describe("db_query_duration_seconds", "Database query duration in seconds.");
 registry.describe("db_up", "1 when the database responded to the last health probe, 0 otherwise.");
+registry.describe("queue_jobs_enqueued_total", "Jobs successfully added to a queue.");
+registry.describe("queue_enqueue_failures_total", "Job enqueue attempts that failed.");
+registry.describe("queue_jobs_completed_total", "Jobs completed by a worker.");
+registry.describe("queue_jobs_failed_total", "Job attempts that failed, including retries.");
+registry.describe("queue_jobs_exhausted_total", "Jobs that failed after exhausting every attempt.");
 
 module.exports = {
   DEFAULT_BUCKETS,

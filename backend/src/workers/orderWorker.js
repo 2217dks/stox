@@ -518,6 +518,8 @@ module.exports = {
   DEFAULT_BATCH_SIZE,
   DEFAULT_INTERVAL_MS,
   DEFAULT_MAX_ATTEMPTS,
+  processOrder,
   processPendingOrders,
+  runOrder,
   startOrderWorker,
 };

@@ -98,6 +98,11 @@ dependency.
 | `http_requests_in_flight` | gauge | — | HTTP middleware |
 | `db_query_duration_seconds` | histogram | — | `GET /health` probe |
 | `db_up` | gauge | — | `GET /health` probe (`1`/`0`) |
+| `queue_jobs_enqueued_total` | counter | `queue`, `job` | Successful enqueue |
+| `queue_enqueue_failures_total` | counter | `queue`, `job` | Enqueue failures (Redis down, validation) |
+| `queue_jobs_completed_total` | counter | `queue`, `job` | Worker completions |
+| `queue_jobs_failed_total` | counter | `queue`, `job` | Failed attempts, including retries |
+| `queue_jobs_exhausted_total` | counter | `queue`, `job` | Jobs that failed every attempt |
 | `process_uptime_seconds` | gauge | — | runtime |
 | `process_resident_memory_bytes` | gauge | — | runtime |
 | `nodejs_heap_used_bytes` | gauge | — | runtime |
@@ -180,7 +185,7 @@ The token comparison is constant-time.
 
 | Gap | Impact |
 | --- | --- |
-| Queue depth / job failure metrics | Added with the BullMQ workers (tasks 27–29) |
+| Queue depth gauge | Job counters are implemented; a live `waiting`/`active`/`delayed` gauge is not yet sampled |
 | Provider/cache health gauges | Partially available through `/health`; cache hit/miss metrics pending task 26.2 |
 | Durable log aggregation | Logs are console-only; deployment must ship them |
 | Trace propagation beyond `X-Request-Id` | No OpenTelemetry spans yet |
