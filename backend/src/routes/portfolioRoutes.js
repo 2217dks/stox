@@ -5,6 +5,8 @@ const validate = require("../middleware/validation");
 const {
   portfolioIdParamsSchema,
   updatePortfolioSchema,
+  pnlHeatmapQuerySchema,
+  riskMetricsQuerySchema,
 } = require("../validators/portfolioValidator");
 const portfolioController = require("../controllers/portfolioController");
 
@@ -55,6 +57,22 @@ router.get(
   authMiddleware,
   validate(portfolioIdParamsSchema, "params", "validatedParams"),
   portfolioController.getPortfolioSummary,
+);
+
+router.get(
+  "/:portfolioId/pnl-heatmap",
+  authMiddleware,
+  validate(portfolioIdParamsSchema, "params", "validatedParams"),
+  validate(pnlHeatmapQuerySchema, "query", "validatedQuery"),
+  portfolioController.getPnlHeatmap,
+);
+
+router.get(
+  "/:portfolioId/risk-metrics",
+  authMiddleware,
+  validate(portfolioIdParamsSchema, "params", "validatedParams"),
+  validate(riskMetricsQuerySchema, "query", "validatedQuery"),
+  portfolioController.getRiskMetrics,
 );
 
 module.exports = router;

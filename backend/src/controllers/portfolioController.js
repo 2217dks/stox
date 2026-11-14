@@ -1,4 +1,6 @@
 const portfolioService = require("../services/portfolioService");
+const portfolioHeatmapService = require("../services/portfolioHeatmapService");
+const riskMetricsService = require("../services/riskMetricsService");
 
 async function listPortfolios(req, res, next) {
   try {
@@ -165,6 +167,50 @@ async function getCashBalance(req, res, next) {
   }
 }
 
+async function getPnlHeatmap(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+    const { period, year } = req.validatedQuery || {};
+
+    await portfolioService.getPortfolioById(userId, portfolioId);
+
+    const result = await portfolioHeatmapService.getPortfolioPnlHeatmap(
+      portfolioId,
+      { period, year },
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getRiskMetrics(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+    const { period, riskFreeRate } = req.validatedQuery || {};
+
+    await portfolioService.getPortfolioById(userId, portfolioId);
+
+    const result = await riskMetricsService.getPortfolioRiskMetrics(
+      portfolioId,
+      { period, riskFreeRate },
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   listPortfolios,
   createPortfolio,
@@ -174,4 +220,6 @@ module.exports = {
   getPortfolioHoldings,
   getCashBalance,
   getPortfolioSummary,
+  getPnlHeatmap,
+  getRiskMetrics,
 };

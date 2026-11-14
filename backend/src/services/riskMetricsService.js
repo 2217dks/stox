@@ -1,4 +1,6 @@
 const { Prisma } = require("@prisma/client");
+const prisma = require("../config/database");
+const { getPortfolioReturnSeries } = require("./portfolioSeriesService");
 
 const DEFAULT_ANNUALIZATION_FACTOR = 252;
 const DEFAULT_RISK_FREE_RATE = 0.02;
@@ -301,6 +303,58 @@ function calculatePortfolioRiskMetrics(
   };
 }
 
+/**
+ * High-level orchestration to fetch portfolio history and compute risk metrics bundle.
+ *
+ * @param {string} portfolioId
+ * @param {Object} [options]
+ * @param {string} [options.period="1M"]
+ * @param {number} [options.riskFreeRate=0.02]
+ * @param {Date} [options.asOf]
+ * @param {boolean} [options.ensureToday=true]
+ * @param {Object} [options.client]
+ * @returns {Promise<{
+ *   portfolioId: string,
+ *   period: string,
+ *   metrics: {
+ *     annualizedVolatility: string|null,
+ *     maxDrawdown: string|null,
+ *     currentDrawdown: string|null,
+ *     peakValue: string|null,
+ *     peakDate: string|null,
+ *     sharpeRatio: string|null,
+ *     observationCount: number
+ *   }
+ * }>}
+ */
+async function getPortfolioRiskMetrics(
+  portfolioId,
+  {
+    period = "1M",
+    riskFreeRate = DEFAULT_RISK_FREE_RATE,
+    asOf = new Date(),
+    ensureToday = true,
+    client = prisma,
+  } = {},
+) {
+  const seriesResult = await getPortfolioReturnSeries(portfolioId, {
+    period,
+    asOf,
+    ensureToday,
+    client,
+  });
+
+  const metrics = calculatePortfolioRiskMetrics(seriesResult.series, {
+    riskFreeRate,
+  });
+
+  return {
+    portfolioId,
+    period: seriesResult.period,
+    metrics,
+  };
+}
+
 module.exports = {
   DEFAULT_ANNUALIZATION_FACTOR,
   DEFAULT_RISK_FREE_RATE,
@@ -311,4 +365,5 @@ module.exports = {
   calculateDrawdown,
   calculateSharpeRatio,
   calculatePortfolioRiskMetrics,
+  getPortfolioRiskMetrics,
 };
