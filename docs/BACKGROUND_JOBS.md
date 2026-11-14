@@ -400,3 +400,20 @@ app.use("/admin/queues", serverAdapter.getRouter());
 ```
 
 Access at: `http://localhost:5000/admin/queues`
+
+---
+
+## 📈 In-Process Scheduled Workers & Batch Scripts
+
+For environments running without full BullMQ / Redis worker clusters, or for daily market close rollups, Stox provides dedicated in-process workers and CLI batch scripts:
+
+### 1. Portfolio Snapshot Worker (`src/workers/portfolioSnapshotWorker.js`)
+- **Execution:** Started automatically by `npm run workers` (`src/workers/index.js`).
+- **Cadence:** Evaluates once per interval (default 60s) whether the current UTC calendar date has been snapshotted.
+- **Action:** Computes and upserts end-of-day valuations, cash balances, and P&L metrics into `PerformanceSnapshot` for all active portfolios.
+- **Graceful Shutdown:** Handles `SIGINT` / `SIGTERM` signals cleanly with timer cancellation.
+
+### 2. Standalone Snapshot Scripts
+- **Leaderboard Snapshots:** `npm run leaderboard:snapshot` (`scripts/generate-leaderboard-snapshots.js`)
+- **Portfolio Snapshots:** `npm run portfolio:snapshot` (`scripts/generate-portfolio-snapshots.js`)
+

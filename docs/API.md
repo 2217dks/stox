@@ -263,12 +263,19 @@ Get historical daily price and return series for a market benchmark.
       {
         "date": "2026-11-01",
         "price": "570.25",
+        "dailyReturn": null
+      },
+      {
+        "date": "2026-11-02",
+        "price": "573.10",
         "dailyReturn": "0.0050"
       }
     ]
   }
 }
 ```
+
+> **Note on Returns:** The first observation in the historical series has no prior close to calculate a return from, so its `dailyReturn` is explicitly `null` (not `0.0000`). Subsequent observations compute daily simple return relative to the previous trading day's close.
 
 ## `GET /portfolios/:id/risk-metrics`
 
@@ -333,15 +340,26 @@ Compare portfolio performance directly against a benchmark symbol over mutually 
     "comparison": [
       {
         "date": "2026-11-01",
+        "portfolioValue": "10000.00000000",
+        "portfolioReturn": null,
+        "benchmarkPrice": "570.25",
+        "benchmarkReturn": null
+      },
+      {
+        "date": "2026-11-02",
         "portfolioValue": "10450.00000000",
         "portfolioReturn": "0.0450",
-        "benchmarkPrice": "570.25",
+        "benchmarkPrice": "582.23",
         "benchmarkReturn": "0.0210"
       }
     ]
   }
 }
 ```
+
+> **Note on Comparison Alignment & Returns:** 
+> - Initial observations without a preceding close/value or dates with missing returns have `portfolioReturn` / `benchmarkReturn` set to `null` rather than substituted zero.
+> - Statistical metrics (`alpha`, `beta`, `correlation`) are calculated strictly across mutual dates where **both** portfolio and benchmark returns are defined ($M \ge 2$). Dates where either return is `null` are excluded from covariance and variance calculations to avoid distorting risk metrics.
 
 ---
 

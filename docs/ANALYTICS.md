@@ -129,17 +129,17 @@ For mutually aligned daily return pairs $\{(R_{p,t}, R_{b,t})\}_{t=1}^M$:
 ### No Fabricated Prices or Returns
 - If no trade or valuation occurred on a non-trading day (weekend/holiday), portfolio valuation is carried forward from the last verified snapshot **only when the last valuation source was authentic and reliable**.
 - Gaps in benchmark data (e.g. stock market closed on weekends while crypto trades) are **never filled with fake prices**.
+- **Initial & Gap Returns:** In benchmark series and benchmark comparisons, missing returns (e.g. the first observation where no prior close/valuation exists, or gaps caused by exchange closures/trading halts) are represented explicitly as `null` rather than substituted with zero (`"0.0000"`).
 
-### Mutual Date Alignment
+### Mutual Date Alignment & Statistical Rigor
 - Benchmark comparisons compare performance **only on mutually active trading dates**.
-- Non-overlapping dates are excluded from covariance and beta calculations to prevent artificial return distortion.
-
-### Handling Missing or Stale Asset Prices
-- If market data fails for a holding during live valuation, the system **never assumes the price is $0$**. A missing quote throws `MARKET_DATA_PROVIDER_UNAVAILABLE` or preserves the previous reliable valuation rather than corrupting portfolio records.
+- Non-overlapping dates are excluded from the comparison timeline.
+- **Statistical Metrics ($\alpha, \beta, \rho$):** Return statistics are computed strictly over dates where **both** portfolio and benchmark returns are defined numbers. Dates where either return is `null` are excluded from covariance and sample variance calculations to guarantee that $\Delta = 0$ is not spuriously injected into risk parameters.
+- If fewer than 2 mutually defined return observations exist ($M < 2$) or benchmark variance is zero, $\beta$, $\alpha$, and $\rho$ gracefully return `null`.
 
 ---
 
-## 💾 Snapshots & Baseline Strategy
+## 💾 Snapshots & Scheduled Capture Strategy
 
 ### PerformanceSnapshot Schema
 ```prisma
@@ -164,10 +164,12 @@ model PerformanceSnapshot {
 }
 ```
 
-### Snapshot Creation & Baseline Invariants
-1. **No Speculative Backfills:** Historical snapshots are never retroactively invented for periods where neither trades nor prices were captured.
-2. **On-Demand Current Snapshot:** If the current UTC day has not yet been snapshotted, the engine computes today's valuation using live market quotes and cash balance, persisting it idempotently for `snapshotDate = today`.
-3. **Clean Baselines:** When a portfolio has only 1 snapshot ($N=1$), single-point performance is reported (`totalValue`, cumulative return $0$), while sample variance-dependent metrics (`volatility`, `sharpeRatio`, `beta`) gracefully return `null`.
+### Scheduled Daily Capture & On-Demand Fallback
+1. **Background Snapshot Worker:** The `portfolioSnapshotWorker` runs in `npm run workers` alongside `orderWorker`. It checks for newly started UTC days and executes `captureAllPortfolioSnapshots()` across all active portfolios.
+2. **Dedicated CLI Script:** Standalone daily capture can be triggered independently via `npm run portfolio:snapshot` (`scripts/generate-portfolio-snapshots.js`), matching the pattern of `npm run leaderboard:snapshot`.
+3. **On-Demand Fallback:** If an analytics endpoint is requested before the worker completes its daily run, the engine computes today's valuation using live market quotes and cash balance, persisting it idempotently for `snapshotDate = today`.
+4. **No Speculative Backfills:** Historical snapshots are never retroactively invented for periods where neither trades nor prices were captured.
+5. **Clean Baselines:** When a portfolio has only 1 snapshot ($N=1$), single-point performance is reported (`totalValue`, cumulative return $0$), while sample variance-dependent metrics (`volatility`, `sharpeRatio`, `beta`) gracefully return `null`.
 
 ---
 
