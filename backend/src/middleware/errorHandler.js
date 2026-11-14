@@ -2,6 +2,19 @@ const { ZodError } = require("zod");
 const { AppError } = require("../utils/errors");
 const logger = require("../utils/logger");
 
+/**
+ * The ONLY place an error response is rendered.
+ *
+ * Rungs:
+ *   AppError   -> its statusCode / code / details (operational, expected)
+ *   ZodError   -> 400 VALIDATION_ERROR + field details
+ *   err.statusCode in 4xx/5xx -> honored (third-party middleware)
+ *   anything else -> generic 500, message hidden, stack logged
+ *
+ * Infrastructure errors (for example body-parser failures) must be translated
+ * into `AppError` at their boundary — see `middleware/bodyParser.js` — so this
+ * handler never needs parser-specific branches.
+ */
 function errorHandler(err, req, res, next) {
   let statusCode = 500;
   let code = "INTERNAL_SERVER_ERROR";
@@ -39,6 +52,7 @@ function errorHandler(err, req, res, next) {
     statusCode,
     code,
     message,
+    requestId: req.id ?? null,
   };
 
   if (statusCode >= 500) {

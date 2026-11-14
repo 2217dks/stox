@@ -73,6 +73,12 @@ Key properties:
 - **`notFound` middleware** (`src/middleware/notFound.js`) manufactures a 404
   `AppError` for unmatched routes and delegates to the handler — mounted after all
   routes, before the error handler, in `src/app.js`.
+- **Infrastructure errors are translated at their boundary.** For example,
+  `src/middleware/bodyParser.js` converts body-parser failures into `AppError`
+  (`413 PAYLOAD_TOO_LARGE`, `400 INVALID_JSON`, `415 UNSUPPORTED_CONTENT_ENCODING`)
+  before calling `next(error)`. The handler therefore never needs parser-specific
+  branches; it only knows `AppError`, `ZodError`, legacy status-carrying errors,
+  and unknown failures.
 
 Mount order in `src/app.js` is load-bearing — never reorder:
 
@@ -114,6 +120,8 @@ throw AppError.badRequest("Portfolio name is required.", "PORTFOLIO_NAME_REQUIRE
 | `AppError.forbidden(msg, code?)` | 403 | `FORBIDDEN` | Suspended account, insufficient role |
 | `AppError.notFound(msg, code?)` | 404 | `NOT_FOUND` | Missing user, portfolio, order |
 | `AppError.conflict(msg, code?)` | 409 | `CONFLICT` | Duplicate email, duplicate portfolio name |
+| `AppError.payloadTooLarge(msg, code?)` | 413 | `PAYLOAD_TOO_LARGE` | Request body exceeds the configured limit |
+| `AppError.unsupportedMediaType(msg, code?)` | 415 | `UNSUPPORTED_MEDIA_TYPE` | Unsupported body encoding/charset |
 | `AppError.unprocessableEntity(msg, code?)` | 422 | `UNPROCESSABLE_ENTITY` | Semantically invalid (e.g., trade logic) |
 | `AppError.tooManyRequests(msg, code?)` | 429 | `RATE_LIMITED` | Rate limiting (Task: rate limiter) |
 | `AppError.internal(msg, code?)` | 500 | `INTERNAL_SERVER_ERROR` | Rarely thrown directly; unknown errors land here anyway |
@@ -180,6 +188,8 @@ try {
 - Same contract: `return next(AppError.forbidden(...))` on failure.
 - **The `return` before `next` is mandatory** — without it, execution continues
   after forwarding and can throw a second error on top of the first.
+- Wrap third-party middleware that throws non-domain errors and translate them
+  into `AppError` before delegating. See `bodyParser.js` for the pattern.
 
 ### Input validation (`src/validators/*` + `src/middleware/validation.js`)
 
@@ -215,11 +225,13 @@ router.patch("/profile", authMiddleware, validate(updateProfileSchema), updateCu
 
 | Status | When |
 |---|---|
-| 400 | Body/query fails schema validation, malformed input |
+| 400 | Body/query fails schema validation, malformed input, invalid JSON |
 | 401 | Not authenticated (missing/invalid/expired token) |
 | 403 | Authenticated but not allowed (suspended, wrong role, not owner) |
 | 404 | Resource doesn't exist (also: unknown route → `ROUTE_NOT_FOUND`) |
 | 409 | State conflict (duplicate email/name, linking an already-linked account) |
+| 413 | Request body exceeds `REQUEST_BODY_LIMIT` → `PAYLOAD_TOO_LARGE` |
+| 415 | Unsupported request body encoding → `UNSUPPORTED_CONTENT_ENCODING` |
 | 422 | Well-formed but semantically invalid for business logic |
 | 429 | Rate limited |
 | 500 | Bug or infrastructure failure — message is always generic to the client |
