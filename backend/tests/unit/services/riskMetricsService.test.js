@@ -5,6 +5,8 @@ const {
   calculateSampleStdDev,
   calculateVolatility,
   calculateDrawdown,
+  calculateSharpeRatio,
+  calculatePortfolioRiskMetrics,
 } = require("../../../src/services/riskMetricsService");
 
 describe("riskMetricsService - Volatility calculation", () => {
@@ -113,6 +115,80 @@ describe("riskMetricsService - Volatility calculation", () => {
       expect(result.peakValue).toBe("500.00000000");
       expect(result.maxDrawdown).toBe("-0.1000");
       expect(result.currentDrawdown).toBe("-0.1000");
+    });
+  });
+
+  describe("Sharpe-like ratio calculation", () => {
+    test("returns null if observations < 2", () => {
+      expect(calculateSharpeRatio([])).toBeNull();
+      expect(calculateSharpeRatio([0.01])).toBeNull();
+    });
+
+    test("returns null for zero-variance returns (division by zero std dev)", () => {
+      expect(calculateSharpeRatio([0.01, 0.01, 0.01])).toBeNull();
+    });
+
+    test("accurately calculates Sharpe ratio on deterministic inputs", () => {
+      // Returns: [0.001, 0.002, 0.0015, 0.0012, 0.0018]
+      // Rf: 0.02
+      // Annualized Sharpe expected ~= 54.70
+      const returns = [0.001, 0.002, 0.0015, 0.0012, 0.0018];
+      const sharpe = calculateSharpeRatio(returns, { riskFreeRate: 0.02, annualizationFactor: 252 });
+      expect(sharpe).toBe("54.70");
+    });
+  });
+
+  describe("calculatePortfolioRiskMetrics aggregation", () => {
+    test("handles empty series gracefully", () => {
+      const result = calculatePortfolioRiskMetrics([]);
+      expect(result).toEqual({
+        annualizedVolatility: null,
+        maxDrawdown: null,
+        currentDrawdown: null,
+        peakValue: null,
+        peakDate: null,
+        sharpeRatio: null,
+        observationCount: 0,
+      });
+    });
+
+    test("handles single observation cleanly (N=1 clean baseline invariant)", () => {
+      const series = [
+        {
+          date: "2026-11-01",
+          totalValue: "10000",
+          dailyReturn: "0",
+        },
+      ];
+      const result = calculatePortfolioRiskMetrics(series);
+      expect(result).toEqual({
+        annualizedVolatility: null,
+        maxDrawdown: "0.0000",
+        currentDrawdown: "0.0000",
+        peakValue: "10000.00000000",
+        peakDate: "2026-11-01",
+        sharpeRatio: null,
+        observationCount: 1,
+      });
+    });
+
+    test("computes full suite of metrics for multi-day series", () => {
+      const series = [
+        { date: "2026-11-01", totalValue: "10000", dailyReturn: "0.001" },
+        { date: "2026-11-02", totalValue: "10020", dailyReturn: "0.002" },
+        { date: "2026-11-03", totalValue: "10035", dailyReturn: "0.0015" },
+        { date: "2026-11-04", totalValue: "10047", dailyReturn: "0.0012" },
+        { date: "2026-11-05", totalValue: "10065", dailyReturn: "0.0018" },
+      ];
+
+      const result = calculatePortfolioRiskMetrics(series, { riskFreeRate: 0.02 });
+      expect(result.observationCount).toBe(5);
+      expect(result.peakValue).toBe("10065.00000000");
+      expect(result.peakDate).toBe("2026-11-05");
+      expect(result.maxDrawdown).toBe("0.0000");
+      expect(result.currentDrawdown).toBe("0.0000");
+      expect(result.annualizedVolatility).toBe("0.0065");
+      expect(result.sharpeRatio).toBe("54.70");
     });
   });
 });

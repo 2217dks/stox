@@ -1,6 +1,7 @@
 const { Prisma } = require("@prisma/client");
 
 const DEFAULT_ANNUALIZATION_FACTOR = 252;
+const DEFAULT_RISK_FREE_RATE = 0.02;
 
 /**
  * Extract clean finite numbers from an array of mixed numeric types (number, string, Prisma.Decimal).
@@ -193,11 +194,121 @@ function calculateDrawdown(
   };
 }
 
+/**
+ * Calculate Sharpe-like risk-adjusted performance metric.
+ *
+ * Formula: Sharpe = (R_ann - Rf) / sigma_ann
+ * Where R_ann = mean(R_daily) * F
+ *       sigma_ann = sample_stddev(R_daily) * sqrt(F)
+ *
+ * Invariants:
+ * - If N < 2 or sigma_ann = 0, returns null.
+ *
+ * @param {Array<number|string|Object>} returns
+ * @param {Object} [options]
+ * @param {number} [options.riskFreeRate=0.02]
+ * @param {number} [options.annualizationFactor=252]
+ * @param {number} [options.precision=2]
+ * @returns {string|null}
+ */
+function calculateSharpeRatio(
+  returns,
+  {
+    riskFreeRate = DEFAULT_RISK_FREE_RATE,
+    annualizationFactor = DEFAULT_ANNUALIZATION_FACTOR,
+    precision = 2,
+  } = {},
+) {
+  const numbers = extractNumbers(returns);
+  if (numbers.length < 2) return null;
+
+  const dailyStdDev = calculateSampleStdDev(numbers);
+  if (dailyStdDev === null || dailyStdDev <= 0) return null;
+
+  const sigmaAnn = dailyStdDev * Math.sqrt(annualizationFactor);
+  if (sigmaAnn <= 0) return null;
+
+  const meanDaily = calculateMean(numbers);
+  const rAnn = meanDaily * annualizationFactor;
+  const rf = Number(riskFreeRate);
+
+  const sharpe = (rAnn - rf) / sigmaAnn;
+  return sharpe.toFixed(precision);
+}
+
+/**
+ * Aggregate complete portfolio risk metrics bundle from a chronological series.
+ *
+ * @param {Array<{ date: string, totalValue?: Object|string|number, value?: Object|string|number, dailyReturn?: Object|string|number }>} series
+ * @param {Object} [options]
+ * @param {number} [options.riskFreeRate=0.02]
+ * @param {number} [options.annualizationFactor=252]
+ * @returns {{
+ *   annualizedVolatility: string|null,
+ *   maxDrawdown: string|null,
+ *   currentDrawdown: string|null,
+ *   peakValue: string|null,
+ *   peakDate: string|null,
+ *   sharpeRatio: string|null,
+ *   observationCount: number
+ * }}
+ */
+function calculatePortfolioRiskMetrics(
+  series,
+  {
+    riskFreeRate = DEFAULT_RISK_FREE_RATE,
+    annualizationFactor = DEFAULT_ANNUALIZATION_FACTOR,
+  } = {},
+) {
+  if (!Array.isArray(series) || series.length === 0) {
+    return {
+      annualizedVolatility: null,
+      maxDrawdown: null,
+      currentDrawdown: null,
+      peakValue: null,
+      peakDate: null,
+      sharpeRatio: null,
+      observationCount: 0,
+    };
+  }
+
+  const observationCount = series.length;
+  const returns = [];
+  for (let i = 0; i < series.length; i++) {
+    if (series[i].dailyReturn !== undefined && series[i].dailyReturn !== null) {
+      returns.push(series[i].dailyReturn);
+    } else if (i > 0) {
+      const prev = Number(series[i - 1].totalValue !== undefined ? series[i - 1].totalValue : series[i - 1].value);
+      const curr = Number(series[i].totalValue !== undefined ? series[i].totalValue : series[i].value);
+      if (prev > 0) {
+        returns.push((curr - prev) / prev);
+      }
+    }
+  }
+
+  const drawdown = calculateDrawdown(series);
+  const annualizedVolatility = calculateVolatility(returns, { annualizationFactor });
+  const sharpeRatio = calculateSharpeRatio(returns, { riskFreeRate, annualizationFactor });
+
+  return {
+    annualizedVolatility,
+    maxDrawdown: drawdown.maxDrawdown,
+    currentDrawdown: drawdown.currentDrawdown,
+    peakValue: drawdown.peakValue,
+    peakDate: drawdown.peakDate,
+    sharpeRatio,
+    observationCount,
+  };
+}
+
 module.exports = {
   DEFAULT_ANNUALIZATION_FACTOR,
+  DEFAULT_RISK_FREE_RATE,
   extractNumbers,
   calculateMean,
   calculateSampleStdDev,
   calculateVolatility,
   calculateDrawdown,
+  calculateSharpeRatio,
+  calculatePortfolioRiskMetrics,
 };
