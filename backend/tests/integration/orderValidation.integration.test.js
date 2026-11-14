@@ -2,6 +2,7 @@ const request = require("supertest");
 
 const app = require("../../src/app");
 const prisma = require("../../src/config/database");
+const marketDataService = require("../../src/services/marketData");
 
 // Black-box tests for order validation, exercised through the HTTP layer only.
 // Contract invariants (docs/ERROR_HANDLING.md + docs/API.md + the repo-wide
@@ -22,6 +23,7 @@ let userId;
 let accessToken;
 let mainPortfolioId;
 const createdOrderIds = [];
+let getQuoteSpy;
 
 // Second user, used to prove orders are invisible across accounts.
 let userBId;
@@ -30,6 +32,10 @@ let userBOrderId;
 
 beforeAll(async () => {
   jest.setTimeout(30000);
+
+  getQuoteSpy = jest
+    .spyOn(marketDataService, "getQuote")
+    .mockResolvedValue({ price: "100" });
 
   const register = await request(app)
     .post("/api/v1/auth/register")
@@ -64,6 +70,8 @@ afterAll(async () => {
   if (userId) {
     await prisma.user.delete({ where: { id: userId } });
   }
+
+  getQuoteSpy?.mockRestore();
 
   await prisma.$disconnect();
 });
