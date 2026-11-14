@@ -34,6 +34,13 @@ router.get(
   orderController.getOrder,
 );
 
+router.get(
+  "/:id/events",
+  authMiddleware,
+  validate(orderIdParamSchema, "params", "validatedParams"),
+  orderController.getOrderEvents,
+);
+
 router.delete(
   "/:id",
   authMiddleware,

@@ -70,9 +70,28 @@ async function cancelOrder(req, res, next) {
   }
 }
 
+async function getOrderEvents(req, res, next) {
+  try {
+    const events = await orderService.getOrderEvents({
+      userId: req.user.userId,
+      orderId: req.validatedParams.id,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        events,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   createOrder,
   getOrder,
   listOrders,
   cancelOrder,
+  getOrderEvents,
 };

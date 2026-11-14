@@ -248,6 +248,68 @@ Place an order.
 
 Get order details.
 
+## `GET /orders/:id/events`
+
+Get chronological order lifecycle audit events for an order.
+
+This endpoint is ownership-scoped: only the owner of the portfolio to which the order belongs can retrieve its event history. Foreign orders return HTTP 404 `ORDER_NOT_FOUND` to prevent identity probing.
+
+### Response
+
+```json
+{
+    "success": true,
+    "data": {
+        "events": [
+            {
+                "id": "uuid",
+                "orderId": "uuid",
+                "sequence": 1,
+                "eventType": "CREATED",
+                "previousStatus": null,
+                "newStatus": "PENDING",
+                "metadata": {
+                    "symbol": "AAPL",
+                    "assetType": "STOCK",
+                    "side": "BUY",
+                    "type": "MARKET",
+                    "quantity": "10",
+                    "reservedCash": "2265.00000000",
+                    "limitPrice": null,
+                    "stopPrice": null,
+                    "source": "MANUAL"
+                },
+                "createdAt": "2026-11-14T12:00:00.000Z"
+            },
+            {
+                "id": "uuid",
+                "orderId": "uuid",
+                "sequence": 2,
+                "eventType": "EXECUTED",
+                "previousStatus": "PENDING",
+                "newStatus": "EXECUTED",
+                "metadata": {
+                    "tradeId": "uuid",
+                    "executionPrice": "226.50000000",
+                    "quantity": "10",
+                    "totalValue": "2265.00000000",
+                    "realizedPnl": null,
+                    "realizedPnlPct": null,
+                    "fees": "0"
+                },
+                "createdAt": "2026-11-14T12:00:05.000Z"
+            }
+        ]
+    }
+}
+```
+
+### Errors
+
+- `401 UNAUTHORIZED`: Authentication required or invalid/expired token.
+- `400 VALIDATION_ERROR`: Invalid order ID format (must be a valid UUID).
+- `404 ORDER_NOT_FOUND`: Order does not exist or does not belong to the authenticated user.
+
 ## `PATCH /orders/:id`
 
 Modify an eligible pending order.
