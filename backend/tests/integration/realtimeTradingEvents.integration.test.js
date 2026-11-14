@@ -109,27 +109,25 @@ describe("Trading realtime events", () => {
   });
 
   afterAll(async () => {
-    for (const client of [
-      primary?.client,
-      sameUserOther,
-      neverJoined,
-      otherUser?.client,
-    ]) {
-      if (client?.connected) {
-        client.close();
-      }
+    // Stop accepting new socket connections and close the Socket.IO server.
+    if (io) {
+      await new Promise((resolve) => io.close(resolve));
     }
 
-    bridge.stop();
+    // Stop the bridge and restore the default event bus.
+    if (bridge) {
+      bridge.stop();
+    }
+
     resetEventBus();
 
+    // Delete test users only after socket activity has stopped.
     for (const userId of [primary?.userId, otherUser?.userId]) {
       if (userId) {
         await prisma.user.delete({ where: { id: userId } });
       }
     }
 
-    await new Promise((resolve) => io.close(resolve));
     await prisma.$disconnect();
   });
 
@@ -374,7 +372,11 @@ describe("Trading realtime events", () => {
     const portfolioId = await newPortfolio("sell");
     await join(primary.client, portfolioId);
 
-    const buy = await placeOrder({ portfolioId, symbol: "NVDA", quantity: "2" });
+    const buy = await placeOrder({
+      portfolioId,
+      symbol: "NVDA",
+      quantity: "2",
+    });
     const buyId = buy.body.data.order.id;
 
     const buyFilled = waitForEvent(primary.client, "order-status", {
@@ -425,7 +427,11 @@ describe("Trading realtime events", () => {
     const portfolioId = await newPortfolio("loss");
     await join(primary.client, portfolioId);
 
-    const buy = await placeOrder({ portfolioId, symbol: "PYPL", quantity: "2" });
+    const buy = await placeOrder({
+      portfolioId,
+      symbol: "PYPL",
+      quantity: "2",
+    });
     const buyId = buy.body.data.order.id;
 
     const buyFilled = waitForEvent(primary.client, "order-status", {
