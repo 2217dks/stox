@@ -10,6 +10,25 @@ const {
 
 const ZERO = new Prisma.Decimal(0);
 
+function toUtcDateString(dateInput) {
+  if (!dateInput) {
+    return new Date().toISOString().slice(0, 10);
+  }
+  if (dateInput instanceof Date) {
+    return dateInput.toISOString().slice(0, 10);
+  }
+  const str = String(dateInput);
+  if (/^\d{4}-\d{2}-\d{2}$/.test(str)) {
+    return str;
+  }
+  return new Date(str).toISOString().slice(0, 10);
+}
+
+function getUtcEndOfDay(dateInput) {
+  const dateStr = toUtcDateString(dateInput);
+  return new Date(`${dateStr}T23:59:59.999Z`);
+}
+
 /**
  * Capture and persist a performance snapshot for a portfolio as of a specific UTC date.
  *
@@ -22,21 +41,35 @@ const ZERO = new Prisma.Decimal(0);
 async function capturePortfolioSnapshot(
   portfolioId,
   {
-    asOf = new Date(),
+    asOf = null,
+    snapshotDate = null,
     priceProvider,
     client = prisma,
   } = {},
 ) {
+  let snapshotDateStr;
+  let asOfDate;
+
+  if (snapshotDate) {
+    snapshotDateStr = toUtcDateString(snapshotDate);
+    asOfDate = asOf
+      ? (asOf instanceof Date ? asOf : new Date(asOf))
+      : getUtcEndOfDay(snapshotDateStr);
+  } else if (asOf) {
+    asOfDate = asOf instanceof Date ? asOf : new Date(asOf);
+    snapshotDateStr = toUtcDateString(asOfDate);
+  } else {
+    asOfDate = new Date();
+    snapshotDateStr = toUtcDateString(asOfDate);
+  }
+
+  const snapshotDateObj = new Date(`${snapshotDateStr}T00:00:00.000Z`);
+
   const valuation = await calculatePortfolioValuation(portfolioId, {
     client,
     priceProvider,
-    asOf,
+    asOf: asOfDate,
   });
-
-  const snapshotDateStr = asOf instanceof Date
-    ? asOf.toISOString().slice(0, 10)
-    : String(asOf).slice(0, 10);
-  const snapshotDateObj = new Date(`${snapshotDateStr}T00:00:00.000Z`);
 
   // Find the most recent snapshot strictly before this date
   const previousSnapshot = await findLatestSnapshot(
@@ -79,7 +112,11 @@ async function capturePortfolioSnapshot(
     dailyPnlPct,
   });
 
-  return serializeSnapshot(snapshot);
+  const serialized = serializeSnapshot(snapshot);
+  return {
+    ...serialized,
+    asOf: asOfDate.toISOString(),
+  };
 }
 
 /**
@@ -87,11 +124,13 @@ async function capturePortfolioSnapshot(
  * Used by scheduled background workers and batch scripts.
  *
  * @param {Object} [options]
+ * @param {string|Date} [options.targetDate]
  * @param {Date} [options.asOf]
  * @param {Object} [options.priceProvider]
  * @param {Object} [options.client]
  * @returns {Promise<{
  *   snapshotDate: string,
+ *   asOf: string,
  *   totalPortfolios: number,
  *   successful: number,
  *   failed: number,
@@ -99,7 +138,8 @@ async function capturePortfolioSnapshot(
  * }>}
  */
 async function captureAllPortfolioSnapshots({
-  asOf = new Date(),
+  targetDate = null,
+  asOf = null,
   priceProvider,
   client = prisma,
 } = {}) {
@@ -108,12 +148,27 @@ async function captureAllPortfolioSnapshots({
     select: { id: true },
   });
 
-  const snapshotDateStr = asOf instanceof Date
-    ? asOf.toISOString().slice(0, 10)
-    : String(asOf).slice(0, 10);
+  let snapshotDateStr;
+  let asOfDate;
+
+  if (targetDate) {
+    snapshotDateStr = toUtcDateString(targetDate);
+    asOfDate = asOf
+      ? (asOf instanceof Date ? asOf : new Date(asOf))
+      : getUtcEndOfDay(snapshotDateStr);
+  } else if (asOf) {
+    asOfDate = asOf instanceof Date ? asOf : new Date(asOf);
+    snapshotDateStr = toUtcDateString(asOfDate);
+  } else {
+    const now = new Date();
+    const prev = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
+    snapshotDateStr = toUtcDateString(prev);
+    asOfDate = getUtcEndOfDay(snapshotDateStr);
+  }
 
   const results = {
     snapshotDate: snapshotDateStr,
+    asOf: asOfDate.toISOString(),
     totalPortfolios: portfolios.length,
     successful: 0,
     failed: 0,
@@ -123,7 +178,8 @@ async function captureAllPortfolioSnapshots({
   for (const portfolio of portfolios) {
     try {
       await capturePortfolioSnapshot(portfolio.id, {
-        asOf,
+        asOf: asOfDate,
+        snapshotDate: snapshotDateStr,
         priceProvider,
         client,
       });
@@ -144,6 +200,8 @@ async function captureAllPortfolioSnapshots({
 }
 
 module.exports = {
+  toUtcDateString,
+  getUtcEndOfDay,
   capturePortfolioSnapshot,
   captureAllPortfolioSnapshots,
 };

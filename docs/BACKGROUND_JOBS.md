@@ -409,11 +409,17 @@ For environments running without full BullMQ / Redis worker clusters, or for dai
 
 ### 1. Portfolio Snapshot Worker (`src/workers/portfolioSnapshotWorker.js`)
 - **Execution:** Started automatically by `npm run workers` (`src/workers/index.js`).
-- **Cadence:** Evaluates once per interval (default 60s) whether the current UTC calendar date has been snapshotted.
-- **Action:** Computes and upserts end-of-day valuations, cash balances, and P&L metrics into `PerformanceSnapshot` for all active portfolios.
+- **Cadence & Window:** Evaluates once per interval (default 60s). Scheduled captures execute within the post-midnight UTC settlement window (`00:00 - 02:00 UTC`, configurable via `PORTFOLIO_SNAPSHOT_WINDOW_HOURS`).
+- **End-of-Day Semantics:** Targets yesterday's completed date ($D = T - 1$), computing valuations and P&L as of $D\text{T}23:59:59.999\text{Z}$ and persisting idempotently for `snapshotDate = D`.
+- **Missed-Run & Restart Guardrails:** 
+  - On restart, checks the database for existing snapshots to avoid duplicate runs.
+  - If a scheduled run was missed and execution occurs outside the settlement window, it logs an alert and skips to avoid polluting historical EOD data with live intraday quotes.
+  - Current date ($T$) is never snapshotted mid-day before closing.
 - **Graceful Shutdown:** Handles `SIGINT` / `SIGTERM` signals cleanly with timer cancellation.
 
 ### 2. Standalone Snapshot Scripts
 - **Leaderboard Snapshots:** `npm run leaderboard:snapshot` (`scripts/generate-leaderboard-snapshots.js`)
 - **Portfolio Snapshots:** `npm run portfolio:snapshot` (`scripts/generate-portfolio-snapshots.js`)
+  - Supports `--date=YYYY-MM-DD` to target a specific date's EOD valuation.
+  - Supports `--force` to bypass settlement window checks during operational backfills.
 

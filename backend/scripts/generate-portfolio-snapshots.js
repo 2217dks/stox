@@ -4,14 +4,25 @@ const {
 } = require("../src/workers/portfolioSnapshotWorker");
 
 async function main() {
-  const result = await captureDailyPortfolioSnapshots();
+  const args = process.argv.slice(2);
+  let targetDate = null;
 
-  console.log(`Generated portfolio snapshots for ${result.snapshotDate}:`);
+  for (const arg of args) {
+    if (arg.startsWith("--date=")) {
+      targetDate = arg.split("=")[1];
+    }
+  }
+
+  const result = await captureDailyPortfolioSnapshots({
+    targetDate: targetDate || null,
+  });
+
+  console.log(`Generated portfolio snapshots for ${result.snapshotDate} (asOf: ${result.asOf}):`);
   console.log(`- Total active portfolios: ${result.totalPortfolios}`);
   console.log(`- Successful: ${result.successful}`);
   console.log(`- Failed: ${result.failed}`);
 
-  if (result.errors.length > 0) {
+  if (result.errors && result.errors.length > 0) {
     console.warn("Errors encountered during snapshot generation:");
     for (const err of result.errors) {
       console.warn(`  - Portfolio ${err.portfolioId}: ${err.error}`);

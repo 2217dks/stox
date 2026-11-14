@@ -165,11 +165,16 @@ model PerformanceSnapshot {
 ```
 
 ### Scheduled Daily Capture & On-Demand Fallback
-1. **Background Snapshot Worker:** The `portfolioSnapshotWorker` runs in `npm run workers` alongside `orderWorker`. It checks for newly started UTC days and executes `captureAllPortfolioSnapshots()` across all active portfolios.
-2. **Dedicated CLI Script:** Standalone daily capture can be triggered independently via `npm run portfolio:snapshot` (`scripts/generate-portfolio-snapshots.js`), matching the pattern of `npm run leaderboard:snapshot`.
-3. **On-Demand Fallback:** If an analytics endpoint is requested before the worker completes its daily run, the engine computes today's valuation using live market quotes and cash balance, persisting it idempotently for `snapshotDate = today`.
-4. **No Speculative Backfills:** Historical snapshots are never retroactively invented for periods where neither trades nor prices were captured.
-5. **Clean Baselines:** When a portfolio has only 1 snapshot ($N=1$), single-point performance is reported (`totalValue`, cumulative return $0$), while sample variance-dependent metrics (`volatility`, `sharpeRatio`, `beta`) gracefully return `null`.
+1. **End-of-Day Valuation Semantics:** Each daily snapshot represents a completed date's end-of-day valuation (`YYYY-MM-DD` as of `23:59:59.999Z`), ensuring consistent, uncorrupted financial calculations rather than arbitrary intraday valuations.
+2. **Background Snapshot Worker & Settlement Window:** The `portfolioSnapshotWorker` runs in `npm run workers` alongside `orderWorker`. It checks on a scheduled cadence (default 60s) for settled UTC days. Captures execute within the post-midnight UTC settlement window (`00:00 - 02:00 UTC`, configurable via `PORTFOLIO_SNAPSHOT_WINDOW_HOURS`), targeting yesterday's completed day ($D = T - 1$) as of $D\text{T}23:59:59.999\text{Z}$.
+3. **Restart & Missed-Run Guardrails:**
+   - *Restart Synchronization:* On service restart, the worker queries the database. If yesterday's EOD snapshot has already been captured, it synchronizes in-memory state and skips without redundant runs.
+   - *Missed-Run Safety:* If a run was missed (e.g., worker downtime) and the service restarts outside the settlement window, it logs an alert and refuses to silently substitute live mid-day prices as yesterday's EOD valuation.
+   - *No Premature Snapshots:* The worker never captures the current date ($T$) mid-day before the trading day has completed.
+4. **Dedicated CLI Script:** Standalone daily capture can be triggered independently via `npm run portfolio:snapshot` (`scripts/generate-portfolio-snapshots.js`), with support for `--date=YYYY-MM-DD` and `--force` for administrative backfills.
+5. **On-Demand Fallback:** If an analytics endpoint is requested before the worker completes its daily run, the engine computes today's valuation using live market quotes and cash balance, persisting it idempotently for `snapshotDate = today`.
+6. **No Speculative Backfills:** Historical snapshots are never retroactively invented for periods where neither trades nor prices were captured.
+7. **Clean Baselines:** When a portfolio has only 1 snapshot ($N=1$), single-point performance is reported (`totalValue`, cumulative return $0$), while sample variance-dependent metrics (`volatility`, `sharpeRatio`, `beta`) gracefully return `null`.
 
 ---
 

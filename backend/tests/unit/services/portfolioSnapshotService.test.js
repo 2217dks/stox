@@ -139,5 +139,47 @@ describe("portfolioSnapshotService unit tests", () => {
     expect(result.errors).toHaveLength(1);
     expect(result.errors[0].portfolioId).toBe("port-2");
   });
+
+  test("captureAllPortfolioSnapshots with targetDate computes EOD asOf timestamp", async () => {
+    const mockClient = {
+      portfolio: {
+        findMany: jest.fn().mockResolvedValue([{ id: "port-1" }]),
+        findUnique: jest.fn().mockResolvedValue({
+          id: "port-1",
+          cashBalance: new Prisma.Decimal("10000"),
+          startingBalance: new Prisma.Decimal("10000"),
+          isActive: true,
+        }),
+      },
+      holding: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      performanceSnapshot: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        upsert: jest.fn().mockImplementation(({ create }) =>
+          Promise.resolve({
+            id: "snap-1",
+            ...create,
+          }),
+        ),
+      },
+    };
+
+    const result = await captureAllPortfolioSnapshots({
+      targetDate: "2026-11-14",
+      client: mockClient,
+    });
+
+    expect(result.snapshotDate).toBe("2026-11-14");
+    expect(result.asOf).toBe("2026-11-14T23:59:59.999Z");
+    expect(result.successful).toBe(1);
+    expect(mockClient.performanceSnapshot.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          snapshotDate: new Date("2026-11-14T00:00:00.000Z"),
+        }),
+      }),
+    );
+  });
 });
 
