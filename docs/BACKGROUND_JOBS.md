@@ -7,6 +7,7 @@
 ## 📌 Table of Contents
 
 - [Overview](#-overview)
+- [Implementation status](#-implementation-status)
 - [Queue Architecture](#-queue-architecture)
 - [Queue Definitions](#-queue-definitions)
 - [Worker Implementation](#-worker-implementation)
@@ -91,6 +92,14 @@ the transport. Running both at once would only duplicate scans.
   count, and reason. Inspect and replay them with
   `listFailedOrderJobs()` / `retryFailedOrderJob(jobId)` from
   `src/queues/orderQueue.js`.
+- Enqueue is bounded by `QUEUE_ENQUEUE_TIMEOUT_MS` (default 1500 ms). A
+  disconnected Redis with `maxRetriesPerRequest: null` never settles, so
+  without the bound every `POST /orders` would leave a pending enqueue
+  promise. The API never awaits the enqueue, so a timeout is invisible to the
+  client.
+- The repeatable scan is registered with bounded retry backoff. A worker that
+  starts while Redis is briefly unavailable would otherwise never re-evaluate
+  resting LIMIT/STOP/TAKE_PROFIT orders.
 
 ### Adding a queue
 

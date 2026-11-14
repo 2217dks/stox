@@ -22,8 +22,22 @@ function createHttpMetrics({ metrics = defaultRegistry } = {}) {
 
     metrics.incrementGauge("http_requests_in_flight");
 
-    res.on("finish", () => {
+    let finalized = false;
+
+    const finalize = () => {
+      if (finalized) {
+        return;
+      }
+
+      finalized = true;
       metrics.decrementGauge("http_requests_in_flight");
+
+      // A client that disconnects mid-response emits `close` without `finish`.
+      // The gauge must still be released, but the request was not completed,
+      // so it must not be counted as a successful/failed response.
+      if (!res.writableFinished) {
+        return;
+      }
 
       const durationSeconds =
         Number(process.hrtime.bigint() - startedAt) / 1_000_000_000;
@@ -36,7 +50,12 @@ function createHttpMetrics({ metrics = defaultRegistry } = {}) {
 
       metrics.increment("http_requests_total", labels);
       metrics.observe("http_request_duration_seconds", durationSeconds, labels);
-    });
+    };
+
+    res.on("finish", finalize);
+    // `close` fires after `finish` too; `finalized` keeps the accounting
+    // exactly once per request.
+    res.on("close", finalize);
 
     return next();
   };

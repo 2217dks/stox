@@ -162,6 +162,9 @@ The token comparison is constant-time.
 | `METRICS_TOKEN` | unset | Optional bearer token for scraping |
 | `REQUEST_BODY_LIMIT` | `100kb` | JSON body size limit |
 | `SECURITY_HEADERS_ENABLED` | `true` | Helmet middleware toggle |
+| `QUEUE_ENQUEUE_TIMEOUT_MS` | `1500` | Bound on a best-effort queue enqueue |
+| `QUEUES_ENABLED` | `true` | BullMQ vs in-process polling |
+| `QUEUE_PREFIX` | `stox` | Redis key namespace for queues |
 
 ---
 
@@ -175,7 +178,9 @@ The token comparison is constant-time.
 3. **Metric names are part of the series key.** Unlabelled metrics with
    different names must not collide (regression-tested).
 4. **Instrumentation must not change behaviour.** The HTTP middleware only
-   records on `finish`; it never alters the response.
+   records on `finish`; it never alters the response. A client that disconnects
+   mid-response releases the in-flight gauge but is not counted in
+   `http_requests_total`, because the request never completed.
 5. **The registry is process-local.** Multiple API processes each expose their
    own `/metrics`; aggregate at the scrape layer.
 

@@ -16,6 +16,12 @@ const logger = require("../utils/logger");
  * handler never needs parser-specific branches.
  */
 function errorHandler(err, req, res, next) {
+  // Express normally passes an Error, but a thrown string/undefined must still
+  // produce the standard envelope instead of crashing the handler itself.
+  if (!err || typeof err !== "object") {
+    err = new Error("Non-Error value thrown.");
+  }
+
   let statusCode = 500;
   let code = "INTERNAL_SERVER_ERROR";
   let message = "An unexpected error occurred.";
@@ -48,7 +54,9 @@ function errorHandler(err, req, res, next) {
 
   const logEntry = {
     method: req.method,
-    url: req.originalUrl,
+    // Strip the query string: it can carry tokens or search terms and is never
+    // needed to diagnose a failure. The request logger applies the same rule.
+    url: String(req.originalUrl || "").split("?")[0],
     statusCode,
     code,
     message,

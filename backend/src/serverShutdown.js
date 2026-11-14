@@ -1,4 +1,7 @@
 const logger = require("./utils/logger");
+const { withTimeout } = require("./utils/withTimeout");
+
+const QUEUE_SHUTDOWN_TIMEOUT_MS = 5000;
 
 /**
  * Close Socket.IO (which owns the HTTP server once attached) and resolve when
@@ -85,7 +88,11 @@ function createShutdown({
       }
 
       try {
-        await closeQueues?.();
+        await withTimeout(
+          Promise.resolve(closeQueues?.()),
+          QUEUE_SHUTDOWN_TIMEOUT_MS,
+          { message: "Queue shutdown timed out." },
+        );
       } catch (error) {
         log.warn("Queue shutdown failed", {
           message: error.message,

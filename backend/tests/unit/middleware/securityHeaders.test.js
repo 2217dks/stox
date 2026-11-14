@@ -43,6 +43,10 @@ describe("security headers middleware", () => {
 
     expect(csp).toContain("default-src 'none'");
     expect(csp).toContain("frame-ancestors 'none'");
+    // Document-oriented Helmet defaults must not leak into an API policy.
+    expect(csp).not.toContain("script-src");
+    expect(csp).not.toContain("style-src");
+    expect(csp).not.toContain("upgrade-insecure-requests");
   });
 
   test("allows cross-origin resource reads for the separate frontend origin", () => {

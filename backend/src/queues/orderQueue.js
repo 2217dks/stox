@@ -8,6 +8,7 @@ const {
 } = require("./definitions");
 const { AppError } = require("../utils/errors");
 const { registry } = require("../observability/metrics");
+const { withTimeout } = require("../utils/withTimeout");
 const logger = require("../utils/logger");
 
 const executeOrderPayloadSchema = z.object({
@@ -19,6 +20,28 @@ const scanPendingPayloadSchema = z.object({
   portfolioId: z.string().uuid("portfolioId must be a valid UUID.").optional(),
   limit: z.number().int().min(1).max(1000).optional(),
 });
+
+// BullMQ requires `maxRetriesPerRequest: null`, so a disconnected Redis makes
+// `queue.add` wait indefinitely. The API enqueues best-effort, so it must not
+// pin a promise (and an offline command) forever.
+const DEFAULT_ENQUEUE_TIMEOUT_MS = 1500;
+
+function enqueueTimeoutMs() {
+  const value = Number(process.env.QUEUE_ENQUEUE_TIMEOUT_MS);
+
+  return Number.isInteger(value) && value > 0
+    ? value
+    : DEFAULT_ENQUEUE_TIMEOUT_MS;
+}
+
+function withTimeoutForEnqueue(promise) {
+  const timeoutMs = enqueueTimeoutMs();
+
+  return withTimeout(promise, timeoutMs, {
+    message: `Queue enqueue timed out after ${timeoutMs}ms.`,
+    code: "ENQUEUE_TIMEOUT",
+  });
+}
 
 function parsePayload(schema, payload) {
   const parsed = schema.safeParse(payload ?? {});
@@ -53,10 +76,12 @@ async function enqueue(queueName, jobName, data, options = {}) {
   }
 
   try {
-    const job = await queue.add(jobName, data, {
-      ...jobOptionsFor(queueName, jobName),
-      ...options,
-    });
+    const job = await withTimeoutForEnqueue(
+      queue.add(jobName, data, {
+        ...jobOptionsFor(queueName, jobName),
+        ...options,
+      }),
+    );
 
     registry.increment("queue_jobs_enqueued_total", {
       queue: queueName,
@@ -73,10 +98,16 @@ async function enqueue(queueName, jobName, data, options = {}) {
     logger.error("Queue enqueue failed", {
       queue: queueName,
       job: jobName,
+      reason:
+        error.code === "ENQUEUE_TIMEOUT" ? "ENQUEUE_TIMEOUT" : "ENQUEUE_FAILED",
       message: error.message,
     });
 
-    return { enqueued: false, reason: "ENQUEUE_FAILED" };
+    return {
+      enqueued: false,
+      reason:
+        error.code === "ENQUEUE_TIMEOUT" ? "ENQUEUE_TIMEOUT" : "ENQUEUE_FAILED",
+    };
   }
 }
 
@@ -208,6 +239,7 @@ async function retryFailedOrderJob(jobId) {
 }
 
 module.exports = {
+  DEFAULT_ENQUEUE_TIMEOUT_MS,
   executeOrderPayloadSchema,
   scanPendingPayloadSchema,
   enqueueOrderExecution,

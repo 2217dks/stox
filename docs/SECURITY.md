@@ -321,13 +321,13 @@ Request
 5. CORS
    |
    v
-6. JSON body parser (explicit size limit)
+6. Global /api rate limiter
    |
    v
-7. GET /metrics (Prometheus scrape)
+7. JSON body parser (explicit size limit)
    |
    v
-8. Global /api rate limiter
+8. GET /metrics (Prometheus scrape)
    |
    v
 9. /api/v1 routes
@@ -338,6 +338,9 @@ Request
    v
 11. Centralized error handler
 ```
+
+The rate limiter runs **before** body parsing, so a client that is already
+over quota cannot make the server buffer and parse a large payload first.
 
 ### CORS
 

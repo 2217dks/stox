@@ -7,6 +7,11 @@ function envInt(name, fallback) {
 
 const enabled = process.env.RATE_LIMIT_ENABLED !== "false";
 
+// Deliberately rendered here rather than through the centralized error handler:
+// a throttled request is expected traffic, and routing every hit through the
+// handler would add a log line per request during an attack. See
+// docs/RATE_LIMITING.md. express-rate-limit sets the RateLimit-* headers before
+// calling this handler.
 function rateLimitedResponse(req, res) {
   return res.status(429).json({
     success: false,

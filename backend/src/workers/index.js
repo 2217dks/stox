@@ -1,14 +1,17 @@
 require("dotenv").config();
 
 const logger = require("../utils/logger");
+const { withTimeout } = require("../utils/withTimeout");
 const { configureEventBus } = require("../realtime/eventBus");
 const { createRedisEventBus } = require("../realtime/redisBus");
 const { DEFAULT_INTERVAL_MS, startOrderWorker } = require("./orderWorker");
 const { createOrderQueueWorker } = require("./orderQueueWorker");
+const { startScanScheduler } = require("./scanScheduler");
 const { ensureOrderScanScheduler } = require("../queues/orderQueue");
 const { closeQueues, isQueuesEnabled } = require("../queues");
-const { createQueueConnection } = require("../queues/connection");
 const { startPortfolioSnapshotWorker } = require("./portfolioSnapshotWorker");
+
+const SHUTDOWN_TIMEOUT_MS = 5000;
 
 const eventBus = createRedisEventBus({ withSubscriber: false });
 configureEventBus(eventBus);
@@ -28,35 +31,19 @@ configureEventBus(eventBus);
 const queuesEnabled = isQueuesEnabled();
 
 const orderWorker = queuesEnabled ? null : startOrderWorker();
+const queueWorker = queuesEnabled ? createOrderQueueWorker() : null;
 
-// The worker owns this connection; BullMQ will not close a caller-supplied
-// ioredis instance, so shutdown closes it explicitly.
-const queueConnection = queuesEnabled ? createQueueConnection() : null;
-const queueWorker = queuesEnabled
-  ? createOrderQueueWorker({ connection: queueConnection })
-  : null;
+const SCAN_INTERVAL_MS =
+  Number.parseInt(process.env.ORDER_SCAN_INTERVAL_MS, 10) ||
+  DEFAULT_INTERVAL_MS;
 
-if (queuesEnabled) {
-  ensureOrderScanScheduler({
-    every:
-      Number.parseInt(process.env.ORDER_SCAN_INTERVAL_MS, 10) ||
-      DEFAULT_INTERVAL_MS,
-  })
-    .then((result) => {
-      if (result.scheduled) {
-        logger.info("Order scan scheduler registered");
-      } else {
-        logger.warn("Order scan scheduler not registered", {
-          reason: result.reason,
-        });
-      }
+const scanScheduler = queuesEnabled
+  ? startScanScheduler({
+      ensureScheduler: ensureOrderScanScheduler,
+      intervalMs: SCAN_INTERVAL_MS,
+      log: logger,
     })
-    .catch((error) => {
-      logger.error("Order scan scheduler registration crashed", {
-        message: error.message,
-      });
-    });
-}
+  : null;
 
 const snapshotWorker = startPortfolioSnapshotWorker();
 
@@ -77,29 +64,46 @@ async function shutdown(signal) {
   shuttingDown = true;
   logger.info(`Workers stopping (${signal})`);
 
+  scanScheduler?.stop();
   orderWorker?.stop();
   snapshotWorker.stop();
 
   if (queueWorker) {
-    await queueWorker.close().catch((error) => {
+    try {
+      await withTimeout(queueWorker.close(), SHUTDOWN_TIMEOUT_MS, {
+        message: "Order queue worker close timed out.",
+      });
+    } catch (error) {
       logger.warn("Order queue worker shutdown failed", {
         message: error.message,
       });
-    });
-  }
+    }
 
-  if (queueConnection && queueConnection.status !== "end") {
-    try {
-      await queueConnection.quit();
-    } catch (error) {
-      queueConnection.disconnect();
+    const queueConnection = queueWorker.queueConnection;
+
+    if (queueConnection && queueConnection.status !== "end") {
+      try {
+        await queueConnection.quit();
+      } catch (error) {
+        queueConnection.disconnect();
+      }
     }
   }
 
-  await closeQueues();
+  try {
+    await withTimeout(closeQueues(), SHUTDOWN_TIMEOUT_MS, {
+      message: "Queue close timed out.",
+    });
+  } catch (error) {
+    logger.warn("Queue shutdown failed", {
+      message: error.message,
+    });
+  }
 
   try {
-    await eventBus.close();
+    await withTimeout(eventBus.close(), SHUTDOWN_TIMEOUT_MS, {
+      message: "Realtime bus close timed out.",
+    });
   } catch (error) {
     logger.warn("Realtime bus shutdown failed", {
       message: error.message,
@@ -115,5 +119,6 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 module.exports = {
   orderWorker,
   queueWorker,
+  scanScheduler,
   snapshotWorker,
 };

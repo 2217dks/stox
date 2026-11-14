@@ -119,5 +119,18 @@ describe("structured logging helpers", () => {
         spy.mockRestore();
       }
     });
+
+    test("ignores non-object metadata instead of spreading it into keys", () => {
+      const logger = require("../../../src/utils/logger");
+      const spy = jest.spyOn(logger, "info").mockImplementation(() => {});
+
+      try {
+        childLogger({ queue: "orders" }).info("started", "not-an-object");
+
+        expect(spy).toHaveBeenCalledWith("started", { queue: "orders" });
+      } finally {
+        spy.mockRestore();
+      }
+    });
   });
 });

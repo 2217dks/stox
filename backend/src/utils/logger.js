@@ -73,14 +73,22 @@ const logger = winston.createLogger({
  * over the defaults, which lets a handler add per-attempt detail.
  */
 function childLogger(context = {}) {
-  const defaults = redactSensitive(context);
+  const defaults =
+    context !== null && typeof context === "object"
+      ? redactSensitive(context)
+      : {};
   const child = {};
 
   for (const method of ["debug", "info", "warn", "error"]) {
     child[method] = (message, meta = {}) => {
+      // Spreading a string/array into an object literal would produce numeric
+      // keys, so only object metadata is merged.
+      const extra =
+        meta !== null && typeof meta === "object" ? redactSensitive(meta) : {};
+
       logger[method](message, {
         ...defaults,
-        ...redactSensitive(meta),
+        ...extra,
       });
     };
   }

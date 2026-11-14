@@ -39,6 +39,10 @@ app.use(
   }),
 );
 
+// Rate limit before parsing the body: a client already over quota should not
+// make the server buffer and parse up to REQUEST_BODY_LIMIT of JSON first.
+app.use("/api", globalLimiter);
+
 // An explicit limit turns an accidental multi-megabyte body into a fast 413
 // instead of buffering it. The wrapper converts parser failures into AppErrors
 // so the centralized error handler renders them like every other failure.
@@ -56,8 +60,6 @@ app.get(
     token: metricsConfig.token,
   }),
 );
-
-app.use("/api", globalLimiter);
 
 app.use("/api/v1", routes);
 app.use(notFoundHandler);

@@ -28,6 +28,10 @@ function createSecurityHeaders({
 
   return helmet({
     contentSecurityPolicy: {
+      // Do not inherit Helmet's document-oriented defaults (`script-src`,
+      // `style-src`, `upgrade-insecure-requests`, …). This API serves no HTML,
+      // so the policy is exactly these two directives.
+      useDefaults: false,
       directives: {
         "default-src": ["'none'"],
         "frame-ancestors": ["'none'"],

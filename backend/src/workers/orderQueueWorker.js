@@ -118,16 +118,23 @@ function createOrderQueueWorker({
   batchSize = DEFAULT_BATCH_SIZE,
   prefix = process.env.QUEUE_PREFIX || "stox",
 } = {}) {
+  // BullMQ does not close a caller-supplied ioredis instance, so ownership is
+  // explicit: the connection is exposed on the worker and the process entry
+  // point closes it during shutdown.
+  const queueConnection = connection || createQueueConnection();
+
   const worker = new Worker(
     QUEUE_NAMES.ORDERS,
     (job) =>
       handleOrderJob(job, { quoteProvider, now, retryLimit, batchSize }),
     {
-      connection: connection || createQueueConnection(),
+      connection: queueConnection,
       concurrency,
       prefix,
     },
   );
+
+  worker.queueConnection = queueConnection;
 
   const log = childLogger({ queue: QUEUE_NAMES.ORDERS, worker: "orders" });
 

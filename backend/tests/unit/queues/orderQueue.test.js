@@ -88,6 +88,26 @@ describe("order queue", () => {
 
       expect(result).toEqual({ enqueued: false, reason: "ENQUEUE_FAILED" });
     });
+
+    test("times out instead of hanging when Redis never answers", async () => {
+      const previous = process.env.QUEUE_ENQUEUE_TIMEOUT_MS;
+      process.env.QUEUE_ENQUEUE_TIMEOUT_MS = "20";
+
+      try {
+        // A disconnected Redis with maxRetriesPerRequest: null never settles.
+        queue.add.mockReturnValue(new Promise(() => {}));
+
+        const result = await enqueueOrderExecution({ orderId: ORDER_ID });
+
+        expect(result).toEqual({ enqueued: false, reason: "ENQUEUE_TIMEOUT" });
+      } finally {
+        if (previous === undefined) {
+          delete process.env.QUEUE_ENQUEUE_TIMEOUT_MS;
+        } else {
+          process.env.QUEUE_ENQUEUE_TIMEOUT_MS = previous;
+        }
+      }
+    });
   });
 
   describe("enqueuePendingOrderScan", () => {
