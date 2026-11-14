@@ -89,3 +89,4 @@ describe("portfolioSnapshotService unit tests", () => {
     expect(new Prisma.Decimal(result.dailyPnlPct).toDecimalPlaces(4).toString()).toBe("0.0476");
   });
 });
+

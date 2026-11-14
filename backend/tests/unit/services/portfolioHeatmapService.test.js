@@ -95,3 +95,4 @@ describe("portfolioHeatmapService unit tests", () => {
     });
   });
 });
+

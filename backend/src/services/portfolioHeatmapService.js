@@ -101,3 +101,4 @@ async function getPortfolioPnlHeatmap(portfolioId, {
 module.exports = {
   getPortfolioPnlHeatmap,
 };
+
