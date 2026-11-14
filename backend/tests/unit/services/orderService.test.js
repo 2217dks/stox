@@ -29,6 +29,10 @@ jest.mock("../../../src/config/database", () => ({
     update: jest.fn(),
     updateMany: jest.fn(),
   },
+  orderEvent: {
+    create: jest.fn(),
+    findMany: jest.fn(),
+  },
 }));
 
 jest.mock("../../../src/services/marketData", () => ({
@@ -81,6 +85,9 @@ function createTransactionMock({
     ]),
     portfolio: {
       update: jest.fn().mockResolvedValue({}),
+    },
+    orderEvent: {
+      create: jest.fn().mockResolvedValue({}),
     },
     order: {
       findFirst: jest.fn().mockResolvedValue(transactionOrder),
