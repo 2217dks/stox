@@ -445,8 +445,8 @@ Requires Bearer JWT authentication and verifies portfolio ownership.
 | Parameter | Type   | Default | Description |
 |-----------|--------|---------|-------------|
 | `year`    | int    | -       | Optional calendar year filter (e.g. `2026`). |
-| `from`    | string | -       | Optional lower bound (`YYYY-MM` or `YYYY-MM-DD`). |
-| `to`      | string | -       | Optional upper bound (`YYYY-MM` or `YYYY-MM-DD`). |
+| `from`    | string | -       | Optional lower bound (`YYYY-MM`, `YYYY-MM-DD`, or ISO datetime with UTC offset). `YYYY-MM` starts at the first instant of that UTC month. |
+| `to`      | string | -       | Optional upper bound (`YYYY-MM`, `YYYY-MM-DD`, or ISO datetime with UTC offset). `YYYY-MM` includes the whole UTC month. |
 
 ### Response
 

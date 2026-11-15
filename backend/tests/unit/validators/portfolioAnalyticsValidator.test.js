@@ -113,23 +113,107 @@ describe("Portfolio Analytics Validators Unit Tests", () => {
       expect(parsed.year).toBe(2026);
     });
 
-    test("parses from and to date bounds", () => {
+    test("parses YYYY-MM month bounds with UTC calendar month semantics", () => {
+      const parsed = monthlyPerformanceQuerySchema.parse({
+        from: "2026-01",
+        to: "2026-01",
+      });
+      expect(parsed.from).toBeInstanceOf(Date);
+      expect(parsed.to).toBeInstanceOf(Date);
+      expect(parsed.from.toISOString()).toBe("2026-01-01T00:00:00.000Z");
+      expect(parsed.to.toISOString()).toBe("2026-01-31T23:59:59.999Z");
+      expect(parsed.from.getTime()).toBeLessThan(parsed.to.getTime());
+    });
+
+    test("handles leap-year and non-leap-year February in YYYY-MM format", () => {
+      const nonLeap = monthlyPerformanceQuerySchema.parse({ to: "2026-02" });
+      expect(nonLeap.to.toISOString()).toBe("2026-02-28T23:59:59.999Z");
+
+      const leap = monthlyPerformanceQuerySchema.parse({ to: "2024-02" });
+      expect(leap.to.toISOString()).toBe("2024-02-29T23:59:59.999Z");
+    });
+
+    test("accepts standalone from or to in YYYY-MM format", () => {
+      const fromOnly = monthlyPerformanceQuerySchema.parse({ from: "2026-05" });
+      expect(fromOnly.from.toISOString()).toBe("2026-05-01T00:00:00.000Z");
+      expect(fromOnly.to).toBeUndefined();
+
+      const toOnly = monthlyPerformanceQuerySchema.parse({ to: "2026-05" });
+      expect(toOnly.to.toISOString()).toBe("2026-05-31T23:59:59.999Z");
+      expect(toOnly.from).toBeUndefined();
+    });
+
+    test("parses from and to date-only bounds (YYYY-MM-DD)", () => {
       const parsed = monthlyPerformanceQuerySchema.parse({
         from: "2026-01-01",
         to: "2026-06-30",
       });
       expect(parsed.from).toBeInstanceOf(Date);
       expect(parsed.to).toBeInstanceOf(Date);
+      expect(parsed.from.toISOString()).toBe("2026-01-01T00:00:00.000Z");
+      expect(parsed.to.toISOString()).toBe("2026-06-30T23:59:59.999Z");
       expect(parsed.from.getTime()).toBeLessThan(parsed.to.getTime());
+
+      const singleDay = monthlyPerformanceQuerySchema.parse({
+        from: "2026-03-15",
+        to: "2026-03-15",
+      });
+      expect(singleDay.from.getTime()).toBeLessThan(singleDay.to.getTime());
     });
 
-    test("rejects when from is later than to", () => {
+    test("parses ISO datetimes and offset-bearing datetimes", () => {
+      const parsed = monthlyPerformanceQuerySchema.parse({
+        from: "2026-01-01T10:00:00.000Z",
+        to: "2026-06-30T18:00:00.000Z",
+      });
+      expect(parsed.from.toISOString()).toBe("2026-01-01T10:00:00.000Z");
+      expect(parsed.to.toISOString()).toBe("2026-06-30T18:00:00.000Z");
+
+      const offsetParsed = monthlyPerformanceQuerySchema.parse({
+        from: "2026-10-10T09:00:00+05:30",
+      });
+      expect(offsetParsed.from.toISOString()).toBe("2026-10-10T03:30:00.000Z");
+    });
+
+    test("rejects invalid month numbers in YYYY-MM format", () => {
+      expect(() => monthlyPerformanceQuerySchema.parse({ from: "2026-00" })).toThrow();
+      expect(() => monthlyPerformanceQuerySchema.parse({ from: "2026-13" })).toThrow();
+      expect(() => monthlyPerformanceQuerySchema.parse({ to: "2026-99" })).toThrow();
+    });
+
+    test("rejects impossible calendar dates", () => {
+      expect(() => monthlyPerformanceQuerySchema.parse({ from: "2026-02-30" })).toThrow();
+      expect(() => monthlyPerformanceQuerySchema.parse({ to: "2026-13-45" })).toThrow();
+    });
+
+    test("rejects malformed date strings and timezone-less datetimes", () => {
+      expect(() => monthlyPerformanceQuerySchema.parse({ from: "not-a-date" })).toThrow();
       expect(() =>
-        monthlyPerformanceQuerySchema.parse({
-          from: "2026-06-01T00:00:00Z",
-          to: "2026-01-01T00:00:00Z",
-        }),
+        monthlyPerformanceQuerySchema.parse({ from: "2026-01-01T12:00:00" }),
       ).toThrow();
+    });
+
+    test("rejects reversed ranges with custom issue on 'to'", () => {
+      const reversedMonth = monthlyPerformanceQuerySchema.safeParse({
+        from: "2026-03",
+        to: "2026-01",
+      });
+      expect(reversedMonth.success).toBe(false);
+      expect(reversedMonth.error.issues[0].path).toContain("to");
+
+      const reversedDate = monthlyPerformanceQuerySchema.safeParse({
+        from: "2026-01-16",
+        to: "2026-01-15",
+      });
+      expect(reversedDate.success).toBe(false);
+      expect(reversedDate.error.issues[0].path).toContain("to");
+
+      const reversedIso = monthlyPerformanceQuerySchema.safeParse({
+        from: "2026-06-01T00:00:00Z",
+        to: "2026-01-01T00:00:00Z",
+      });
+      expect(reversedIso.success).toBe(false);
+      expect(reversedIso.error.issues[0].path).toContain("to");
     });
   });
 });

@@ -136,8 +136,8 @@ Task 39 reconciles both perspectives:
 * **Authorization:** Scoped to portfolio owner (`portfolio.userId === req.user.userId`). Non-owner/non-existent returns `404 PORTFOLIO_NOT_FOUND`.
 * **Supported Query Parameters:**
   - `year` (`number`, e.g. `2026`, optional): Limits aggregation to the given calendar year.
-  - `from` (`string` YYYY-MM or YYYY-MM-DD, optional): Lower month boundary (inclusive).
-  - `to` (`string` YYYY-MM or YYYY-MM-DD, optional): Upper month boundary (inclusive).
+  - `from` (`string` YYYY-MM, YYYY-MM-DD, or ISO datetime with UTC offset, optional): Lower month boundary (inclusive; `YYYY-MM` starts at first instant of UTC month).
+  - `to` (`string` YYYY-MM, YYYY-MM-DD, or ISO datetime with UTC offset, optional): Upper month boundary (inclusive; `YYYY-MM` covers whole UTC month).
 * **Response DTO:**
 ```json
 {

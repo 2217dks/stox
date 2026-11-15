@@ -68,12 +68,22 @@ async function getPortfolioMonthlyPerformance(portfolioId, userId, options = {})
     toDate = new Date(Date.UTC(options.year, 11, 31, 23, 59, 59, 999));
   } else {
     if (options.from) {
-      const fromStr = String(options.from).slice(0, 7);
-      fromDate = getUtcMonthStart(fromStr);
+      if (options.from instanceof Date) {
+        fromDate = options.from;
+      } else if (typeof options.from === "string" && /^\d{4}-\d{2}$/.test(options.from.trim())) {
+        fromDate = getUtcMonthStart(options.from.trim());
+      } else {
+        fromDate = new Date(options.from);
+      }
     }
     if (options.to) {
-      const toStr = String(options.to).slice(0, 7);
-      toDate = getUtcMonthEnd(toStr);
+      if (options.to instanceof Date) {
+        toDate = options.to;
+      } else if (typeof options.to === "string" && /^\d{4}-\d{2}$/.test(options.to.trim())) {
+        toDate = getUtcMonthEnd(options.to.trim());
+      } else {
+        toDate = new Date(options.to);
+      }
     }
   }
 

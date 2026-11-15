@@ -57,6 +57,60 @@ const riskFreeRateSchema = z.preprocess((val) => {
 
 const { dateBoundSchema } = require("./orderValidator");
 
+const YEAR_MONTH_PATTERN = /^\d{4}-\d{2}$/;
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const UTC_OFFSET_PATTERN = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+function parseYearMonthUtc(value, isUpper) {
+  const [year, month] = value.split("-").map(Number);
+  if (month < 1 || month > 12) {
+    return new Date(NaN);
+  }
+  if (!isUpper) {
+    return new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
+  }
+  return new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+}
+
+function parseDateOnlyUtc(value, isUpper) {
+  const [year, month, day] = value.split("-").map(Number);
+  const original = new Date(Date.UTC(year, month - 1, day));
+  if (
+    original.getUTCFullYear() !== year ||
+    original.getUTCMonth() !== month - 1 ||
+    original.getUTCDate() !== day
+  ) {
+    return new Date(NaN);
+  }
+  if (isUpper) {
+    return new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
+  }
+  return new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+}
+
+function monthlyDateBoundSchema(isUpper = false) {
+  return z
+    .string()
+    .transform((value) => value.trim())
+    .refine(
+      (value) =>
+        YEAR_MONTH_PATTERN.test(value) ||
+        DATE_ONLY_PATTERN.test(value) ||
+        UTC_OFFSET_PATTERN.test(value),
+      "Must be a month (YYYY-MM), a date (YYYY-MM-DD), or an ISO datetime with an explicit UTC offset (Z or ±HH:MM).",
+    )
+    .transform((value) => {
+      if (YEAR_MONTH_PATTERN.test(value)) {
+        return parseYearMonthUtc(value, isUpper);
+      }
+      if (DATE_ONLY_PATTERN.test(value)) {
+        return parseDateOnlyUtc(value, isUpper);
+      }
+      return value;
+    })
+    .pipe(z.coerce.date());
+}
+
 const yearSchema = z.preprocess((val) => {
   if (val === undefined || val === null || val === "") return undefined;
   const num = parseInt(val, 10);
@@ -87,8 +141,8 @@ const benchmarkComparisonQuerySchema = z.object({
 const monthlyPerformanceQuerySchema = z
   .object({
     year: yearSchema,
-    from: dateBoundSchema(0).optional(),
-    to: dateBoundSchema(1).optional(),
+    from: monthlyDateBoundSchema(false).optional(),
+    to: monthlyDateBoundSchema(true).optional(),
   })
   .superRefine((query, ctx) => {
     if (query.from && query.to && query.from >= query.to) {
@@ -108,4 +162,5 @@ module.exports = {
   riskMetricsQuerySchema,
   benchmarkComparisonQuerySchema,
   monthlyPerformanceQuerySchema,
+  monthlyDateBoundSchema,
 };

@@ -246,6 +246,37 @@ describe("Monthly Performance & Statistics Integration Tests", () => {
       expect(res.body.success).toBe(false);
       expect(res.body.error.code).toBe("VALIDATION_ERROR");
     });
+
+    test("filters monthly performance using YYYY-MM month filters", async () => {
+      const res = await request(app)
+        .get(`/api/v1/portfolios/${portfolioAId}/analytics/monthly-performance?from=2026-01&to=2026-01`)
+        .set("Authorization", `Bearer ${tokenA}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.months).toHaveLength(1);
+      expect(res.body.data.months[0].month).toBe("2026-01");
+    });
+
+    test("rejects reversed YYYY-MM range with 400 VALIDATION_ERROR", async () => {
+      const res = await request(app)
+        .get(`/api/v1/portfolios/${portfolioAId}/analytics/monthly-performance?from=2026-03&to=2026-01`)
+        .set("Authorization", `Bearer ${tokenA}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    });
+
+    test("rejects invalid YYYY-MM format with 400 VALIDATION_ERROR", async () => {
+      const res = await request(app)
+        .get(`/api/v1/portfolios/${portfolioAId}/analytics/monthly-performance?from=2026-13`)
+        .set("Authorization", `Bearer ${tokenA}`);
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    });
   });
 
   describe("User Monthly Trade Statistics API", () => {
