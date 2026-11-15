@@ -7,6 +7,7 @@ const {
 const {
   getPublicProfile: getPublicSocialProfile,
 } = require("../services/socialService");
+const { getCurrentUser } = require("../services/authService");
 const cacheService = require("../services/cacheService");
 
 /**
@@ -23,6 +24,8 @@ async function getMyStatistics(req, res, next) {
     const userId = req.user.userId;
     const filters = req.validatedQuery ?? req.query ?? {};
 
+    await getCurrentUser(userId);
+
     if (filters.portfolioId) {
       const portfolio = await prisma.portfolio.findFirst({
         where: { id: filters.portfolioId, userId },
@@ -36,7 +39,7 @@ async function getMyStatistics(req, res, next) {
     const statistics = await cacheService.getOrSetUserStatistics(
       userId,
       filters,
-      () => getUserStatistics(userId, filters),
+      () => getUserStatistics(userId, filters, { prevalidated: true }),
     );
 
     return res.status(200).json({
@@ -55,6 +58,8 @@ async function getMyMonthlyStatistics(req, res, next) {
     const userId = req.user.userId;
     const filters = req.validatedQuery ?? req.query ?? {};
 
+    await getCurrentUser(userId);
+
     if (filters.portfolioId) {
       const portfolio = await prisma.portfolio.findFirst({
         where: { id: filters.portfolioId, userId },
@@ -68,7 +73,7 @@ async function getMyMonthlyStatistics(req, res, next) {
     const monthly = await cacheService.getOrSetUserMonthlyStatistics(
       userId,
       filters,
-      () => getMonthlyTradeStatistics(userId, filters),
+      () => getMonthlyTradeStatistics(userId, filters, { prevalidated: true }),
     );
 
     return res.status(200).json({

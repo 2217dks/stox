@@ -167,22 +167,24 @@ async function getMonthlyTradeStatistics(userId, filters = {}, options = {}) {
  * from the verified access token (never from the request), so one user can
  * never read another user's numbers.
  */
-async function getUserStatistics(userId, filters = {}) {
+async function getUserStatistics(userId, filters = {}, options = {}) {
   // Reuse the existing auth helper so a deleted or suspended account gets the
   // same 404/403 semantics as GET /auth/me and cannot read statistics.
-  await getCurrentUser(userId);
+  if (!options.prevalidated) {
+    await getCurrentUser(userId);
 
-  if (filters.portfolioId) {
-    const portfolio = await prisma.portfolio.findFirst({
-      where: {
-        id: filters.portfolioId,
-        userId,
-      },
-      select: { id: true },
-    });
+    if (filters.portfolioId) {
+      const portfolio = await prisma.portfolio.findFirst({
+        where: {
+          id: filters.portfolioId,
+          userId,
+        },
+        select: { id: true },
+      });
 
-    if (!portfolio) {
-      throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+      if (!portfolio) {
+        throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+      }
     }
   }
 

@@ -164,6 +164,83 @@ describe("Analytics Caching & Performance Integration Tests", () => {
       // User B's generation is unaffected
       expect(genBAfter).toBe(genBBefore);
     });
+
+    test("enforces account existence and suspension before serving cached responses", async () => {
+      // 1. Create a dedicated user for suspension and deletion testing
+      const userC = {
+        name: "Suspension Test User",
+        email: `suspension-user-${Date.now()}@example.com`,
+        password: "SuspensionPass#2026",
+      };
+      const resC = await request(app).post("/api/v1/auth/register").send(userC);
+      expect([200, 201]).toContain(resC.status);
+      const userCId = resC.body.data.user.id;
+      const tokenC = resC.body.data.accessToken;
+
+      // 2. Populate the cache for active user
+      const initialStats = await request(app)
+        .get("/api/v1/users/me/statistics")
+        .set("Authorization", `Bearer ${tokenC}`);
+      expect(initialStats.status).toBe(200);
+      expect(initialStats.body.data.statistics.totalTrades).toBe(0);
+
+      const initialMonthly = await request(app)
+        .get("/api/v1/users/me/statistics/monthly")
+        .set("Authorization", `Bearer ${tokenC}`);
+      expect(initialMonthly.status).toBe(200);
+      expect(initialMonthly.body.data.monthly).toEqual([]);
+
+      // Verify second request hits the cache for active user
+      const cachedStats = await request(app)
+        .get("/api/v1/users/me/statistics")
+        .set("Authorization", `Bearer ${tokenC}`);
+      expect(cachedStats.status).toBe(200);
+      expect(cachedStats.body.data).toEqual(initialStats.body.data);
+
+      // 3. Mark the user suspended in database while JWT is still valid
+      await prisma.user.update({
+        where: { id: userCId },
+        data: { isSuspended: true },
+      });
+
+      // 4. Retry with still-valid token: assert 403 ACCOUNT_SUSPENDED even on cache hit
+      const suspendedStatsRes = await request(app)
+        .get("/api/v1/users/me/statistics")
+        .set("Authorization", `Bearer ${tokenC}`);
+      expect(suspendedStatsRes.status).toBe(403);
+      expect(suspendedStatsRes.body.error.code).toBe("ACCOUNT_SUSPENDED");
+
+      const suspendedMonthlyRes = await request(app)
+        .get("/api/v1/users/me/statistics/monthly")
+        .set("Authorization", `Bearer ${tokenC}`);
+      expect(suspendedMonthlyRes.status).toBe(403);
+      expect(suspendedMonthlyRes.body.error.code).toBe("ACCOUNT_SUSPENDED");
+
+      // 5. Delete the user from database while JWT is still valid
+      await prisma.user.delete({
+        where: { id: userCId },
+      });
+
+      // 6. Retry with still-valid token: assert 404 USER_NOT_FOUND even on cache hit
+      const deletedStatsRes = await request(app)
+        .get("/api/v1/users/me/statistics")
+        .set("Authorization", `Bearer ${tokenC}`);
+      expect(deletedStatsRes.status).toBe(404);
+      expect(deletedStatsRes.body.error.code).toBe("USER_NOT_FOUND");
+
+      const deletedMonthlyRes = await request(app)
+        .get("/api/v1/users/me/statistics/monthly")
+        .set("Authorization", `Bearer ${tokenC}`);
+      expect(deletedMonthlyRes.status).toBe(404);
+      expect(deletedMonthlyRes.body.error.code).toBe("USER_NOT_FOUND");
+
+      // 7. Verify normal active user (User A) is unaffected and receives valid responses
+      const activeRes = await request(app)
+        .get("/api/v1/users/me/statistics")
+        .set("Authorization", `Bearer ${tokenA}`);
+      expect(activeRes.status).toBe(200);
+      expect(activeRes.body.data.statistics.totalTrades).toBe(0);
+    });
   });
 
   afterAll(async () => {
