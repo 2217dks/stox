@@ -434,5 +434,245 @@ describe("cacheService", () => {
         hitRate: 0,
       });
     });
+
+    test("analytics helpers fall back to loader when Redis fails", async () => {
+      getRedis.mockRejectedValue(new Error("Redis cluster down"));
+
+      const heatmapLoader = jest.fn().mockResolvedValue({ heatmap: [] });
+      const statsLoader = jest.fn().mockResolvedValue({ totalTrades: 5 });
+
+      const heatmap = await cacheService.getOrSetPortfolioHeatmap(
+        "p-1",
+        "u-1",
+        { period: "1M" },
+        heatmapLoader,
+      );
+      expect(heatmap).toEqual({ heatmap: [] });
+      expect(heatmapLoader).toHaveBeenCalledTimes(1);
+
+      const stats = await cacheService.getOrSetUserStatistics(
+        "u-1",
+        { symbol: "AAPL" },
+        statsLoader,
+      );
+      expect(stats).toEqual({ totalTrades: 5 });
+      expect(statsLoader).toHaveBeenCalledTimes(1);
+
+      expect(logger.warn).toHaveBeenCalled();
+    });
+  });
+
+  describe("analytics helpers with generation-based isolation", () => {
+    const portfolioId = "port-123";
+    const userId = "user-456";
+
+    test("caches heatmap on miss using analyticsHeatmap TTL", async () => {
+      fakeRedis.get.mockImplementation(async (key) => {
+        if (key.includes("generation:portfolio")) return "1";
+        return null;
+      });
+
+      const loader = jest.fn().mockResolvedValue({ heatmap: [{ date: "2026-01-01" }] });
+      const result = await cacheService.getOrSetPortfolioHeatmap(
+        portfolioId,
+        userId,
+        { period: "1M" },
+        loader,
+      );
+
+      expect(result).toEqual({ heatmap: [{ date: "2026-01-01" }] });
+      expect(loader).toHaveBeenCalledTimes(1);
+      expect(fakeRedis.eval).toHaveBeenCalledWith(
+        expect.stringContaining("if redis.call(\"GET\", KEYS[1]) == ARGV[1] then"),
+        2,
+        `stox:v1:analytics:generation:portfolio:${portfolioId}`,
+        `stox:v1:analytics:p:${portfolioId}:u:${userId}:g:1:heatmap:1M:`,
+        "1",
+        JSON.stringify({ heatmap: [{ date: "2026-01-01" }] }),
+        cacheService.TTL_SECONDS.analyticsHeatmap,
+      );
+    });
+
+    test("returns cached heatmap on hit without invoking loader", async () => {
+      fakeRedis.get.mockImplementation(async (key) => {
+        if (key.includes("generation:portfolio")) return "1";
+        if (key.includes("heatmap")) return JSON.stringify({ cached: true });
+        return null;
+      });
+
+      const loader = jest.fn();
+      const result = await cacheService.getOrSetPortfolioHeatmap(
+        portfolioId,
+        userId,
+        { period: "1M" },
+        loader,
+      );
+
+      expect(result).toEqual({ cached: true });
+      expect(loader).not.toHaveBeenCalled();
+    });
+
+    test("caches risk metrics using analyticsRiskMetrics TTL", async () => {
+      fakeRedis.get.mockImplementation(async (key) => {
+        if (key.includes("generation:portfolio")) return "2";
+        return null;
+      });
+
+      const loader = jest.fn().mockResolvedValue({ annualizedVolatility: "0.1500" });
+      const result = await cacheService.getOrSetPortfolioRiskMetrics(
+        portfolioId,
+        userId,
+        { period: "1M", riskFreeRate: 0.02 },
+        loader,
+      );
+
+      expect(result).toEqual({ annualizedVolatility: "0.1500" });
+      expect(fakeRedis.eval).toHaveBeenCalledWith(
+        expect.any(String),
+        2,
+        `stox:v1:analytics:generation:portfolio:${portfolioId}`,
+        `stox:v1:analytics:p:${portfolioId}:u:${userId}:g:2:risk-metrics:1M:0.02`,
+        "2",
+        JSON.stringify({ annualizedVolatility: "0.1500" }),
+        cacheService.TTL_SECONDS.analyticsRiskMetrics,
+      );
+    });
+
+    test("caches benchmark and benchmark-comparison using respective TTLs", async () => {
+      fakeRedis.get.mockImplementation(async (key) => {
+        if (key.includes("generation:portfolio")) return "0";
+        return null;
+      });
+
+      const benchLoader = jest.fn().mockResolvedValue({ benchmark: "SPY" });
+      await cacheService.getOrSetPortfolioBenchmark(
+        portfolioId,
+        userId,
+        "SPY",
+        { period: "1M" },
+        benchLoader,
+      );
+      expect(fakeRedis.eval).toHaveBeenCalledWith(
+        expect.any(String),
+        2,
+        `stox:v1:analytics:generation:portfolio:${portfolioId}`,
+        `stox:v1:analytics:p:${portfolioId}:u:${userId}:g:0:benchmark:SPY:1M`,
+        "0",
+        JSON.stringify({ benchmark: "SPY" }),
+        cacheService.TTL_SECONDS.analyticsBenchmark,
+      );
+
+      const compLoader = jest.fn().mockResolvedValue({ beta: "1.05" });
+      await cacheService.getOrSetPortfolioBenchmarkComparison(
+        portfolioId,
+        userId,
+        "SPY",
+        { period: "1M", riskFreeRate: 0.02 },
+        compLoader,
+      );
+      expect(fakeRedis.eval).toHaveBeenCalledWith(
+        expect.any(String),
+        2,
+        `stox:v1:analytics:generation:portfolio:${portfolioId}`,
+        `stox:v1:analytics:p:${portfolioId}:u:${userId}:g:0:benchmark-comparison:SPY:1M:0.02`,
+        "0",
+        JSON.stringify({ beta: "1.05" }),
+        cacheService.TTL_SECONDS.analyticsBenchmarkComparison,
+      );
+    });
+
+    test("caches monthly performance using analyticsMonthlyPerformance TTL", async () => {
+      fakeRedis.get.mockImplementation(async (key) => {
+        if (key.includes("generation:portfolio")) return "0";
+        return null;
+      });
+
+      const loader = jest.fn().mockResolvedValue({ months: [] });
+      await cacheService.getOrSetPortfolioMonthlyPerformance(
+        portfolioId,
+        userId,
+        { year: 2026 },
+        loader,
+      );
+
+      expect(fakeRedis.eval).toHaveBeenCalledWith(
+        expect.any(String),
+        2,
+        `stox:v1:analytics:generation:portfolio:${portfolioId}`,
+        `stox:v1:analytics:p:${portfolioId}:u:${userId}:g:0:monthly:2026::`,
+        "0",
+        JSON.stringify({ months: [] }),
+        cacheService.TTL_SECONDS.analyticsMonthlyPerformance,
+      );
+    });
+
+    test("caches user statistics and monthly breakdown using userStatistics TTL", async () => {
+      fakeRedis.get.mockImplementation(async (key) => {
+        if (key.includes("generation:user")) return "5";
+        return null;
+      });
+
+      const statsLoader = jest.fn().mockResolvedValue({ totalTrades: 10 });
+      await cacheService.getOrSetUserStatistics(
+        userId,
+        { symbol: "AAPL", side: "BUY" },
+        statsLoader,
+      );
+      expect(fakeRedis.eval).toHaveBeenCalledWith(
+        expect.any(String),
+        2,
+        `stox:v1:analytics:generation:user:${userId}`,
+        `stox:v1:analytics:u:${userId}:g:5:stats::AAPL:BUY::::0`,
+        "5",
+        JSON.stringify({ totalTrades: 10 }),
+        cacheService.TTL_SECONDS.userStatistics,
+      );
+
+      const monthlyLoader = jest.fn().mockResolvedValue([{ month: "2026-01" }]);
+      await cacheService.getOrSetUserMonthlyStatistics(
+        userId,
+        {},
+        monthlyLoader,
+      );
+      expect(fakeRedis.eval).toHaveBeenCalledWith(
+        expect.any(String),
+        2,
+        `stox:v1:analytics:generation:user:${userId}`,
+        `stox:v1:analytics:u:${userId}:g:5:stats-monthly::::::`,
+        "5",
+        JSON.stringify([{ month: "2026-01" }]),
+        cacheService.TTL_SECONDS.userStatistics,
+      );
+    });
+
+    test("invalidations increment generation keys", async () => {
+      await cacheService.invalidatePortfolioAnalytics(portfolioId);
+      expect(fakeRedis.incr).toHaveBeenCalledWith(
+        `stox:v1:analytics:generation:portfolio:${portfolioId}`,
+      );
+
+      await cacheService.invalidateUserAnalytics(userId);
+      expect(fakeRedis.incr).toHaveBeenCalledWith(
+        `stox:v1:analytics:generation:user:${userId}`,
+      );
+
+      await cacheService.invalidateAnalytics({ portfolioId, userId });
+      expect(fakeRedis.incr).toHaveBeenCalledTimes(4);
+    });
+
+    test("does not cache when loader yields null or undefined", async () => {
+      fakeRedis.get.mockResolvedValue(null);
+      const nullLoader = jest.fn().mockResolvedValue(null);
+
+      const res = await cacheService.getOrSetPortfolioHeatmap(
+        portfolioId,
+        userId,
+        {},
+        nullLoader,
+      );
+
+      expect(res).toBeNull();
+      expect(fakeRedis.eval).not.toHaveBeenCalled();
+    });
   });
 });
