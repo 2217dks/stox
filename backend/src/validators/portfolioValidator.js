@@ -55,6 +55,62 @@ const riskFreeRateSchema = z.preprocess((val) => {
   return Number.isFinite(num) ? num : val;
 }, z.number().min(0, "Risk-free rate must be non-negative.").max(1, "Risk-free rate must not exceed 1.0 (100%).").default(0.02));
 
+const { dateBoundSchema } = require("./orderValidator");
+
+const YEAR_MONTH_PATTERN = /^\d{4}-\d{2}$/;
+const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const UTC_OFFSET_PATTERN = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+function parseYearMonthUtc(value, isUpper) {
+  const [year, month] = value.split("-").map(Number);
+  if (month < 1 || month > 12) {
+    return new Date(NaN);
+  }
+  if (!isUpper) {
+    return new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
+  }
+  return new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
+}
+
+function parseDateOnlyUtc(value, isUpper) {
+  const [year, month, day] = value.split("-").map(Number);
+  const original = new Date(Date.UTC(year, month - 1, day));
+  if (
+    original.getUTCFullYear() !== year ||
+    original.getUTCMonth() !== month - 1 ||
+    original.getUTCDate() !== day
+  ) {
+    return new Date(NaN);
+  }
+  if (isUpper) {
+    return new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
+  }
+  return new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
+}
+
+function monthlyDateBoundSchema(isUpper = false) {
+  return z
+    .string()
+    .transform((value) => value.trim())
+    .refine(
+      (value) =>
+        YEAR_MONTH_PATTERN.test(value) ||
+        DATE_ONLY_PATTERN.test(value) ||
+        UTC_OFFSET_PATTERN.test(value),
+      "Must be a month (YYYY-MM), a date (YYYY-MM-DD), or an ISO datetime with an explicit UTC offset (Z or ±HH:MM).",
+    )
+    .transform((value) => {
+      if (YEAR_MONTH_PATTERN.test(value)) {
+        return parseYearMonthUtc(value, isUpper);
+      }
+      if (DATE_ONLY_PATTERN.test(value)) {
+        return parseDateOnlyUtc(value, isUpper);
+      }
+      return value;
+    })
+    .pipe(z.coerce.date());
+}
+
 const yearSchema = z.preprocess((val) => {
   if (val === undefined || val === null || val === "") return undefined;
   const num = parseInt(val, 10);
@@ -82,6 +138,22 @@ const benchmarkComparisonQuerySchema = z.object({
   riskFreeRate: riskFreeRateSchema,
 });
 
+const monthlyPerformanceQuerySchema = z
+  .object({
+    year: yearSchema,
+    from: monthlyDateBoundSchema(false).optional(),
+    to: monthlyDateBoundSchema(true).optional(),
+  })
+  .superRefine((query, ctx) => {
+    if (query.from && query.to && query.from >= query.to) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["to"],
+        message: "'to' must be later than 'from'.",
+      });
+    }
+  });
+
 module.exports = {
   portfolioIdParamsSchema,
   updatePortfolioSchema,
@@ -89,4 +161,6 @@ module.exports = {
   benchmarkQuerySchema,
   riskMetricsQuerySchema,
   benchmarkComparisonQuerySchema,
+  monthlyPerformanceQuerySchema,
+  monthlyDateBoundSchema,
 };

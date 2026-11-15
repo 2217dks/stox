@@ -9,6 +9,7 @@ const {
   riskMetricsQuerySchema,
   benchmarkQuerySchema,
   benchmarkComparisonQuerySchema,
+  monthlyPerformanceQuerySchema,
 } = require("../validators/portfolioValidator");
 const portfolioController = require("../controllers/portfolioController");
 
@@ -91,6 +92,22 @@ router.get(
   validate(portfolioIdParamsSchema, "params", "validatedParams"),
   validate(benchmarkComparisonQuerySchema, "query", "validatedQuery"),
   portfolioController.getBenchmarkComparison,
+);
+
+router.get(
+  "/:portfolioId/monthly-performance",
+  authMiddleware,
+  validate(portfolioIdParamsSchema, "params", "validatedParams"),
+  validate(monthlyPerformanceQuerySchema, "query", "validatedQuery"),
+  portfolioController.getMonthlyPerformance,
+);
+
+router.get(
+  "/:portfolioId/analytics/monthly-performance",
+  authMiddleware,
+  validate(portfolioIdParamsSchema, "params", "validatedParams"),
+  validate(monthlyPerformanceQuerySchema, "query", "validatedQuery"),
+  portfolioController.getMonthlyPerformance,
 );
 
 module.exports = router;

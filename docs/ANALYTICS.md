@@ -29,6 +29,7 @@
   - [2. Benchmark Data (`GET /portfolios/:id/benchmark`)](#2-benchmark-data-get-portfoliosidbenchmark)
   - [3. Risk Metrics (`GET /portfolios/:id/risk-metrics`)](#3-risk-metrics-get-portfoliosidrisk-metrics)
   - [4. Benchmark Comparison (`GET /portfolios/:id/benchmark-comparison`)](#4-benchmark-comparison-get-portfoliosidbenchmark-comparison)
+  - [5. Monthly Performance Aggregation (`GET /portfolios/:id/analytics/monthly-performance`)](#5-monthly-performance-aggregation-get-portfoliosidanalyticsmonthly-performance)
 
 ---
 
@@ -279,4 +280,31 @@ Returns aligned comparative performance, alpha, beta, and correlation against th
   }
 }
 ```
+
+---
+
+### 5. Monthly Performance Aggregation (`GET /portfolios/:id/analytics/monthly-performance`)
+
+Aggregates portfolio valuation and trade performance into UTC calendar-month buckets (`YYYY-MM`).
+
+#### Mathematical Specifications
+- **Month Starting Valuation ($V_{\text{start}}$):**
+  - Taken from the end-of-day snapshot of the immediately preceding month ($T_{\text{prev},\text{end}}$) if available.
+  - If no prior month snapshot exists, defaults to the first recorded snapshot of the current month ($T_{\text{curr},\text{first}}$).
+- **Month Ending Valuation ($V_{\text{end}}$):**
+  - Taken from the latest recorded snapshot in the current month ($T_{\text{curr},\text{latest}}$).
+- **Monthly Net P&L:**
+  $$\text{NetPnL} = V_{\text{end}} - V_{\text{start}}$$
+- **Monthly Simple Return:**
+  $$\text{ReturnPct} = \frac{V_{\text{end}} - V_{\text{start}}}{V_{\text{start}}} \times 100$$
+  *(Returns `null` if $V_{\text{start}} \le 0$; formatted to 4 decimal places).*
+- **Monthly Realized P&L:**
+  $$\text{RealizedPnL} = \sum_{t \in \text{Trades}_{\text{month}}} \text{Trade.realizedPnl}_t$$
+- **Monthly Unrealized P&L:**
+  $$\text{UnrealizedPnL} = \text{NetPnL} - \text{RealizedPnL}$$
+
+#### Observation & Missing Month Policy
+- Months with zero recorded snapshots or trades are omitted from the output array.
+- Missing months are never populated with fabricated $0$ or simulated values.
+
 

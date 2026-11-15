@@ -1,5 +1,7 @@
 const prisma = require("../config/database");
+const { Prisma } = require("@prisma/client");
 const { getCurrentUser } = require("./authService");
+const { AppError } = require("../utils/errors");
 
 // Only the fields needed to build the statistics summary are read from the
 // database. Nothing here is user-identifying or sensitive.
@@ -42,13 +44,146 @@ function serializeTradeSummary(trade) {
  * The result is a fraction between 0 and 1, rounded to 4 decimal places.
  */
 function computeWinRate(winningTrades, losingTrades) {
-  const decidedTrades = winningTrades + losingTrades;
+  const wins = Math.max(0, Number(winningTrades) || 0);
+  const losses = Math.max(0, Number(losingTrades) || 0);
+  const decidedTrades = wins + losses;
 
   if (decidedTrades === 0) {
     return 0;
   }
 
-  return Math.round((winningTrades / decidedTrades) * 10000) / 10000;
+  return Math.round((wins / decidedTrades) * 10000) / 10000;
+}
+
+/**
+ * Construct Prisma filter scoped to user's portfolios and optional filters.
+ */
+function buildTradeFilter(userId, filters = {}) {
+  const where = {
+    portfolio: {
+      userId,
+    },
+  };
+
+  if (filters.portfolioId) {
+    where.portfolioId = filters.portfolioId;
+  }
+
+  if (filters.symbol) {
+    where.symbol = filters.symbol;
+  }
+
+  if (filters.side) {
+    where.side = filters.side;
+  }
+
+  if (filters.from || filters.to) {
+    where.executedAt = {};
+    if (filters.from) {
+      where.executedAt.gte = filters.from;
+    }
+    if (filters.to) {
+      where.executedAt.lt = filters.to;
+    }
+  }
+
+  return where;
+}
+
+/**
+ * Build monthly trade statistics aggregated by UTC calendar month.
+ */
+async function getMonthlyTradeStatistics(userId, filters = {}) {
+  await getCurrentUser(userId);
+
+  if (filters.portfolioId) {
+    const portfolio = await prisma.portfolio.findFirst({
+      where: {
+        id: filters.portfolioId,
+        userId,
+      },
+      select: { id: true },
+    });
+
+    if (!portfolio) {
+      throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+    }
+  }
+
+  const ownedTradeFilter = buildTradeFilter(userId, filters);
+
+  const trades = await prisma.trade.findMany({
+    where: ownedTradeFilter,
+    select: {
+      totalValue: true,
+      realizedPnl: true,
+      realizedPnlPct: true,
+      executedAt: true,
+    },
+    orderBy: {
+      executedAt: "asc",
+    },
+  });
+
+  const monthBuckets = new Map();
+
+  for (const trade of trades) {
+    const monthKey = trade.executedAt.toISOString().slice(0, 7);
+    if (!monthBuckets.has(monthKey)) {
+      monthBuckets.set(monthKey, []);
+    }
+    monthBuckets.get(monthKey).push(trade);
+  }
+
+  const sortedMonthKeys = Array.from(monthBuckets.keys()).sort();
+  const monthly = [];
+
+  for (const month of sortedMonthKeys) {
+    const monthTrades = monthBuckets.get(month);
+    const totalTrades = monthTrades.length;
+    let totalVolume = new Prisma.Decimal(0);
+    let winningTrades = 0;
+    let losingTrades = 0;
+    let totalRealizedPnl = new Prisma.Decimal(0);
+    let realizedReturnSum = new Prisma.Decimal(0);
+    let realizedReturnCount = 0;
+
+    for (const trade of monthTrades) {
+      if (trade.totalValue) {
+        totalVolume = totalVolume.plus(trade.totalValue);
+      }
+      if (trade.realizedPnl !== null && trade.realizedPnl !== undefined) {
+        totalRealizedPnl = totalRealizedPnl.plus(trade.realizedPnl);
+        if (trade.realizedPnl.gt(0)) {
+          winningTrades++;
+        } else if (trade.realizedPnl.lt(0)) {
+          losingTrades++;
+        }
+      }
+      if (trade.realizedPnlPct !== null && trade.realizedPnlPct !== undefined) {
+        realizedReturnSum = realizedReturnSum.plus(trade.realizedPnlPct);
+        realizedReturnCount++;
+      }
+    }
+
+    const winRate = computeWinRate(winningTrades, losingTrades);
+    const averageReturn = realizedReturnCount > 0
+      ? realizedReturnSum.dividedBy(realizedReturnCount).toFixed(4)
+      : null;
+
+    monthly.push({
+      month,
+      totalTrades,
+      winningTrades,
+      losingTrades,
+      winRate,
+      totalVolume: totalVolume.toString(),
+      realizedPnl: totalRealizedPnl.toString(),
+      averageReturn,
+    });
+  }
+
+  return monthly;
 }
 
 /**
@@ -58,18 +193,26 @@ function computeWinRate(winningTrades, losingTrades) {
  * from the verified access token (never from the request), so one user can
  * never read another user's numbers.
  */
-async function getUserStatistics(userId) {
+async function getUserStatistics(userId, filters = {}) {
   // Reuse the existing auth helper so a deleted or suspended account gets the
   // same 404/403 semantics as GET /auth/me and cannot read statistics.
   await getCurrentUser(userId);
 
-  // `portfolio.userId` ties every trade back to the authenticated user, which
-  // is also where the isolation is enforced.
-  const ownedTradeFilter = {
-    portfolio: {
-      userId,
-    },
-  };
+  if (filters.portfolioId) {
+    const portfolio = await prisma.portfolio.findFirst({
+      where: {
+        id: filters.portfolioId,
+        userId,
+      },
+      select: { id: true },
+    });
+
+    if (!portfolio) {
+      throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+    }
+  }
+
+  const ownedTradeFilter = buildTradeFilter(userId, filters);
 
   const [totals, winningTrades, losingTrades, bestTrade, worstTrade] =
     await Promise.all([
@@ -108,9 +251,7 @@ async function getUserStatistics(userId) {
             not: null,
           },
         },
-        orderBy: {
-          realizedPnl: "desc",
-        },
+        orderBy: [{ realizedPnl: "desc" }, { executedAt: "desc" }],
         select: TRADE_STAT_FIELDS,
       }),
       prisma.trade.findFirst({
@@ -120,14 +261,12 @@ async function getUserStatistics(userId) {
             not: null,
           },
         },
-        orderBy: {
-          realizedPnl: "asc",
-        },
+        orderBy: [{ realizedPnl: "asc" }, { executedAt: "desc" }],
         select: TRADE_STAT_FIELDS,
       }),
     ]);
 
-  return {
+  const response = {
     totalTrades: totals._count,
     winningTrades,
     losingTrades,
@@ -138,8 +277,19 @@ async function getUserStatistics(userId) {
     bestTrade: serializeTradeSummary(bestTrade),
     worstTrade: serializeTradeSummary(worstTrade),
   };
+
+  if (filters.includeMonthly) {
+    response.monthly = await getMonthlyTradeStatistics(userId, filters);
+  }
+
+  return response;
 }
 
 module.exports = {
+  toDecimalString,
+  serializeTradeSummary,
+  computeWinRate,
+  buildTradeFilter,
+  getMonthlyTradeStatistics,
   getUserStatistics,
 };

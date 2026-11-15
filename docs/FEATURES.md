@@ -150,15 +150,18 @@ Each holding includes:
 
 > Detailed mathematical specifications and implementation contracts are documented in [docs/ANALYTICS.md](ANALYTICS.md).
 
-## Trading Statistics
+## Trading Statistics & Performance Aggregation
 
-- Win rate
-- Winning trades
-- Losing trades
-- Average trade return
-- Best trade
-- Worst trade
-- Total trading volume
+> Detailed mathematical specifications and implementation contracts are documented in [docs/TRADING_STATISTICS.md](TRADING_STATISTICS.md) and [docs/ANALYTICS.md](ANALYTICS.md).
+
+- **Win rate:** Ratio of profitable trades to decided trades: $W / (W + L)$ (breakeven and open trades excluded from denominator).
+- **Winning trades:** Number of trade executions with `realizedPnl > 0`.
+- **Losing trades:** Number of trade executions with `realizedPnl < 0`.
+- **Average trade return:** Mean percentage return across realized trades.
+- **Best trade:** Executed trade with highest realized profit.
+- **Worst trade:** Executed trade with highest realized loss.
+- **Total trading volume:** Aggregate trading value across executions.
+- **Monthly Performance Aggregation:** UTC calendar-month aggregation of portfolio valuation changes, simple returns, realized P&L, and unrealized valuation shifts.
 
 ---
 
