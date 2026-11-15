@@ -3,6 +3,7 @@ const {
   benchmarkQuerySchema,
   riskMetricsQuerySchema,
   benchmarkComparisonQuerySchema,
+  monthlyPerformanceQuerySchema,
 } = require("../../../src/validators/portfolioValidator");
 
 describe("Portfolio Analytics Validators Unit Tests", () => {
@@ -94,6 +95,41 @@ describe("Portfolio Analytics Validators Unit Tests", () => {
         period: "6M",
         riskFreeRate: 0.03,
       });
+    });
+  });
+
+  describe("monthlyPerformanceQuerySchema", () => {
+    test("accepts empty query with undefined defaults", () => {
+      const parsed = monthlyPerformanceQuerySchema.parse({});
+      expect(parsed).toEqual({
+        year: undefined,
+        from: undefined,
+        to: undefined,
+      });
+    });
+
+    test("parses year integer", () => {
+      const parsed = monthlyPerformanceQuerySchema.parse({ year: "2026" });
+      expect(parsed.year).toBe(2026);
+    });
+
+    test("parses from and to date bounds", () => {
+      const parsed = monthlyPerformanceQuerySchema.parse({
+        from: "2026-01-01",
+        to: "2026-06-30",
+      });
+      expect(parsed.from).toBeInstanceOf(Date);
+      expect(parsed.to).toBeInstanceOf(Date);
+      expect(parsed.from.getTime()).toBeLessThan(parsed.to.getTime());
+    });
+
+    test("rejects when from is later than to", () => {
+      expect(() =>
+        monthlyPerformanceQuerySchema.parse({
+          from: "2026-06-01T00:00:00Z",
+          to: "2026-01-01T00:00:00Z",
+        }),
+      ).toThrow();
     });
   });
 });

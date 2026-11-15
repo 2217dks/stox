@@ -8,6 +8,7 @@ jest.mock("../../../src/config/database", () => ({
     aggregate: jest.fn(),
     count: jest.fn(),
     findFirst: jest.fn(),
+    findMany: jest.fn(),
   },
   $disconnect: jest.fn(),
 }));
@@ -396,6 +397,81 @@ describe("userStatisticsService unit tests", () => {
       expect(result.winningTrades).toBe(0);
       expect(result.losingTrades).toBe(2);
       expect(result.winRate).toBe(0);
+    });
+
+    test("preserves 8 decimal place high precision values without float distortion", async () => {
+      prisma.trade.aggregate.mockResolvedValue({
+        _count: 1,
+        _sum: { totalValue: new Prisma.Decimal("12345678.12345678") },
+        _avg: { realizedPnlPct: new Prisma.Decimal("12.34567891") },
+      });
+      prisma.trade.count
+        .mockResolvedValueOnce(1)
+        .mockResolvedValueOnce(0);
+      prisma.trade.findFirst
+        .mockResolvedValueOnce({
+          symbol: "BTCUSDT",
+          realizedPnl: new Prisma.Decimal("98765.43210987"),
+          realizedPnlPct: new Prisma.Decimal("12.34567891"),
+        })
+        .mockResolvedValueOnce(null);
+
+      const result = await getUserStatistics(userId);
+
+      expect(result.totalVolume).toBe("12345678.12345678");
+      expect(result.averageReturn).toBe("12.34567891");
+      expect(result.bestTrade?.realizedPnl).toBe("98765.43210987");
+      expect(result.bestTrade?.realizedPnlPct).toBe("12.34567891");
+    });
+  });
+
+  describe("getMonthlyTradeStatistics", () => {
+    test("aggregates trades across multiple months and year rollover", async () => {
+      prisma.trade.findMany.mockResolvedValue([
+        {
+          totalValue: new Prisma.Decimal("1000"),
+          realizedPnl: new Prisma.Decimal("100"),
+          realizedPnlPct: new Prisma.Decimal("10"),
+          executedAt: new Date("2025-12-31T23:59:59.000Z"),
+        },
+        {
+          totalValue: new Prisma.Decimal("2000"),
+          realizedPnl: new Prisma.Decimal("-50"),
+          realizedPnlPct: new Prisma.Decimal("-2.5"),
+          executedAt: new Date("2026-01-01T00:00:00.000Z"),
+        },
+        {
+          totalValue: new Prisma.Decimal("3000"),
+          realizedPnl: new Prisma.Decimal("150"),
+          realizedPnlPct: new Prisma.Decimal("5"),
+          executedAt: new Date("2026-01-15T12:00:00.000Z"),
+        },
+      ]);
+
+      const { getMonthlyTradeStatistics } = require("../../../src/services/userStatisticsService");
+      const monthly = await getMonthlyTradeStatistics(userId);
+
+      expect(monthly).toHaveLength(2);
+
+      // Dec 2025
+      expect(monthly[0].month).toBe("2025-12");
+      expect(monthly[0].totalTrades).toBe(1);
+      expect(monthly[0].winningTrades).toBe(1);
+      expect(monthly[0].losingTrades).toBe(0);
+      expect(monthly[0].winRate).toBe(1);
+      expect(monthly[0].totalVolume).toBe("1000");
+      expect(monthly[0].realizedPnl).toBe("100");
+      expect(monthly[0].averageReturn).toBe("10.0000");
+
+      // Jan 2026
+      expect(monthly[1].month).toBe("2026-01");
+      expect(monthly[1].totalTrades).toBe(2);
+      expect(monthly[1].winningTrades).toBe(1);
+      expect(monthly[1].losingTrades).toBe(1);
+      expect(monthly[1].winRate).toBe(0.5);
+      expect(monthly[1].totalVolume).toBe("5000");
+      expect(monthly[1].realizedPnl).toBe("100");
+      expect(monthly[1].averageReturn).toBe("1.2500");
     });
   });
 });
