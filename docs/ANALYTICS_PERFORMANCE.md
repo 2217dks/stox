@@ -135,8 +135,10 @@ Instead of fetching all individual trade entities into Node.js:
 - Drastically reduces row transfer, deserialization overhead, and garbage collection churn.
 
 ### Consolidation of User Statistics Queries
-- Combine overall trade counts, realized P&L filters, and volume sums into optimized Prisma aggregate / conditional queries where supported.
-- Maintain Decimal precision and exact formatting compatibility.
+- Consolidated 5 separate Prisma database round trips (`aggregate`, 2 `count` calls, and 2 `findFirst` calls for best and worst trades) into a single parameterized SQL query using Common Table Expressions (`WITH filtered_trades AS (...), summary AS (...), best AS (...), worst AS (...)`).
+- Best and worst trade calculations preserve exact numeric ordering (`ORDER BY f."realizedPnl" DESC/ASC, f."executedAt" DESC LIMIT 1`) and serialize directly into JSON objects via PostgreSQL `to_jsonb`.
+- Arbitrary decimal precision is preserved using text casts (`::text`) and `Prisma.Decimal` normalization, eliminating floating-point rounding or precision loss.
+- Achieves an 80% reduction in database round trips (from 5 queries down to 1) per statistics request, minimizing connection pool contention.
 
 ### Index Profiling & Plan Evidence
 - Add composite index on `Trade (portfolioId, executedAt)` in `schema.prisma`.
@@ -159,9 +161,15 @@ Instead of fetching all individual trade entities into Node.js:
 
 ## Measured Benchmark Results & Query Plan Evidence
 
+### Environment & Test Configuration
+- **Database Engine**: PostgreSQL 18.6 (64-bit)
+- **Session TimeZone**: `UTC` / `Asia/Kolkata`
+- **Timing Methodology**: PostgreSQL `EXPLAIN (ANALYZE, BUFFERS)` execution via local Prisma database adapter.
+- **Dataset Size**: Zero-row test fixture schema (used intentionally as an index-selection check to inspect query plan structure and operator selection without data skew).
+
 ### Database Query Optimization & Indexing Evidence
 
-#### Trade Range Scan & Sort Optimization
+#### Trade Range Scan & Sort Optimization (Index-Selection Check)
 Target Query:
 ```sql
 SELECT * FROM "Trade"
@@ -190,15 +198,18 @@ Index Scan using "Trade_portfolioId_executedAt_idx" on "Trade"  (cost=0.13..8.15
 Planning Time: 0.473 ms
 Execution Time: 0.034 ms
 ```
-- **Execution Speedup:** ~19x latency reduction on test data.
-- **Algorithmic Complexity:** Eliminated explicit in-memory `quicksort` step, converting query from $O(N \log N)$ to an index range scan $O(\log N + K)$.
+
+**Index-Selection & Performance Qualification:**
+- **Verification Purpose**: The test above serves as an **index-selection check** confirming that the PostgreSQL query planner chooses the composite B-Tree index `Trade_portfolioId_executedAt_idx` for date-bounded portfolio lookups.
+- **Timing Qualification**: On empty or near-empty tables, sub-millisecond execution times (0.661 ms vs 0.034 ms) reflect query planner overhead, cold vs warm catalog buffer cache, and executor initialization rather than sustained production throughput gains.
+- **Algorithmic Complexity**: The definitive architectural gain is the elimination of the explicit in-memory `quicksort` step (`Sort Method: quicksort`). Under sequential scans, sort complexity scales as $O(N \log N)$ where $N$ is all trades in the portfolio. With the composite index on `("portfolioId", "executedAt")`, rows are read in pre-sorted order directly from the index B-tree ($O(\log N + K)$ where $K$ is the number of rows in the requested date range).
 
 #### Monthly Trade Statistics Aggregation
-- **Before:** Node.js loaded all matching trade objects into application memory via `prisma.trade.findMany`, creating a JavaScript `Map` and iterating through every row to compute counts, sums, and averages.
-- **After:** PostgreSQL executes single-pass aggregation query:
+- **Before**: Node.js loaded all matching trade objects into application memory via `prisma.trade.findMany`, creating a JavaScript `Map` and iterating through every row to compute counts, sums, and averages.
+- **After**: PostgreSQL executes a single-pass aggregation query:
   ```sql
   SELECT
-    TO_CHAR(timezone('UTC', t."executedAt"), 'YYYY-MM') AS "month",
+    TO_CHAR(t."executedAt", 'YYYY-MM') AS "month",
     COUNT(*)::int AS "totalTrades",
     COUNT(CASE WHEN t."realizedPnl" > 0 THEN 1 END)::int AS "winningTrades",
     COUNT(CASE WHEN t."realizedPnl" < 0 THEN 1 END)::int AS "losingTrades",
@@ -211,13 +222,27 @@ Execution Time: 0.034 ms
   GROUP BY "month"
   ORDER BY "month" ASC;
   ```
-- **Network & Memory Reduction:** Payload transferred from database to Node.js reduced from $O(N)$ individual trade rows to $O(M)$ calendar month records ($M \le 12$ per year).
+- **Timezone Safety**: Direct formatting of the UTC `timestamp without time zone` column (`TO_CHAR(t."executedAt", 'YYYY-MM')`) guarantees identical calendar-month grouping regardless of the client or PostgreSQL session `TimeZone`.
+- **Network & Memory Reduction**: Payload transferred from database to Node.js reduced from $O(N)$ individual trade rows to $O(M)$ calendar month records ($M \le 12$ per year).
+
+#### Consolidated User Statistics Query
+- **Before**: `getUserStatistics` executed 5 separate Prisma queries in parallel via `Promise.all`:
+  1. `trade.aggregate` (total trade count, total volume sum, average realized P&L percentage)
+  2. `trade.count` (winning trades: `realizedPnl > 0`)
+  3. `trade.count` (losing trades: `realizedPnl < 0`)
+  4. `trade.findFirst` (best trade: `realizedPnl DESC, executedAt DESC`)
+  5. `trade.findFirst` (worst trade: `realizedPnl ASC, executedAt DESC`)
+- **After**: Consolidated into 1 single parameterized query using Common Table Expressions (`WITH filtered_trades AS (...), summary AS (...), best AS (...), worst AS (...)`):
+  - Fetches summary statistics and JSON-serialized best and worst trades in **1 database round trip**.
+  - Eliminates 4 round trips per request (80% query reduction).
+  - Preserves exact tie-breaking, null handling, and arbitrary decimal precision.
 
 ### Caching Latency Improvements
-- **Cached Endpoints:**
+- **Cached Endpoints**:
   - `GET /portfolios/:id/analytics/monthly-performance`: ~10ms (miss/compute) $\to$ 1ms (cache hit, 90% latency reduction).
   - `GET /users/me/statistics`: ~45ms (miss/compute) $\to$ 2ms (cache hit, 95% latency reduction).
-- **Concurrency & Freshness:**
+- **Concurrency & Freshness**:
   - Zero stale cache races: verified via Lua check-and-set and unit test `analyticsCacheRace.test.js`.
   - Zero cross-user cache contamination: tested via `analyticsPerformance.integration.test.js`.
+  - Account status pre-validation: suspended (403) and deleted (404) accounts are rejected before cache reads.
 
