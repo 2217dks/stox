@@ -40,14 +40,21 @@ Redis is used as a caching layer in front of PostgreSQL for hot data. The goal: 
 
 ## 🎯 What We Cache
 
-| Data               | Key Pattern                               | TTL        | Invalidation  |
-| ------------------ | ----------------------------------------- | ---------- | ------------- |
-| Stock prices       | `price:{symbol}`                          | 5 seconds  | On new tick   |
-| Portfolio summary  | `portfolio:{id}`                          | 30 seconds | On trade      |
-| Leaderboard        | `leaderboard:{type}`                      | 60 seconds | On trade      |
-| User session       | `session:{userId}`                        | 7 days     | On logout     |
-| Historical candles | `history:{symbol}:{interval}:{from}:{to}` | 1 hour     | On new candle |
-| Symbol metadata    | `symbol:{symbol}`                         | 24 hours   | Manual        |
+| Data                          | Key Pattern                                                              | TTL        | Invalidation            |
+| ----------------------------- | ------------------------------------------------------------------------ | ---------- | ----------------------- |
+| Stock prices                  | `price:{symbol}`                                                         | 5 seconds  | On new tick             |
+| Portfolio summary             | `portfolio:{id}`                                                         | 30 seconds | On trade                |
+| Leaderboard                   | `leaderboard:{type}`                                                     | 60 seconds | On trade                |
+| User session                  | `session:{userId}`                                                       | 7 days     | On logout               |
+| Historical candles            | `history:{symbol}:{interval}:{from}:{to}`                                | 1 hour     | On new candle           |
+| Symbol metadata               | `symbol:{symbol}`                                                        | 24 hours   | Manual                  |
+| Portfolio P&L Heatmap         | `analytics:v1:user:{ownerId}:portfolio:{id}:heatmap:gen:{gen}`           | 5 minutes  | On trade / position chg |
+| Portfolio Risk Metrics        | `analytics:v1:user:{ownerId}:portfolio:{id}:risk:gen:{gen}:{filters}`    | 5 minutes  | On snapshot capture     |
+| Portfolio Benchmark           | `analytics:v1:user:{ownerId}:portfolio:{id}:benchmark:{sym}:gen:{gen}`   | 1 hour     | On benchmark update     |
+| Benchmark Comparison          | `analytics:v1:user:{ownerId}:portfolio:{id}:comparison:{sym}:gen:{gen}`  | 5 minutes  | On snapshot / benchmark |
+| Portfolio Monthly Performance | `analytics:v1:user:{ownerId}:portfolio:{id}:monthly:gen:{gen}:{filters}` | 5 minutes  | On snapshot / trade     |
+| User Trading Statistics       | `analytics:v1:user:{userId}:statistics:gen:{gen}:{filters}`             | 2 minutes  | On trade execution      |
+| User Monthly Statistics       | `analytics:v1:user:{userId}:statistics:monthly:gen:{gen}:{filters}`     | 2 minutes  | On trade execution      |
 
 ---
 
@@ -153,13 +160,40 @@ export default new CacheService();
 
 **Cache invalidation is triggered on writes:**
 
-| Action            | Invalidates                                                            |
-| ----------------- | ---------------------------------------------------------------------- |
-| Trade executed    | `portfolio:{id}`, `leaderboard:global`, `leaderboard:friends:{userId}` |
-| Portfolio updated | `portfolio:{id}`                                                       |
-| New price tick    | `price:{symbol}` (overwritten, not deleted)                            |
-| User logs out     | `session:{userId}`                                                     |
-| Alert triggered   | (No cache to invalidate)                                               |
+| Action                  | Invalidates                                                                                                                   |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Trade executed          | `portfolio:{id}`, `leaderboard:global`, `leaderboard:friends:{userId}`, portfolio analytics generation, user stats generation |
+| Snapshot captured       | Portfolio analytics generation for affected portfolio (`portfolio:{id}`)                                                     |
+| Position/holding update | `portfolio:{id}`, portfolio analytics generation                                                                              |
+| Portfolio updated       | `portfolio:{id}`, portfolio analytics generation                                                                              |
+| New price tick          | `price:{symbol}` (overwritten, not deleted)                                                                                   |
+| User logs out           | `session:{userId}`                                                                                                            |
+| Alert triggered         | (No cache to invalidate)                                                                                                      |
+
+### 🛡️ Generation-Guarded Invalidation & Race Protection
+
+Analytics calculations (e.g. risk metrics, Sharpe ratio, benchmark beta/alpha, monthly aggregation) can take tens to hundreds of milliseconds on large datasets. If a trade executes while an analytics computation is in flight, a naive cache-aside pattern would allow the stale in-flight loader to write its obsolete data back into the cache after the trade has committed, serving stale analytics for the full duration of the TTL.
+
+Stox solves this using **atomic generation counters** paired with a Lua check-and-set script:
+
+1. **Atomic Generation Tracking:**
+   - Each portfolio maintains `analytics:generation:portfolio:{portfolioId}`.
+   - Each user maintains `analytics:generation:user:{userId}`.
+2. **Read Path:**
+   - Reader captures current generation $G_0$ before starting the database computation.
+3. **Write Path (Atomic Lua Script):**
+   ```lua
+   if redis.call("GET", KEYS[1]) == ARGV[1] then
+     redis.call("SET", KEYS[2], ARGV[2], "EX", ARGV[3])
+     return 1
+   end
+   return 0
+   ```
+4. **Invalidation on Mutation:**
+   - Post-commit database hooks atomically increment the generation via `INCR`.
+   - Any in-flight loader holding generation $G_0$ fails the check ($G_0 \ne G_0 + 1$) and its stale result is discarded.
+5. **Fail-Open Resilience:**
+   - If Redis is unavailable, requests bypass the cache and compute fresh values directly from PostgreSQL without raising errors.
 
 **Example:**
 
