@@ -258,4 +258,28 @@ describe("userStatisticsService unit tests", () => {
       }),
     );
   });
+
+  test("filters aggregate trade count and volume by symbol and side", async () => {
+    prisma.trade.aggregate.mockResolvedValue({
+      _count: 3,
+      _sum: { totalValue: new Prisma.Decimal("3000") },
+      _avg: { realizedPnlPct: new Prisma.Decimal("12.5") },
+    });
+    prisma.trade.count.mockResolvedValue(2);
+    prisma.trade.findFirst.mockResolvedValue(null);
+
+    const result = await getUserStatistics(userId, { symbol: "AAPL", side: "SELL" });
+
+    expect(result.totalTrades).toBe(3);
+    expect(result.totalVolume).toBe("3000");
+    expect(prisma.trade.aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          portfolio: { userId },
+          symbol: "AAPL",
+          side: "SELL",
+        }),
+      }),
+    );
+  });
 });
