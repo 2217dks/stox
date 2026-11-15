@@ -209,9 +209,15 @@ async function getRiskMetrics(req, res, next) {
 
     await portfolioService.getPortfolioById(userId, portfolioId);
 
-    const result = await riskMetricsService.getPortfolioRiskMetrics(
+    const result = await cacheService.getOrSetPortfolioRiskMetrics(
       portfolioId,
+      userId,
       { period, riskFreeRate },
+      () =>
+        riskMetricsService.getPortfolioRiskMetrics(portfolioId, {
+          period,
+          riskFreeRate,
+        }),
     );
 
     return res.status(200).json({
