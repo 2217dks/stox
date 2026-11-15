@@ -1,5 +1,6 @@
 const prisma = require("../config/database");
 const { getCurrentUser } = require("./authService");
+const { AppError } = require("../utils/errors");
 
 // Only the fields needed to build the statistics summary are read from the
 // database. Nothing here is user-identifying or sensitive.
@@ -97,6 +98,20 @@ async function getUserStatistics(userId, filters = {}) {
   // Reuse the existing auth helper so a deleted or suspended account gets the
   // same 404/403 semantics as GET /auth/me and cannot read statistics.
   await getCurrentUser(userId);
+
+  if (filters.portfolioId) {
+    const portfolio = await prisma.portfolio.findFirst({
+      where: {
+        id: filters.portfolioId,
+        userId,
+      },
+      select: { id: true },
+    });
+
+    if (!portfolio) {
+      throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+    }
+  }
 
   const ownedTradeFilter = buildTradeFilter(userId, filters);
 

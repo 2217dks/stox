@@ -1,6 +1,9 @@
 const { Prisma } = require("@prisma/client");
 
 jest.mock("../../../src/config/database", () => ({
+  portfolio: {
+    findFirst: jest.fn(),
+  },
   trade: {
     aggregate: jest.fn(),
     count: jest.fn(),
@@ -106,7 +109,7 @@ describe("userStatisticsService helper functions", () => {
   });
 });
 
-describe("userStatisticsService unit tests (baseline fixtures)", () => {
+describe("userStatisticsService unit tests", () => {
   const userId = "user-uuid-1111";
 
   beforeEach(() => {
@@ -209,6 +212,49 @@ describe("userStatisticsService unit tests (baseline fixtures)", () => {
       1,
       expect.objectContaining({
         where: expect.objectContaining(expectedFilter),
+      }),
+    );
+  });
+
+  test("throws PORTFOLIO_NOT_FOUND when portfolioId is not owned by user", async () => {
+    prisma.portfolio.findFirst.mockResolvedValue(null);
+
+    await expect(
+      getUserStatistics(userId, { portfolioId: "foreign-portfolio-id" }),
+    ).rejects.toMatchObject({
+      statusCode: 404,
+      code: "PORTFOLIO_NOT_FOUND",
+      message: "Portfolio not found.",
+    });
+
+    expect(prisma.portfolio.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: "foreign-portfolio-id",
+        userId,
+      },
+      select: { id: true },
+    });
+    expect(prisma.trade.aggregate).not.toHaveBeenCalled();
+  });
+
+  test("scopes queries to specific portfolio when portfolioId belongs to user", async () => {
+    prisma.portfolio.findFirst.mockResolvedValue({ id: "owned-port-id" });
+    prisma.trade.aggregate.mockResolvedValue({
+      _count: 1,
+      _sum: { totalValue: new Prisma.Decimal("100") },
+      _avg: { realizedPnlPct: new Prisma.Decimal("10") },
+    });
+    prisma.trade.count.mockResolvedValue(1);
+    prisma.trade.findFirst.mockResolvedValue(null);
+
+    await getUserStatistics(userId, { portfolioId: "owned-port-id" });
+
+    expect(prisma.trade.aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          portfolio: { userId },
+          portfolioId: "owned-port-id",
+        }),
       }),
     );
   });
