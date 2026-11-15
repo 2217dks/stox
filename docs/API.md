@@ -125,6 +125,79 @@ Updates profile information.
 
 # 👤 Users
 
+## `GET /users/me/statistics`
+
+Get aggregate trading statistics for the authenticated user, optionally filtered by portfolio, symbol, execution side, date range, or including monthly breakdown.
+
+Requires Bearer JWT authentication. Automatically self-scoped to the authenticated user's portfolios.
+
+### Query Parameters
+
+| Parameter        | Type    | Default | Description |
+|------------------|---------|---------|-------------|
+| `portfolioId`    | UUID    | -       | Scopes statistics to a specific portfolio owned by the caller. Returns 404 if not found or not owned. |
+| `symbol`         | string  | -       | Filter by instrument symbol (e.g. `AAPL`). |
+| `side`           | enum    | -       | Filter by trade side: `BUY` or `SELL`. |
+| `from`           | string  | -       | Lower bound on `executedAt` (`YYYY-MM-DD` or ISO timestamp). |
+| `to`             | string  | -       | Upper bound on `executedAt` (`YYYY-MM-DD` or ISO timestamp, strictly later than `from`). |
+| `includeMonthly` | boolean | `false` | If `true`, includes monthly trade statistics array under `data.statistics.monthly`. |
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "statistics": {
+      "totalTrades": 5,
+      "winningTrades": 2,
+      "losingTrades": 1,
+      "winRate": 0.6667,
+      "totalVolume": "5400.00000000",
+      "averageReturn": "5.5000",
+      "bestTrade": {
+        "symbol": "MSFT",
+        "realizedPnl": "500.00000000",
+        "realizedPnlPct": "20.0000"
+      },
+      "worstTrade": {
+        "symbol": "TSLA",
+        "realizedPnl": "-300.00000000",
+        "realizedPnlPct": "-8.0000"
+      }
+    }
+  }
+}
+```
+
+## `GET /users/me/statistics/monthly`
+
+Get trade execution performance aggregated into UTC calendar-month buckets for the authenticated user.
+
+Supports the same query filters (`portfolioId`, `symbol`, `side`, `from`, `to`).
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "monthly": [
+      {
+        "month": "2026-01",
+        "totalTrades": 10,
+        "winningTrades": 6,
+        "losingTrades": 3,
+        "winRate": 0.6667,
+        "totalVolume": "15000.00000000",
+        "realizedPnl": "1200.00000000",
+        "averageReturn": "4.5000"
+      }
+    ]
+  }
+}
+```
+
 ## `GET /users/:id`
 
 Get a public profile containing the user's ID, name, avatar URL, follower, following, and visible-post counts.
@@ -360,6 +433,62 @@ Compare portfolio performance directly against a benchmark symbol over mutually 
 > **Note on Comparison Alignment & Returns:** 
 > - Initial observations without a preceding close/value or dates with missing returns have `portfolioReturn` / `benchmarkReturn` set to `null` rather than substituted zero.
 > - Statistical metrics (`alpha`, `beta`, `correlation`) are calculated strictly across mutual dates where **both** portfolio and benchmark returns are defined ($M \ge 2$). Dates where either return is `null` are excluded from covariance and variance calculations to avoid distorting risk metrics.
+
+## `GET /portfolios/:id/analytics/monthly-performance`
+
+Get portfolio valuation performance and P&L aggregated into UTC calendar-month buckets. (Also accessible via `GET /portfolios/:id/monthly-performance`).
+
+Requires Bearer JWT authentication and verifies portfolio ownership.
+
+### Query Parameters
+
+| Parameter | Type   | Default | Description |
+|-----------|--------|---------|-------------|
+| `year`    | int    | -       | Optional calendar year filter (e.g. `2026`). |
+| `from`    | string | -       | Optional lower bound (`YYYY-MM` or `YYYY-MM-DD`). |
+| `to`      | string | -       | Optional upper bound (`YYYY-MM` or `YYYY-MM-DD`). |
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolioId": "uuid",
+    "months": [
+      {
+        "month": "2026-01",
+        "startValue": "10000.00000000",
+        "endValue": "10500.00000000",
+        "netPnl": "500.00000000",
+        "returnPct": "5.0000",
+        "realizedPnl": "200.00000000",
+        "unrealizedPnl": "300.00000000",
+        "snapshotCount": 20
+      },
+      {
+        "month": "2026-02",
+        "startValue": "10500.00000000",
+        "endValue": "11000.00000000",
+        "netPnl": "500.00000000",
+        "returnPct": "4.7619",
+        "realizedPnl": "300.00000000",
+        "unrealizedPnl": "200.00000000",
+        "snapshotCount": 19
+      }
+    ]
+  }
+}
+```
+
+> **Calculation Semantics:**
+> - `startValue`: Starting valuation for the month, taken from the prior month's final snapshot if available, or the first snapshot of this month.
+> - `endValue`: Ending valuation for the month from the latest recorded snapshot.
+> - `netPnl`: $V_{\text{end}} - V_{\text{start}}$.
+> - `returnPct`: $\frac{V_{\text{end}} - V_{\text{start}}}{V_{\text{start}}} \times 100$.
+> - `realizedPnl`: Sum of realized P&L from trades executed in that portfolio during the month.
+> - `unrealizedPnl`: Net shift in unrealized holding valuation ($netPnl - realizedPnl$).
+> - Months without recorded snapshots or trades are omitted (never fabricated with fake zero returns).
 
 ---
 
