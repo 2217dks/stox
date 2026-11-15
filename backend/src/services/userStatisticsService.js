@@ -43,13 +43,15 @@ function serializeTradeSummary(trade) {
  * The result is a fraction between 0 and 1, rounded to 4 decimal places.
  */
 function computeWinRate(winningTrades, losingTrades) {
-  const decidedTrades = winningTrades + losingTrades;
+  const wins = Math.max(0, Number(winningTrades) || 0);
+  const losses = Math.max(0, Number(losingTrades) || 0);
+  const decidedTrades = wins + losses;
 
   if (decidedTrades === 0) {
     return 0;
   }
 
-  return Math.round((winningTrades / decidedTrades) * 10000) / 10000;
+  return Math.round((wins / decidedTrades) * 10000) / 10000;
 }
 
 /**
