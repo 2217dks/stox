@@ -10,6 +10,7 @@ jest.mock("../../../src/config/database", () => ({
     findFirst: jest.fn(),
     findMany: jest.fn(),
   },
+  $queryRaw: jest.fn(),
   $disconnect: jest.fn(),
 }));
 
@@ -427,24 +428,24 @@ describe("userStatisticsService unit tests", () => {
 
   describe("getMonthlyTradeStatistics", () => {
     test("aggregates trades across multiple months and year rollover", async () => {
-      prisma.trade.findMany.mockResolvedValue([
+      prisma.$queryRaw.mockResolvedValue([
         {
-          totalValue: new Prisma.Decimal("1000"),
-          realizedPnl: new Prisma.Decimal("100"),
-          realizedPnlPct: new Prisma.Decimal("10"),
-          executedAt: new Date("2025-12-31T23:59:59.000Z"),
+          month: "2025-12",
+          totalTrades: 1,
+          winningTrades: 1,
+          losingTrades: 0,
+          totalVolume: "1000",
+          realizedPnl: "100",
+          avgRealizedPnlPct: "10",
         },
         {
-          totalValue: new Prisma.Decimal("2000"),
-          realizedPnl: new Prisma.Decimal("-50"),
-          realizedPnlPct: new Prisma.Decimal("-2.5"),
-          executedAt: new Date("2026-01-01T00:00:00.000Z"),
-        },
-        {
-          totalValue: new Prisma.Decimal("3000"),
-          realizedPnl: new Prisma.Decimal("150"),
-          realizedPnlPct: new Prisma.Decimal("5"),
-          executedAt: new Date("2026-01-15T12:00:00.000Z"),
+          month: "2026-01",
+          totalTrades: 2,
+          winningTrades: 1,
+          losingTrades: 1,
+          totalVolume: "5000",
+          realizedPnl: "100",
+          avgRealizedPnlPct: "1.25",
         },
       ]);
 
