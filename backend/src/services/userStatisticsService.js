@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const { Prisma } = require("@prisma/client");
 const { getCurrentUser } = require("./authService");
 const { AppError } = require("../utils/errors");
 
@@ -90,6 +91,102 @@ function buildTradeFilter(userId, filters = {}) {
 }
 
 /**
+ * Build monthly trade statistics aggregated by UTC calendar month.
+ */
+async function getMonthlyTradeStatistics(userId, filters = {}) {
+  await getCurrentUser(userId);
+
+  if (filters.portfolioId) {
+    const portfolio = await prisma.portfolio.findFirst({
+      where: {
+        id: filters.portfolioId,
+        userId,
+      },
+      select: { id: true },
+    });
+
+    if (!portfolio) {
+      throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+    }
+  }
+
+  const ownedTradeFilter = buildTradeFilter(userId, filters);
+
+  const trades = await prisma.trade.findMany({
+    where: ownedTradeFilter,
+    select: {
+      totalValue: true,
+      realizedPnl: true,
+      realizedPnlPct: true,
+      executedAt: true,
+    },
+    orderBy: {
+      executedAt: "asc",
+    },
+  });
+
+  const monthBuckets = new Map();
+
+  for (const trade of trades) {
+    const monthKey = trade.executedAt.toISOString().slice(0, 7);
+    if (!monthBuckets.has(monthKey)) {
+      monthBuckets.set(monthKey, []);
+    }
+    monthBuckets.get(monthKey).push(trade);
+  }
+
+  const sortedMonthKeys = Array.from(monthBuckets.keys()).sort();
+  const monthly = [];
+
+  for (const month of sortedMonthKeys) {
+    const monthTrades = monthBuckets.get(month);
+    const totalTrades = monthTrades.length;
+    let totalVolume = new Prisma.Decimal(0);
+    let winningTrades = 0;
+    let losingTrades = 0;
+    let totalRealizedPnl = new Prisma.Decimal(0);
+    let realizedReturnSum = new Prisma.Decimal(0);
+    let realizedReturnCount = 0;
+
+    for (const trade of monthTrades) {
+      if (trade.totalValue) {
+        totalVolume = totalVolume.plus(trade.totalValue);
+      }
+      if (trade.realizedPnl !== null && trade.realizedPnl !== undefined) {
+        totalRealizedPnl = totalRealizedPnl.plus(trade.realizedPnl);
+        if (trade.realizedPnl.gt(0)) {
+          winningTrades++;
+        } else if (trade.realizedPnl.lt(0)) {
+          losingTrades++;
+        }
+      }
+      if (trade.realizedPnlPct !== null && trade.realizedPnlPct !== undefined) {
+        realizedReturnSum = realizedReturnSum.plus(trade.realizedPnlPct);
+        realizedReturnCount++;
+      }
+    }
+
+    const winRate = computeWinRate(winningTrades, losingTrades);
+    const averageReturn = realizedReturnCount > 0
+      ? realizedReturnSum.dividedBy(realizedReturnCount).toFixed(4)
+      : null;
+
+    monthly.push({
+      month,
+      totalTrades,
+      winningTrades,
+      losingTrades,
+      winRate,
+      totalVolume: totalVolume.toString(),
+      realizedPnl: totalRealizedPnl.toString(),
+      averageReturn,
+    });
+  }
+
+  return monthly;
+}
+
+/**
  * Build trading statistics for a single user.
  *
  * Statistics are always scoped to the caller's own portfolios. `userId` comes
@@ -169,7 +266,7 @@ async function getUserStatistics(userId, filters = {}) {
       }),
     ]);
 
-  return {
+  const response = {
     totalTrades: totals._count,
     winningTrades,
     losingTrades,
@@ -180,6 +277,12 @@ async function getUserStatistics(userId, filters = {}) {
     bestTrade: serializeTradeSummary(bestTrade),
     worstTrade: serializeTradeSummary(worstTrade),
   };
+
+  if (filters.includeMonthly) {
+    response.monthly = await getMonthlyTradeStatistics(userId, filters);
+  }
+
+  return response;
 }
 
 module.exports = {
@@ -187,5 +290,6 @@ module.exports = {
   serializeTradeSummary,
   computeWinRate,
   buildTradeFilter,
+  getMonthlyTradeStatistics,
   getUserStatistics,
 };
