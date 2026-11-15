@@ -12,6 +12,10 @@ const {
 } = require("../services/pollingPriceStream");
 const { registerMarketNamespace } = require("./marketNamespace");
 const { registerTradingNamespace } = require("./tradingNamespace");
+const { registerNotificationsNamespace } = require("./notificationsNamespace");
+const {
+  resolveSocketTiming,
+} = require("../config/socketConfig");
 
 const DEFAULT_CORS_ORIGIN = "http://localhost:3000";
 
@@ -62,6 +66,7 @@ function createSocketServer(httpServer, options = {}) {
   }
 
   const corsOrigins = options.corsOrigins || resolveCorsOrigins();
+  const timing = options.timing || resolveSocketTiming();
 
   const io = new Server(httpServer, {
     cors: {
@@ -69,6 +74,8 @@ function createSocketServer(httpServer, options = {}) {
       credentials: true,
     },
     transports: ["websocket", "polling"],
+    pingInterval: timing.pingInterval,
+    pingTimeout: timing.pingTimeout,
   });
 
   io.on("connection", (socket) => {
@@ -87,6 +94,7 @@ function createSocketServer(httpServer, options = {}) {
   });
 
   registerTradingNamespace(io);
+  registerNotificationsNamespace(io);
 
   const priceStream = options.marketPriceStream || createDefaultPriceStream();
 
@@ -112,4 +120,5 @@ module.exports = {
   createSocketServer,
   parseOrigins,
   resolveCorsOrigins,
+  resolveSocketTiming,
 };
