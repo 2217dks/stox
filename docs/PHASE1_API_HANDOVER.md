@@ -63,6 +63,8 @@ Exposed series: `http_requests_total`, `http_request_duration_seconds` (histogra
 
 `METRICS_ENABLED=false` makes the route return `404 ROUTE_NOT_FOUND`. Setting `METRICS_TOKEN` requires `Authorization: Bearer <token>` and returns `401 UNAUTHORIZED` otherwise.
 
+**Production requirement:** the endpoint is enabled by default and only protected when `METRICS_TOKEN` is set. A deployment must either set a strong token (and send it from the Prometheus scrape config) or restrict `/metrics` at the proxy/network layer. It must not be internet-reachable without authentication.
+
 ### Authentication
 
 #### `POST /auth/register` — public

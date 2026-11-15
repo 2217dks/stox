@@ -101,7 +101,8 @@ POST /orders
 Order row (status = PENDING)
      │
      ▼
-orderWorker.processPendingOrders()      every 5s (DEFAULT_INTERVAL_MS)
+BullMQ execute-order job (production)   or   processPendingOrders() polling fallback
+     │  the execute job loads one order by id; the polling pass queries PENDING rows
      │  query: status = PENDING AND portfolio.isActive = true
      │  (inactive-portfolio orders never enter the batch or consume `limit`)
      │
@@ -340,6 +341,10 @@ Summary counters: `scanned`, `executed`, `skipped`, `expired`, `rejected`,
 `failed`. A per-order failure never aborts the batch — one unavailable symbol
 must not block the rest.
 
+In BullMQ mode this function is used only by the polling fallback. The queue's
+`scan-pending` job calls `discoverPendingOrders()` and enqueues one
+`execute-order` job per row instead of executing anything itself.
+
 ### Outcome rules
 
 | Situation | Order status | Counter |
@@ -379,15 +384,24 @@ delays the next pass instead of stacking a second one. `SIGINT`/`SIGTERM` stop
 the loop.
 
 BullMQ is the production transport. `src/queues/` defines the queue registry,
-retry policies, and the orders job contracts; `src/workers/orderQueueWorker.js`
-consumes `execute-order` and `scan-pending` jobs and calls the same
-`processOrder` / `processPendingOrders` functions used by the polling loop.
-`QUEUES_ENABLED=false` selects the polling loop for local development. The
-notification and alert queues are registered but their workers are still
-pending.
+retry policies, and the orders job contracts. `src/workers/orderQueueWorker.js`
+consumes `execute-order` jobs and calls the same `processOrder` processor used
+by the polling loop. The repeatable `scan-pending` job is a discovery/enqueue
+mechanism only: it finds eligible `PENDING` orders and enqueues one
+`execute-order` job per order (`jobId = orderId`), so the direct job from
+`POST /orders` and the periodic scan cannot process the same order in parallel.
+Completed `execute-order` jobs are removed so a resting order can be enqueued
+again on a later scan; failed jobs remain inspectable. `QUEUES_ENABLED=false`
+selects the polling loop for local development. The notification and alert
+queues are registered but their workers are still pending.
 
 ### Behavioural caveats
 
+- Deactivating a portfolio does not cancel its `PENDING` orders or release
+  their reservations. Both the queue worker and the polling processor skip
+  orders whose portfolio is inactive, so those rows stay `PENDING` with
+  `reservedCash` held. This is tracked as a follow-up in
+  [`docs/BACKGROUND_JOBS.md`](./BACKGROUND_JOBS.md#known-gaps-and-follow-ups).
 - Orders do not reserve cash or shares at placement time. Two pending buys can
   both exist against the same cash; the first to fill wins and the second is
   rejected at execution time.

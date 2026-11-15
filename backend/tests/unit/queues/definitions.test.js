@@ -58,6 +58,22 @@ describe("queue definitions", () => {
     );
   });
 
+  test("removes a completed execute-order job so the same order id can be re-enqueued", () => {
+    const execute = jobOptionsFor(
+      QUEUE_NAMES.ORDERS,
+      ORDER_JOB_NAMES.EXECUTE_ORDER,
+    );
+    const scan = jobOptionsFor(QUEUE_NAMES.ORDERS, ORDER_JOB_NAMES.SCAN_PENDING);
+
+    // BullMQ deduplicates by jobId even after completion while the completed
+    // job is retained. A resting LIMIT order must be enqueued again on a later
+    // scan, so execute-order completions are not retained.
+    expect(execute.removeOnComplete).toBe(true);
+
+    // The scan job has no stable jobId and keeps the bounded history.
+    expect(scan.removeOnComplete).toEqual({ count: expect.any(Number) });
+  });
+
   test("rejects an unknown queue or job instead of silently defaulting", () => {
     expect(() => jobOptionsFor("nope", "job")).toThrow(/unknown queue/i);
   });

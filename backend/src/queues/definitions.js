@@ -32,6 +32,12 @@ const QUEUE_POLICIES = Object.freeze({
       [ORDER_JOB_NAMES.EXECUTE_ORDER]: {
         attempts: 5,
         backoff: { type: "exponential", delay: 1000 },
+        // BullMQ deduplicates by jobId while the job is retained, including
+        // after completion. A resting LIMIT/STOP/TAKE_PROFIT order stays
+        // PENDING after a completed check, so the next scan must be able to
+        // enqueue it again under the same `jobId = orderId`. Failed jobs are
+        // still retained by the queue-level `removeOnFail` policy.
+        removeOnComplete: true,
       },
       [ORDER_JOB_NAMES.SCAN_PENDING]: {
         attempts: 3,

@@ -115,9 +115,11 @@ async function enqueue(queueName, jobName, data, options = {}) {
  * Schedule execution for one order.
  *
  * `jobId` is the order id, so enqueueing the same order twice while a job is
- * still known to BullMQ returns the existing job instead of stacking duplicate
- * executions. The execution path is also conditional on `PENDING`, so a
- * duplicate would be a harmless no-op anyway.
+ * still waiting, active, or delayed returns the existing job instead of
+ * stacking duplicate executions. Completed jobs are removed by the
+ * execute-order policy, so a resting order can be enqueued again on a later
+ * scan; execution itself is conditional on `PENDING`, so even a duplicate
+ * would be a harmless no-op.
  */
 async function enqueueOrderExecution(payload) {
   const data = parsePayload(executeOrderPayloadSchema, payload);

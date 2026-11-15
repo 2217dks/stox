@@ -20,13 +20,14 @@ configureEventBus(eventBus);
  * Transport selection:
  *
  * - `QUEUES_ENABLED=true` (default): BullMQ owns order processing. The worker
- *   consumes `execute-order` and `scan-pending` jobs, and a repeatable
- *   scheduler enqueues the scan every `ORDER_SCAN_INTERVAL_MS`.
+ *   consumes `execute-order` jobs; the repeatable `scan-pending` scheduler
+ *   only discovers eligible rows and enqueues more `execute-order` jobs.
  * - `QUEUES_ENABLED=false`: the in-process polling loop runs instead, so local
  *   development works without Redis.
  *
- * Both transports call the same processor, so execution semantics do not
- * change. Running both at once would only duplicate scans.
+ * Both transports call the same `processOrder` processor, so execution
+ * semantics do not change. The two transports are mutually exclusive: running
+ * both would create two execution paths for the same pending order.
  */
 const queuesEnabled = isQueuesEnabled();
 

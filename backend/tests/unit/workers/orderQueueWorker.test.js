@@ -4,22 +4,31 @@ jest.mock("../../../src/config/database", () => ({
 
 jest.mock("../../../src/workers/orderWorker", () => ({
   processOrder: jest.fn(),
-  processPendingOrders: jest.fn(),
+  discoverPendingOrders: jest.fn(),
   DEFAULT_MAX_ATTEMPTS: 5,
   DEFAULT_BATCH_SIZE: 100,
+}));
+
+jest.mock("../../../src/queues/orderQueue", () => ({
+  enqueueOrderExecution: jest.fn(),
 }));
 
 const prisma = require("../../../src/config/database");
 const {
   processOrder,
-  processPendingOrders,
+  discoverPendingOrders,
 } = require("../../../src/workers/orderWorker");
+const {
+  enqueueOrderExecution,
+} = require("../../../src/queues/orderQueue");
 const {
   handleOrderJob,
 } = require("../../../src/workers/orderQueueWorker");
 const { ORDER_JOB_NAMES } = require("../../../src/queues/definitions");
 
 const ORDER_ID = "6f1f7c2e-0d7f-4c2a-9b8f-2f9a1d0c3b4e";
+const OTHER_ORDER_ID = "8a2e6b4d-1c3f-4d5e-9a7b-0c1d2e3f4a5b";
+const PORTFOLIO_ID = "0b6d5a1c-2f3e-4a5b-8c9d-1e2f3a4b5c6d";
 
 function makeJob(overrides = {}) {
   return {
@@ -136,36 +145,79 @@ describe("order queue job handler", () => {
   });
 
   describe("scan-pending", () => {
-    test("runs one scan pass with the job payload filters", async () => {
-      processPendingOrders.mockResolvedValue({ scanned: 2, executed: 1 });
+    test("enqueues one execution job per discovered pending order", async () => {
+      discoverPendingOrders.mockResolvedValue([
+        { id: ORDER_ID, portfolioId: PORTFOLIO_ID },
+        { id: OTHER_ORDER_ID, portfolioId: PORTFOLIO_ID },
+      ]);
+      enqueueOrderExecution.mockResolvedValue({ enqueued: true });
 
       const result = await handleOrderJob(
         makeJob({
           name: ORDER_JOB_NAMES.SCAN_PENDING,
-          data: { portfolioId: "0b6d5a1c-2f3e-4a5b-8c9d-1e2f3a4b5c6d", limit: 10 },
+          data: { portfolioId: PORTFOLIO_ID, limit: 10 },
         }),
         makeOptions(),
       );
 
-      expect(result).toEqual({ scanned: 2, executed: 1 });
-      expect(processPendingOrders).toHaveBeenCalledWith({
-        quoteProvider: expect.any(Object),
-        now: expect.any(Date),
-        portfolioId: "0b6d5a1c-2f3e-4a5b-8c9d-1e2f3a4b5c6d",
+      expect(discoverPendingOrders).toHaveBeenCalledWith({
+        portfolioId: PORTFOLIO_ID,
         limit: 10,
-        maxAttempts: 5,
       });
+
+      expect(enqueueOrderExecution).toHaveBeenCalledTimes(2);
+      expect(enqueueOrderExecution).toHaveBeenCalledWith({
+        orderId: ORDER_ID,
+        portfolioId: PORTFOLIO_ID,
+      });
+      expect(enqueueOrderExecution).toHaveBeenCalledWith({
+        orderId: OTHER_ORDER_ID,
+        portfolioId: PORTFOLIO_ID,
+      });
+
+      expect(result).toEqual({ scanned: 2, enqueued: 2, failed: 0 });
     });
 
-    test("falls back to the default batch size", async () => {
-      processPendingOrders.mockResolvedValue({ scanned: 0 });
+    test("does not execute orders directly", async () => {
+      discoverPendingOrders.mockResolvedValue([
+        { id: ORDER_ID, portfolioId: PORTFOLIO_ID },
+      ]);
+      enqueueOrderExecution.mockResolvedValue({ enqueued: true });
 
       await handleOrderJob(
         makeJob({ name: ORDER_JOB_NAMES.SCAN_PENDING, data: {} }),
         makeOptions(),
       );
 
-      expect(processPendingOrders).toHaveBeenCalledWith(
+      expect(processOrder).not.toHaveBeenCalled();
+    });
+
+    test("counts an enqueue failure without failing the scan job", async () => {
+      discoverPendingOrders.mockResolvedValue([
+        { id: ORDER_ID, portfolioId: PORTFOLIO_ID },
+      ]);
+      enqueueOrderExecution.mockResolvedValue({
+        enqueued: false,
+        reason: "ENQUEUE_TIMEOUT",
+      });
+
+      const result = await handleOrderJob(
+        makeJob({ name: ORDER_JOB_NAMES.SCAN_PENDING, data: {} }),
+        makeOptions(),
+      );
+
+      expect(result).toEqual({ scanned: 1, enqueued: 0, failed: 1 });
+    });
+
+    test("falls back to the default batch size", async () => {
+      discoverPendingOrders.mockResolvedValue([]);
+
+      await handleOrderJob(
+        makeJob({ name: ORDER_JOB_NAMES.SCAN_PENDING, data: {} }),
+        makeOptions(),
+      );
+
+      expect(discoverPendingOrders).toHaveBeenCalledWith(
         expect.objectContaining({ limit: 100 }),
       );
     });

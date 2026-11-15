@@ -68,6 +68,9 @@ describe("order queue", () => {
           jobId: ORDER_ID,
           attempts: 5,
           backoff: { type: "exponential", delay: 1000 },
+          // Removed on completion so a later scan can re-enqueue the same
+          // order id while the order is still PENDING.
+          removeOnComplete: true,
         }),
       );
     });

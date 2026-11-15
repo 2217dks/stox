@@ -151,6 +151,20 @@ scrape_configs:
 
 The token comparison is constant-time.
 
+> **Production deployment requirement:** `GET /metrics` is enabled by default
+> and is only protected when `METRICS_TOKEN` is set. Before deploying, do one of
+> the following:
+>
+> - set a strong, randomly generated `METRICS_TOKEN` in the deployment
+>   environment and configure Prometheus to send
+>   `Authorization: Bearer <token>`, or
+> - block `/metrics` at the ingress/proxy so it is reachable only from the
+>   monitoring network.
+>
+> Never expose an internet-reachable unauthenticated metrics endpoint. The
+> series reveal traffic volume, route names, queue activity, and runtime
+> behaviour even though they contain no credentials.
+
 ---
 
 ## ⚙️ Configuration
@@ -159,7 +173,7 @@ The token comparison is constant-time.
 | --- | --- | --- |
 | `LOG_LEVEL` | `info` | Winston level |
 | `METRICS_ENABLED` | `true` | Expose `GET /metrics` |
-| `METRICS_TOKEN` | unset | Optional bearer token for scraping |
+| `METRICS_TOKEN` | unset | Optional bearer token for scraping; set it (or network-restrict `/metrics`) in production |
 | `REQUEST_BODY_LIMIT` | `100kb` | JSON body size limit |
 | `SECURITY_HEADERS_ENABLED` | `true` | Helmet middleware toggle |
 | `QUEUE_ENQUEUE_TIMEOUT_MS` | `1500` | Bound on a best-effort queue enqueue |

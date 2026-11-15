@@ -4,10 +4,11 @@ const prisma = require("../config/database");
 const marketDataService = require("../services/marketData");
 const {
   processOrder,
-  processPendingOrders,
+  discoverPendingOrders,
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_BATCH_SIZE,
 } = require("./orderWorker");
+const { enqueueOrderExecution } = require("../queues/orderQueue");
 const { createQueueConnection } = require("../queues/connection");
 const { QUEUE_NAMES, ORDER_JOB_NAMES } = require("../queues/definitions");
 const { childLogger } = require("../utils/logger");
@@ -66,16 +67,44 @@ async function handleExecuteOrder(job, options) {
   return { outcome };
 }
 
+/**
+ * Discover eligible pending orders and enqueue one execution job per order.
+ *
+ * This job is deliberately a discovery/enqueue mechanism only. Executing
+ * orders here as well would create two concurrent processing paths for the
+ * same row: the direct `execute-order` job enqueued by `POST /orders` and the
+ * periodic scan. Both could fetch a quote and call `recordTransientFailure`,
+ * consuming the retry budget twice for one logical attempt.
+ *
+ * `enqueueOrderExecution` uses `jobId = orderId`, so an order that already has
+ * a waiting/active/delayed job is deduplicated by BullMQ. Completed jobs are
+ * removed (see the execute-order policy) so a still-pending resting order is
+ * enqueued again on the next scan.
+ */
 async function handleScanPending(job, options) {
   const { portfolioId, limit } = job.data;
 
-  return processPendingOrders({
-    quoteProvider: options.quoteProvider,
-    now: options.now(),
+  const orders = await discoverPendingOrders({
     portfolioId,
     limit: limit ?? options.batchSize,
-    maxAttempts: options.retryLimit,
   });
+
+  const results = await Promise.all(
+    orders.map((order) =>
+      enqueueOrderExecution({
+        orderId: order.id,
+        portfolioId: order.portfolioId,
+      }),
+    ),
+  );
+
+  const enqueued = results.filter((result) => result.enqueued).length;
+
+  return {
+    scanned: orders.length,
+    enqueued,
+    failed: orders.length - enqueued,
+  };
 }
 
 /**
@@ -102,9 +131,11 @@ async function handleOrderJob(job, options) {
 /**
  * Create the BullMQ worker for the orders queue.
  *
- * The processor reuses the same `processOrder` / `processPendingOrders`
- * functions as the polling worker, so transaction boundaries and financial
- * invariants live in exactly one place regardless of transport.
+ * The worker has two jobs with one canonical execution path: `execute-order`
+ * runs the shared `processOrder`, and `scan-pending` only discovers eligible
+ * rows and enqueues more `execute-order` jobs. The polling fallback still uses
+ * `processPendingOrders` directly, but it is selected instead of BullMQ rather
+ * than running alongside it.
  */
 function createOrderQueueWorker({
   connection,

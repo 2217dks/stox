@@ -53,13 +53,20 @@ would make BullMQ throw at construction time.
 | Job | Payload | Attempts | What it does |
 | --- | --- | --- | --- |
 | `execute-order` | `{ orderId, portfolioId? }` | 5 | Re-reads the order, skips if it is no longer `PENDING`, then runs the shared `processOrder` |
-| `scan-pending` | `{ portfolioId?, limit? }` | 3 | Runs one `processPendingOrders` pass |
+| `scan-pending` | `{ portfolioId?, limit? }` | 3 | Discovers eligible `PENDING` orders and enqueues one `execute-order` job per order (`jobId = orderId`); it never executes orders itself |
 
 Payloads are validated with Zod at enqueue time
 (`src/queues/orderQueue.js`). `execute-order` uses the order id as its
 `jobId`, so enqueueing the same order twice returns the existing job instead
 of stacking duplicate work. Execution is also conditional on `PENDING`, so a
 duplicate would be a no-op regardless.
+
+The scan is a **discovery/enqueue mechanism only**. Executing from the scan as
+well would create two concurrent processing paths for the same order: the
+direct `execute-order` job from `POST /orders` and the periodic scan could both
+fetch a quote and call `recordTransientFailure`, consuming the retry budget
+twice for one logical attempt. There is exactly one canonical execution path,
+the `execute-order` job; the scan only discovers rows and enqueues them.
 
 `POST /orders` enqueues `execute-order` best-effort after the transaction
 commits. A Redis outage logs a warning and returns a result instead of failing
@@ -70,12 +77,13 @@ up.
 
 | `QUEUES_ENABLED` | Order processing |
 | --- | --- |
-| `true` (default) | BullMQ worker consumes `execute-order` / `scan-pending`; a single scheduler (`orders:scan-pending`) enqueues a scan every `ORDER_SCAN_INTERVAL_MS` (default 5s) |
+| `true` (default) | The BullMQ worker consumes `execute-order`; a single scheduler (`orders:scan-pending`) enqueues a `scan-pending` job every `ORDER_SCAN_INTERVAL_MS` (default 5s), which in turn enqueues `execute-order` jobs for eligible rows |
 | `false` | In-process polling loop (`startOrderWorker`) runs instead; no Redis queue connection is opened |
 
-Both transports call the same `processOrder` / `processPendingOrders`
-functions, so transaction boundaries and financial invariants do not depend on
-the transport. Running both at once would only duplicate scans.
+Both transports call the same `processOrder` processor, so transaction
+boundaries and financial invariants do not depend on the transport. They are
+mutually exclusive: the BullMQ scan never executes orders directly, and the
+polling loop is selected only when queues are disabled.
 
 ### Retry and failure semantics
 
@@ -83,6 +91,12 @@ the transport. Running both at once would only duplicate scans.
   off exponentially up to the attempt budget. The shared processor also
   increments `Order.executionAttempts` and rejects the order once
   `maxAttempts` is reached, so the two budgets cannot loop forever.
+- Completed `execute-order` jobs are removed immediately
+  (`removeOnComplete: true`). BullMQ deduplicates by `jobId` while a job is
+  retained, including after completion, so keeping completed jobs would stop a
+  later scan from re-enqueuing a resting LIMIT/STOP/TAKE_PROFIT order that is
+  still `PENDING`. Failed jobs are still retained by the queue-level
+  `removeOnFail` policy for inspection and replay.
 - **Permanent** failures (`UnrecoverableError`): a missing order or an unknown
   job name. No retry.
 - **Terminal business outcomes** (`rejected`) complete the job normally; the
@@ -119,6 +133,19 @@ the transport. Running both at once would only duplicate scans.
 cd backend
 npm run workers        # starts the BullMQ order worker (or polling if disabled)
 ```
+
+### Known gaps and follow-ups
+
+- **Portfolio deactivation leaves pending orders and reserved cash behind.**
+  Deactivating a portfolio does not cancel its `PENDING` orders or release
+  their reservations. The queue worker and the polling processor both skip
+  orders whose portfolio is inactive, so those rows stay `PENDING` and any
+  `reservedCash` remains held indefinitely. This is adjacent to portfolio
+  lifecycle behaviour rather than the queue race, so it is tracked as a
+  separate follow-up: deactivation should cancel (or reject) pending orders
+  and release their reservations in the same transaction. Until then, treat
+  deactivation as a stop for new executions, not as a full settlement of
+  resting orders.
 
 ---
 
