@@ -294,10 +294,18 @@ async function getMonthlyPerformance(req, res, next) {
     const { portfolioId } = req.validatedParams ?? req.params;
     const options = req.validatedQuery ?? req.query ?? {};
 
-    const result = await getPortfolioMonthlyPerformance(
+    await portfolioService.getPortfolioById(userId, portfolioId);
+
+    const result = await cacheService.getOrSetPortfolioMonthlyPerformance(
       portfolioId,
       userId,
       options,
+      () =>
+        getPortfolioMonthlyPerformance(
+          portfolioId,
+          userId,
+          options,
+        ),
     );
 
     return res.status(200).json({
