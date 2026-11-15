@@ -918,6 +918,8 @@ Create an alert.
 }
 ```
 
+For `PERCENT_CHANGE_UP`/`PERCENT_CHANGE_DOWN`, `targetPrice` is a percentage threshold. The server captures the current quote at creation time and returns it as `baselinePrice` (with `baselineAt`); the request fails with a `MARKET_DATA_*` error if that quote is unavailable. `PRICE_ABOVE`/`PRICE_BELOW` alerts return both baseline fields as `null`.
+
 ## `PATCH /alerts/:id`
 
 Update an alert.

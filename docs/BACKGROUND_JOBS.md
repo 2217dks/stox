@@ -31,9 +31,8 @@ Slow operations (order execution, alerts, reports, emails) are pushed to **BullM
 
 ## ✅ Implementation status
 
-The BullMQ foundation and the **orders** queue are implemented. The
-notification and alert queues are registered with their retry policies, but
-their workers land in the follow-up tasks.
+The BullMQ foundation, the **orders** queue, and the **notification** and
+**alert** queues are implemented. All three run from the same worker process.
 
 ### Registered queues
 
@@ -72,6 +71,78 @@ the `execute-order` job; the scan only discovers rows and enqueues them.
 commits. A Redis outage logs a warning and returns a result instead of failing
 the request; the repeatable scan and the polling fallback still pick the order
 up.
+
+### Notification job contracts
+
+| Job | Payload | Attempts | What it does |
+| --- | --- | --- | --- |
+| `send-notification` | `{ notificationId }` | 5 | Loads the `Notification` row, claims delivery in the database, checks `UserPreference` + the legacy user flags, and delivers in-app (Socket.IO `/notifications`), email (Resend), and push (FCM HTTP v1) |
+| `scan-pending` | `{ limit? }` | 3 | Finds notifications left at `deliveryStatus = PENDING` (for example after an enqueue timeout) and enqueues `send-notification` for each |
+
+The notification row is written **before** the job is enqueued and is the
+source of truth. Enqueueing is best-effort, so a Redis outage never hides the
+in-app notification; the `notifications:scan-pending` scheduler retries the
+outbound channels once Redis returns.
+
+`Notification.deliveryAttempts` bounds that retry loop
+(`NOTIFICATION_MAX_DELIVERY_ATTEMPTS`, default 5). Once the budget is spent the
+row is marked `FAILED` and the scan stops picking it up. Without this budget a
+provider that never recovers would be retried forever, because every transient
+failure resets the row to `PENDING`.
+
+A worker sets `deliveryStartedAt` when it claims a row. If it crashes before the
+terminal update, the scan reclaims a `SENDING` row after
+`NOTIFICATION_DELIVERY_LEASE_MS` (default 5 minutes) and retries it.
+
+A permanent failure on one channel does not discard a delivery that succeeded
+on another channel: the notification is marked `DELIVERED` and the failed
+channel is recorded in `deliveryChannels`. A permanent failure with no
+successful channel marks the row `FAILED`.
+
+### Alert job contracts
+
+| Job | Payload | Attempts | What it does |
+| --- | --- | --- | --- |
+| `evaluate-alert` | `{ alertId }` | 2 | Loads one `ACTIVE` alert, fetches its quote, evaluates the condition, and conditionally transitions it to `TRIGGERED` |
+| `scan-alerts` | `{ symbol?, limit? }` | 2 | Loads `ACTIVE` alerts (optionally one symbol), fetches one quote per symbol, evaluates each alert, and reports counts |
+
+Percentage alerts (`PERCENT_CHANGE_UP|DOWN`) compare the current quote against
+`Alert.baselinePrice`, captured when the alert was created (or re-armed). The
+`ACTIVE -> TRIGGERED` transition uses `updateMany` with a `status: "ACTIVE"`
+filter, so two workers cannot trigger the same alert twice; the `PRICE_ALERT`
+notification row is created in the same transaction as the claim.
+
+A percentage alert created before baselines existed has `baselinePrice = null`.
+The evaluator captures the current quote on its first evaluation (a conditional
+`updateMany` makes this race-safe) and starts comparing from that point; the
+alert does not trigger on the capture scan itself.
+
+A single scan covers at most `limit` alerts and `ALERT_SCAN_MAX_SYMBOLS`
+(default 50) distinct symbols. Alerts are ordered by `lastEvaluatedAt` (nulls
+first) and the scan advances that cursor after each pass, so a large alert book
+rotates instead of starving the newest alerts. A permanent provider error
+(`MARKET_DATA_NOT_FOUND`, an unsupported asset class, or a 400/404/422
+response) moves the alert to `EXPIRED` instead of retrying it forever.
+
+### Idempotency keys
+
+| Job | Key | Guard |
+| --- | --- | --- |
+| `execute-order` | `jobId = orderId` | Execution is conditional on `status = PENDING`; completed jobs are removed so a resting order can be re-enqueued |
+| `send-notification` | `jobId = notificationId` | `PENDING -> SENDING` is a conditional update; terminal statuses (`DELIVERED`, `SKIPPED`, `FAILED`) short-circuit a replay; per-channel results are persisted so a partial retry does not resend a successful email |
+| `evaluate-alert` | `jobId = alertId` | `ACTIVE -> TRIGGERED` is a conditional update; completed jobs are removed so a still-active alert can be evaluated again |
+| `scan-alerts` / `scan-pending` | none | Discovery jobs; duplicate scans are harmless because the downstream work is guarded |
+
+### Schedulers
+
+| Scheduler id | Queue | Interval env var | Default |
+| --- | --- | --- | --- |
+| `orders:scan-pending` | `orders` | `ORDER_SCAN_INTERVAL_MS` | 5000 ms |
+| `notifications:scan-pending` | `notifications` | `NOTIFICATION_SCAN_INTERVAL_MS` | 30000 ms |
+| `alerts:scan` | `alerts` | `ALERT_SCAN_INTERVAL_MS` | 15000 ms |
+
+Scheduler registration is retried with bounded backoff, so a worker that starts
+while Redis is briefly unavailable still registers once Redis returns.
 
 ### Transport selection
 
@@ -131,7 +202,7 @@ polling loop is selected only when queues are disabled.
 
 ```bash
 cd backend
-npm run workers        # starts the BullMQ order worker (or polling if disabled)
+npm run workers        # starts the order, notification, and alert workers (or polling if queues are disabled)
 ```
 
 ### Known gaps and follow-ups
