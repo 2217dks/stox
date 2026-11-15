@@ -10,6 +10,13 @@ jest.mock("../../../src/services/portfolioHeatmapService");
 jest.mock("../../../src/services/riskMetricsService");
 jest.mock("../../../src/services/benchmarkService");
 jest.mock("../../../src/services/benchmarkComparisonService");
+jest.mock("../../../src/services/cacheService", () => ({
+  getOrSetPortfolioHeatmap: jest.fn((pid, uid, opts, loader) => loader()),
+  getOrSetPortfolioRiskMetrics: jest.fn((pid, uid, opts, loader) => loader()),
+  getOrSetPortfolioBenchmark: jest.fn((pid, uid, sym, opts, loader) => loader()),
+  getOrSetPortfolioBenchmarkComparison: jest.fn((pid, uid, sym, opts, loader) => loader()),
+  getOrSetPortfolioMonthlyPerformance: jest.fn((pid, uid, opts, loader) => loader()),
+}));
 
 describe("portfolioController - Analytics endpoints", () => {
   const userId = "user-123";
