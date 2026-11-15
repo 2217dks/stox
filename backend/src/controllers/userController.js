@@ -1,3 +1,5 @@
+const prisma = require("../config/database");
+const { AppError } = require("../utils/errors");
 const {
   getUserStatistics,
   getMonthlyTradeStatistics,
@@ -5,6 +7,8 @@ const {
 const {
   getPublicProfile: getPublicSocialProfile,
 } = require("../services/socialService");
+const { getCurrentUser } = require("../services/authService");
+const cacheService = require("../services/cacheService");
 
 /**
  * GET /api/v1/users/me/statistics
@@ -17,8 +21,26 @@ const {
  */
 async function getMyStatistics(req, res, next) {
   try {
+    const userId = req.user.userId;
     const filters = req.validatedQuery ?? req.query ?? {};
-    const statistics = await getUserStatistics(req.user.userId, filters);
+
+    await getCurrentUser(userId);
+
+    if (filters.portfolioId) {
+      const portfolio = await prisma.portfolio.findFirst({
+        where: { id: filters.portfolioId, userId },
+        select: { id: true },
+      });
+      if (!portfolio) {
+        throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+      }
+    }
+
+    const statistics = await cacheService.getOrSetUserStatistics(
+      userId,
+      filters,
+      () => getUserStatistics(userId, filters, { prevalidated: true }),
+    );
 
     return res.status(200).json({
       success: true,
@@ -33,8 +55,26 @@ async function getMyStatistics(req, res, next) {
 
 async function getMyMonthlyStatistics(req, res, next) {
   try {
+    const userId = req.user.userId;
     const filters = req.validatedQuery ?? req.query ?? {};
-    const monthly = await getMonthlyTradeStatistics(req.user.userId, filters);
+
+    await getCurrentUser(userId);
+
+    if (filters.portfolioId) {
+      const portfolio = await prisma.portfolio.findFirst({
+        where: { id: filters.portfolioId, userId },
+        select: { id: true },
+      });
+      if (!portfolio) {
+        throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+      }
+    }
+
+    const monthly = await cacheService.getOrSetUserMonthlyStatistics(
+      userId,
+      filters,
+      () => getMonthlyTradeStatistics(userId, filters, { prevalidated: true }),
+    );
 
     return res.status(200).json({
       success: true,

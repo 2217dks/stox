@@ -189,7 +189,11 @@ async function updatePortfolio(
       data,
     });
 
-    await cacheService.invalidatePortfolio(portfolio.id);
+    await Promise.all([
+      cacheService.invalidatePortfolio(portfolio.id),
+      cacheService.invalidatePortfolioAnalytics(portfolio.id),
+      cacheService.invalidateUserAnalytics(portfolio.userId),
+    ]);
 
     return serializePortfolio(updatedPortfolio);
   } catch (error) {
@@ -241,7 +245,11 @@ async function deactivatePortfolio(userId, portfolioId) {
 
   // Deactivation is idempotent.
   if (!portfolio.isActive) {
-    await cacheService.invalidatePortfolio(portfolio.id);
+    await Promise.all([
+      cacheService.invalidatePortfolio(portfolio.id),
+      cacheService.invalidatePortfolioAnalytics(portfolio.id),
+      cacheService.invalidateUserAnalytics(portfolio.userId),
+    ]);
     return serializePortfolio(portfolio);
   }
 
@@ -254,7 +262,11 @@ async function deactivatePortfolio(userId, portfolioId) {
     },
   });
 
-  await cacheService.invalidatePortfolio(portfolio.id);
+  await Promise.all([
+    cacheService.invalidatePortfolio(portfolio.id),
+    cacheService.invalidatePortfolioAnalytics(portfolio.id),
+    cacheService.invalidateUserAnalytics(portfolio.userId),
+  ]);
 
   return serializePortfolio(deactivatedPortfolio);
 }

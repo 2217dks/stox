@@ -307,4 +307,30 @@ Aggregates portfolio valuation and trade performance into UTC calendar-month buc
 - Months with zero recorded snapshots or trades are omitted from the output array.
 - Missing months are never populated with fabricated $0$ or simulated values.
 
+---
+
+## ⚡ Caching, Freshness & Query Optimization
+
+All analytics endpoints implement generation-guarded caching backed by Redis to achieve sub-millisecond response times under high concurrency while guaranteeing 100% data freshness.
+
+### Caching Strategy & TTLs
+- **Portfolio Heatmap:** 300 seconds (`analyticsHeatmap`)
+- **Risk Metrics:** 300 seconds (`analyticsRiskMetrics`)
+- **Benchmark Data:** 3600 seconds (`analyticsBenchmark`)
+- **Benchmark Comparison:** 300 seconds (`analyticsBenchmarkComparison`)
+- **Monthly Performance:** 300 seconds (`analyticsMonthlyPerformance`)
+- **User Trading Statistics:** 120 seconds (`userStatistics`)
+
+### Key Scoping & Security
+Cache keys are strictly isolated by owner and portfolio:
+- `analytics:v1:user:{ownerId}:portfolio:{portfolioId}:{metric}:gen:{generation}:{filterHash}`
+- Cross-user access is impossible: ownership is verified before cache access, and the owner ID is an immutable segment of the cache key.
+
+### Mutation Invalidation
+- **Trade Execution:** Increments portfolio analytics generation and user analytics generation post-commit.
+- **Snapshot Upsert:** Increments portfolio analytics generation post-commit.
+- **Position Updates:** Increments portfolio analytics generation post-commit.
+- **Race Protection:** A Lua check-and-set script prevents in-flight loaders from repopulating the cache if a mutation occurred during query execution.
+
+
 

@@ -318,7 +318,7 @@ describe("Portfolio Analytics Integration Tests", () => {
       });
 
       const res = await request(app)
-        .get(`/api/v1/portfolios/${portfolioAId}/benchmark?symbol=SPY&period=1M`)
+        .get(`/api/v1/portfolios/${portfolioAId}/benchmark?symbol=QQQ&period=1M`)
         .set("Authorization", `Bearer ${tokenA}`);
 
       expect(res.status).toBe(503);

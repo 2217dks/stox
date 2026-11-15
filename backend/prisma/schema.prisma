@@ -346,6 +346,7 @@ model Trade {
   @@index([portfolioId])
   @@index([symbol])
   @@index([executedAt])
+  @@index([portfolioId, executedAt])
 }
 
 // ============================================================

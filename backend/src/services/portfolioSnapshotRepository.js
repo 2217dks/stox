@@ -1,4 +1,5 @@
 const prisma = require("../config/database");
+const cacheService = require("./cacheService");
 
 /**
  * Format a PerformanceSnapshot database model into a clean DTO with Decimal strings.
@@ -38,7 +39,7 @@ async function upsertSnapshot(client, {
     ? snapshotDate
     : new Date(`${snapshotDate}T00:00:00.000Z`);
 
-  return db.performanceSnapshot.upsert({
+  const snapshot = await db.performanceSnapshot.upsert({
     where: {
       portfolioId_snapshotDate: {
         portfolioId,
@@ -62,6 +63,10 @@ async function upsertSnapshot(client, {
       dailyPnlPct,
     },
   });
+
+  await cacheService.invalidatePortfolioAnalytics(portfolioId);
+
+  return snapshot;
 }
 
 /**

@@ -6,6 +6,7 @@ const benchmarkComparisonService = require("../services/benchmarkComparisonServi
 const {
   getPortfolioMonthlyPerformance,
 } = require("../services/portfolioMonthlyService");
+const cacheService = require("../services/cacheService");
 
 async function listPortfolios(req, res, next) {
   try {
@@ -180,9 +181,15 @@ async function getPnlHeatmap(req, res, next) {
 
     await portfolioService.getPortfolioById(userId, portfolioId);
 
-    const result = await portfolioHeatmapService.getPortfolioPnlHeatmap(
+    const result = await cacheService.getOrSetPortfolioHeatmap(
       portfolioId,
+      userId,
       { period, year },
+      () =>
+        portfolioHeatmapService.getPortfolioPnlHeatmap(portfolioId, {
+          period,
+          year,
+        }),
     );
 
     return res.status(200).json({
@@ -202,9 +209,15 @@ async function getRiskMetrics(req, res, next) {
 
     await portfolioService.getPortfolioById(userId, portfolioId);
 
-    const result = await riskMetricsService.getPortfolioRiskMetrics(
+    const result = await cacheService.getOrSetPortfolioRiskMetrics(
       portfolioId,
+      userId,
       { period, riskFreeRate },
+      () =>
+        riskMetricsService.getPortfolioRiskMetrics(portfolioId, {
+          period,
+          riskFreeRate,
+        }),
     );
 
     return res.status(200).json({
@@ -224,10 +237,17 @@ async function getBenchmark(req, res, next) {
 
     await portfolioService.getPortfolioById(userId, portfolioId);
 
-    const result = await benchmarkService.getBenchmarkData(symbol, {
-      period,
+    const result = await cacheService.getOrSetPortfolioBenchmark(
       portfolioId,
-    });
+      userId,
+      symbol,
+      { period },
+      () =>
+        benchmarkService.getBenchmarkData(symbol, {
+          period,
+          portfolioId,
+        }),
+    );
 
     return res.status(200).json({
       success: true,
@@ -246,13 +266,17 @@ async function getBenchmarkComparison(req, res, next) {
 
     await portfolioService.getPortfolioById(userId, portfolioId);
 
-    const result = await benchmarkComparisonService.getBenchmarkComparison(
+    const result = await cacheService.getOrSetPortfolioBenchmarkComparison(
       portfolioId,
-      {
-        symbol,
-        period,
-        riskFreeRate,
-      },
+      userId,
+      symbol,
+      { period, riskFreeRate },
+      () =>
+        benchmarkComparisonService.getBenchmarkComparison(portfolioId, {
+          symbol,
+          period,
+          riskFreeRate,
+        }),
     );
 
     return res.status(200).json({
@@ -270,10 +294,18 @@ async function getMonthlyPerformance(req, res, next) {
     const { portfolioId } = req.validatedParams ?? req.params;
     const options = req.validatedQuery ?? req.query ?? {};
 
-    const result = await getPortfolioMonthlyPerformance(
+    await portfolioService.getPortfolioById(userId, portfolioId);
+
+    const result = await cacheService.getOrSetPortfolioMonthlyPerformance(
       portfolioId,
       userId,
       options,
+      () =>
+        getPortfolioMonthlyPerformance(
+          portfolioId,
+          userId,
+          options,
+        ),
     );
 
     return res.status(200).json({

@@ -17,11 +17,11 @@ const TRADE_STAT_FIELDS = {
  * follow the same convention to avoid precision loss in JSON.
  */
 function toDecimalString(value) {
-  if (value === null || value === undefined) {
+  if (value === null || value === undefined || value === "") {
     return null;
   }
 
-  return value.toString();
+  return new Prisma.Decimal(value).toString();
 }
 
 function serializeTradeSummary(trade) {
@@ -93,97 +93,71 @@ function buildTradeFilter(userId, filters = {}) {
 /**
  * Build monthly trade statistics aggregated by UTC calendar month.
  */
-async function getMonthlyTradeStatistics(userId, filters = {}) {
-  await getCurrentUser(userId);
+async function getMonthlyTradeStatistics(userId, filters = {}, options = {}) {
+  if (!options.prevalidated) {
+    await getCurrentUser(userId);
 
+    if (filters.portfolioId) {
+      const portfolio = await prisma.portfolio.findFirst({
+        where: {
+          id: filters.portfolioId,
+          userId,
+        },
+        select: { id: true },
+      });
+
+      if (!portfolio) {
+        throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+      }
+    }
+  }
+
+  const conditions = [Prisma.sql`p."userId" = ${userId}`];
   if (filters.portfolioId) {
-    const portfolio = await prisma.portfolio.findFirst({
-      where: {
-        id: filters.portfolioId,
-        userId,
-      },
-      select: { id: true },
-    });
-
-    if (!portfolio) {
-      throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
-    }
+    conditions.push(Prisma.sql`t."portfolioId" = ${filters.portfolioId}`);
+  }
+  if (filters.symbol) {
+    conditions.push(Prisma.sql`t."symbol" = ${filters.symbol}`);
+  }
+  if (filters.side) {
+    conditions.push(Prisma.sql`t."side" = ${filters.side}::"OrderSide"`);
+  }
+  if (filters.from) {
+    conditions.push(Prisma.sql`t."executedAt" >= ${filters.from}`);
+  }
+  if (filters.to) {
+    conditions.push(Prisma.sql`t."executedAt" <= ${filters.to}`);
   }
 
-  const ownedTradeFilter = buildTradeFilter(userId, filters);
+  const rows = await prisma.$queryRaw(Prisma.sql`
+    SELECT
+      TO_CHAR(t."executedAt", 'YYYY-MM') AS "month",
+      COUNT(*)::int AS "totalTrades",
+      COUNT(CASE WHEN t."realizedPnl" > 0 THEN 1 END)::int AS "winningTrades",
+      COUNT(CASE WHEN t."realizedPnl" < 0 THEN 1 END)::int AS "losingTrades",
+      COALESCE(SUM(t."totalValue"), 0)::text AS "totalVolume",
+      COALESCE(SUM(t."realizedPnl"), 0)::text AS "realizedPnl",
+      AVG(t."realizedPnlPct")::text AS "avgRealizedPnlPct"
+    FROM "Trade" t
+    JOIN "Portfolio" p ON t."portfolioId" = p."id"
+    WHERE ${Prisma.join(conditions, " AND ")}
+    GROUP BY "month"
+    ORDER BY "month" ASC;
+  `);
 
-  const trades = await prisma.trade.findMany({
-    where: ownedTradeFilter,
-    select: {
-      totalValue: true,
-      realizedPnl: true,
-      realizedPnlPct: true,
-      executedAt: true,
-    },
-    orderBy: {
-      executedAt: "asc",
-    },
-  });
-
-  const monthBuckets = new Map();
-
-  for (const trade of trades) {
-    const monthKey = trade.executedAt.toISOString().slice(0, 7);
-    if (!monthBuckets.has(monthKey)) {
-      monthBuckets.set(monthKey, []);
-    }
-    monthBuckets.get(monthKey).push(trade);
-  }
-
-  const sortedMonthKeys = Array.from(monthBuckets.keys()).sort();
-  const monthly = [];
-
-  for (const month of sortedMonthKeys) {
-    const monthTrades = monthBuckets.get(month);
-    const totalTrades = monthTrades.length;
-    let totalVolume = new Prisma.Decimal(0);
-    let winningTrades = 0;
-    let losingTrades = 0;
-    let totalRealizedPnl = new Prisma.Decimal(0);
-    let realizedReturnSum = new Prisma.Decimal(0);
-    let realizedReturnCount = 0;
-
-    for (const trade of monthTrades) {
-      if (trade.totalValue) {
-        totalVolume = totalVolume.plus(trade.totalValue);
-      }
-      if (trade.realizedPnl !== null && trade.realizedPnl !== undefined) {
-        totalRealizedPnl = totalRealizedPnl.plus(trade.realizedPnl);
-        if (trade.realizedPnl.gt(0)) {
-          winningTrades++;
-        } else if (trade.realizedPnl.lt(0)) {
-          losingTrades++;
-        }
-      }
-      if (trade.realizedPnlPct !== null && trade.realizedPnlPct !== undefined) {
-        realizedReturnSum = realizedReturnSum.plus(trade.realizedPnlPct);
-        realizedReturnCount++;
-      }
-    }
-
-    const winRate = computeWinRate(winningTrades, losingTrades);
-    const averageReturn = realizedReturnCount > 0
-      ? realizedReturnSum.dividedBy(realizedReturnCount).toFixed(4)
-      : null;
-
-    monthly.push({
-      month,
-      totalTrades,
-      winningTrades,
-      losingTrades,
-      winRate,
-      totalVolume: totalVolume.toString(),
-      realizedPnl: totalRealizedPnl.toString(),
-      averageReturn,
-    });
-  }
-
-  return monthly;
+  return rows.map((row) => ({
+    month: row.month,
+    totalTrades: Number(row.totalTrades),
+    winningTrades: Number(row.winningTrades),
+    losingTrades: Number(row.losingTrades),
+    winRate: computeWinRate(Number(row.winningTrades), Number(row.losingTrades)),
+    totalVolume: new Prisma.Decimal(row.totalVolume).toString(),
+    realizedPnl: new Prisma.Decimal(row.realizedPnl).toString(),
+    averageReturn:
+      row.avgRealizedPnlPct !== null && row.avgRealizedPnlPct !== undefined
+        ? new Prisma.Decimal(row.avgRealizedPnlPct).toFixed(4)
+        : null,
+  }));
 }
 
 /**
@@ -193,93 +167,118 @@ async function getMonthlyTradeStatistics(userId, filters = {}) {
  * from the verified access token (never from the request), so one user can
  * never read another user's numbers.
  */
-async function getUserStatistics(userId, filters = {}) {
+async function getUserStatistics(userId, filters = {}, options = {}) {
   // Reuse the existing auth helper so a deleted or suspended account gets the
   // same 404/403 semantics as GET /auth/me and cannot read statistics.
-  await getCurrentUser(userId);
+  if (!options.prevalidated) {
+    await getCurrentUser(userId);
 
-  if (filters.portfolioId) {
-    const portfolio = await prisma.portfolio.findFirst({
-      where: {
-        id: filters.portfolioId,
-        userId,
-      },
-      select: { id: true },
-    });
+    if (filters.portfolioId) {
+      const portfolio = await prisma.portfolio.findFirst({
+        where: {
+          id: filters.portfolioId,
+          userId,
+        },
+        select: { id: true },
+      });
 
-    if (!portfolio) {
-      throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+      if (!portfolio) {
+        throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+      }
     }
   }
 
-  const ownedTradeFilter = buildTradeFilter(userId, filters);
+  const conditions = [Prisma.sql`p."userId" = ${userId}`];
+  if (filters.portfolioId) {
+    conditions.push(Prisma.sql`t."portfolioId" = ${filters.portfolioId}`);
+  }
+  if (filters.symbol) {
+    conditions.push(Prisma.sql`t."symbol" = ${filters.symbol}`);
+  }
+  if (filters.side) {
+    conditions.push(Prisma.sql`t."side" = ${filters.side}::"OrderSide"`);
+  }
+  if (filters.from) {
+    conditions.push(Prisma.sql`t."executedAt" >= ${filters.from}`);
+  }
+  if (filters.to) {
+    conditions.push(Prisma.sql`t."executedAt" < ${filters.to}`);
+  }
 
-  const [totals, winningTrades, losingTrades, bestTrade, worstTrade] =
-    await Promise.all([
-      prisma.trade.aggregate({
-        where: ownedTradeFilter,
-        _count: true,
-        _sum: {
-          totalValue: true,
-        },
-        // SQL AVG ignores NULLs, so trades without a realized return are
-        // excluded from the average automatically.
-        _avg: {
-          realizedPnlPct: true,
-        },
-      }),
-      prisma.trade.count({
-        where: {
-          ...ownedTradeFilter,
-          realizedPnl: {
-            gt: 0,
-          },
-        },
-      }),
-      prisma.trade.count({
-        where: {
-          ...ownedTradeFilter,
-          realizedPnl: {
-            lt: 0,
-          },
-        },
-      }),
-      prisma.trade.findFirst({
-        where: {
-          ...ownedTradeFilter,
-          realizedPnl: {
-            not: null,
-          },
-        },
-        orderBy: [{ realizedPnl: "desc" }, { executedAt: "desc" }],
-        select: TRADE_STAT_FIELDS,
-      }),
-      prisma.trade.findFirst({
-        where: {
-          ...ownedTradeFilter,
-          realizedPnl: {
-            not: null,
-          },
-        },
-        orderBy: [{ realizedPnl: "asc" }, { executedAt: "desc" }],
-        select: TRADE_STAT_FIELDS,
-      }),
-    ]);
+  // Consolidate totals, counts, volume, average return, and best/worst trade
+  // into a single database round trip using CTEs.
+  const rows = await prisma.$queryRaw(Prisma.sql`
+    WITH filtered_trades AS (
+      SELECT
+        t.id,
+        t.symbol,
+        t."realizedPnl",
+        t."realizedPnlPct",
+        t."totalValue",
+        t."executedAt"
+      FROM "Trade" t
+      JOIN "Portfolio" p ON t."portfolioId" = p."id"
+      WHERE ${Prisma.join(conditions, " AND ")}
+    ),
+    summary AS (
+      SELECT
+        COUNT(*)::int AS "totalTrades",
+        COUNT(CASE WHEN "realizedPnl" > 0 THEN 1 END)::int AS "winningTrades",
+        COUNT(CASE WHEN "realizedPnl" < 0 THEN 1 END)::int AS "losingTrades",
+        SUM("totalValue")::text AS "totalVolume",
+        AVG("realizedPnlPct")::text AS "avgRealizedPnlPct"
+      FROM filtered_trades
+    ),
+    best AS (
+      SELECT
+        f.symbol,
+        f."realizedPnl"::text AS "realizedPnl",
+        f."realizedPnlPct"::text AS "realizedPnlPct"
+      FROM filtered_trades f
+      WHERE f."realizedPnl" IS NOT NULL
+      ORDER BY f."realizedPnl" DESC, f."executedAt" DESC
+      LIMIT 1
+    ),
+    worst AS (
+      SELECT
+        f.symbol,
+        f."realizedPnl"::text AS "realizedPnl",
+        f."realizedPnlPct"::text AS "realizedPnlPct"
+      FROM filtered_trades f
+      WHERE f."realizedPnl" IS NOT NULL
+      ORDER BY f."realizedPnl" ASC, f."executedAt" DESC
+      LIMIT 1
+    )
+    SELECT
+      s."totalTrades",
+      s."winningTrades",
+      s."losingTrades",
+      s."totalVolume",
+      s."avgRealizedPnlPct",
+      (SELECT to_jsonb(b) FROM best b) AS "bestTrade",
+      (SELECT to_jsonb(w) FROM worst w) AS "worstTrade"
+    FROM summary s;
+  `);
+
+  const row = rows[0] || {};
+  const totalTrades = Number(row.totalTrades) || 0;
+  const winningTrades = Number(row.winningTrades) || 0;
+  const losingTrades = Number(row.losingTrades) || 0;
 
   const response = {
-    totalTrades: totals._count,
+    totalTrades,
     winningTrades,
     losingTrades,
     winRate: computeWinRate(winningTrades, losingTrades),
     // An empty aggregate sums to null; expose "0" so the shape stays stable.
-    totalVolume: toDecimalString(totals._sum.totalValue) ?? "0",
-    averageReturn: toDecimalString(totals._avg.realizedPnlPct),
-    bestTrade: serializeTradeSummary(bestTrade),
-    worstTrade: serializeTradeSummary(worstTrade),
+    totalVolume: toDecimalString(row.totalVolume) ?? "0",
+    averageReturn: toDecimalString(row.avgRealizedPnlPct),
+    bestTrade: serializeTradeSummary(row.bestTrade),
+    worstTrade: serializeTradeSummary(row.worstTrade),
   };
 
   if (filters.includeMonthly) {
-    response.monthly = await getMonthlyTradeStatistics(userId, filters);
+    response.monthly = await getMonthlyTradeStatistics(userId, filters, { prevalidated: true });
   }
 
   return response;
