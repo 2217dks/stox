@@ -395,6 +395,52 @@ async function processOrder(order, options) {
 }
 
 /**
+ * Filter shared by discovery and the polling processor.
+ *
+ * Inactive portfolios are filtered before `take`, not after it. Otherwise
+ * their old PENDING rows occupy the oldest slots in every batch and can
+ * permanently starve valid orders belonging to active portfolios.
+ */
+function pendingOrderWhere({ portfolioId } = {}) {
+  const where = {
+    status: "PENDING",
+    portfolio: {
+      isActive: true,
+    },
+  };
+
+  if (portfolioId) {
+    where.portfolioId = portfolioId;
+  }
+
+  return where;
+}
+
+/**
+ * Find eligible pending orders for the BullMQ scan job.
+ *
+ * The scan is a discovery/enqueue mechanism, not a second execution path:
+ * it returns identifiers and lets the individual `execute-order` job run the
+ * shared processor. Returning only `id`/`portfolioId` keeps the scan cheap and
+ * means a worker that processes the order concurrently cannot be working from
+ * a stale full row.
+ */
+async function discoverPendingOrders({
+  limit = DEFAULT_BATCH_SIZE,
+  portfolioId,
+} = {}) {
+  return prisma.order.findMany({
+    where: pendingOrderWhere({ portfolioId }),
+    select: {
+      id: true,
+      portfolioId: true,
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: limit,
+  });
+}
+
+/**
  * One polling pass over pending orders.
  *
  * The processor is deliberately separate from the transport (BullMQ or the
@@ -416,22 +462,8 @@ async function processPendingOrders({
       ? maxAttempts
       : DEFAULT_MAX_ATTEMPTS;
 
-  // Inactive portfolios are filtered before `take`, not after it. Otherwise
-  // their old PENDING rows occupy the oldest slots in every batch and can
-  // permanently starve valid orders belonging to active portfolios.
-  const where = {
-    status: "PENDING",
-    portfolio: {
-      isActive: true,
-    },
-  };
-
-  if (portfolioId) {
-    where.portfolioId = portfolioId;
-  }
-
   const pendingOrders = await prisma.order.findMany({
-    where,
+    where: pendingOrderWhere({ portfolioId }),
     include: {
       portfolio: {
         select: {
@@ -518,6 +550,9 @@ module.exports = {
   DEFAULT_BATCH_SIZE,
   DEFAULT_INTERVAL_MS,
   DEFAULT_MAX_ATTEMPTS,
+  discoverPendingOrders,
+  processOrder,
   processPendingOrders,
+  runOrder,
   startOrderWorker,
 };

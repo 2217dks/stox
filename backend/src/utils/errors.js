@@ -45,6 +45,14 @@ class AppError extends Error {
     return new AppError(message, { statusCode: 429, code, details });
   }
 
+  static payloadTooLarge(message = "Request body is too large.", code = "PAYLOAD_TOO_LARGE", details = null) {
+    return new AppError(message, { statusCode: 413, code, details });
+  }
+
+  static unsupportedMediaType(message = "Unsupported media type.", code = "UNSUPPORTED_MEDIA_TYPE", details = null) {
+    return new AppError(message, { statusCode: 415, code, details });
+  }
+
   static internal(message = "An unexpected error occurred.", code = "INTERNAL_SERVER_ERROR", details = null) {
     return new AppError(message, { statusCode: 500, code, details });
   }

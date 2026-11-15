@@ -27,6 +27,12 @@ Paginated list endpoints use `page` (default `1`) and `limit` (usually default `
 
 The app applies a global limiter to `/api/*`. Authentication routes also use `authLimiter`; order creation and cancellation use `orderLimiter`. Exact quotas are deployment configuration, so clients should handle `429` rather than assume a fixed number.
 
+### Cross-cutting HTTP behaviour
+
+- **Correlation id.** Every response carries `X-Request-Id`. A well-formed inbound `X-Request-Id` (8–128 chars of `A-Z a-z 0-9 . _ : -`) is reused; anything else is replaced with a generated UUID. The header is exposed through CORS so browser clients can quote it in bug reports.
+- **Request size limit.** JSON bodies are limited to `REQUEST_BODY_LIMIT` (default `100kb`). An oversized body returns `413 PAYLOAD_TOO_LARGE`; malformed JSON returns `400 INVALID_JSON`; an unsupported content encoding returns `415 UNSUPPORTED_CONTENT_ENCODING`. All use the standard error envelope.
+- **Security headers.** Responses carry Helmet's hardened header set, including `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: SAMEORIGIN`, HSTS, and a CSP of `default-src 'none'; frame-ancestors 'none'`. `X-Powered-By` is never sent. Header injection can be disabled with `SECURITY_HEADERS_ENABLED=false` for diagnostics only.
+
 ## Endpoint catalogue
 
 ### Health
@@ -46,6 +52,18 @@ If the database query fails, the controller deliberately returns `503` (not the 
 ```json
 {"success":false,"data":{"status":"degraded","database":"unreachable","timestamp":"2026-11-10T08:00:00.000Z"}}
 ```
+
+### Observability
+
+#### `GET /metrics`
+
+Mounted at the **root** (`/metrics`), not under `/api/v1`. Returns Prometheus text exposition format (`text/plain; version=0.0.4; charset=utf-8`) for scraping. It is not rate limited and returns no JSON envelope.
+
+Exposed series: `http_requests_total`, `http_request_duration_seconds` (histogram), `http_requests_in_flight`, `db_query_duration_seconds`, `db_up`, plus process/runtime gauges (`process_uptime_seconds`, `process_resident_memory_bytes`, `nodejs_heap_used_bytes`, `nodejs_heap_total_bytes`). Labels are low-cardinality: HTTP series use the matched route pattern (for example `/api/v1/orders/:id`) or `unmatched`, never the raw URL.
+
+`METRICS_ENABLED=false` makes the route return `404 ROUTE_NOT_FOUND`. Setting `METRICS_TOKEN` requires `Authorization: Bearer <token>` and returns `401 UNAUTHORIZED` otherwise.
+
+**Production requirement:** the endpoint is enabled by default and only protected when `METRICS_TOKEN` is set. A deployment must either set a strong token (and send it from the Prometheus scrape config) or restrict `/metrics` at the proxy/network layer. It must not be internet-reachable without authentication.
 
 ### Authentication
 

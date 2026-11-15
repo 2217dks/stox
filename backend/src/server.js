@@ -8,6 +8,7 @@ const { configureEventBus } = require("./realtime/eventBus");
 const { createRedisEventBus } = require("./realtime/redisBus");
 const { startRealtimeBridge } = require("./realtime/realtimeBridge");
 const { createShutdown } = require("./serverShutdown");
+const { closeQueues } = require("./queues");
 const logger = require("./utils/logger");
 
 const PORT = process.env.PORT || 8000;
@@ -39,6 +40,7 @@ const shutdown = createShutdown({
   marketRooms,
   realtimeBridge,
   eventBus,
+  closeQueues,
 });
 
 process.on("SIGINT", () => shutdown("SIGINT"));

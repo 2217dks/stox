@@ -306,26 +306,41 @@ The current order is:
 Request
    |
    v
-1. Request logger
+1. Security headers (Helmet)
    |
    v
-2. CORS
+2. Request correlation id (X-Request-Id)
    |
    v
-3. express.json()
+3. Request logger
    |
    v
-4. Global /api rate limiter
+4. HTTP metrics
    |
    v
-5. /api/v1 routes
+5. CORS
    |
    v
-6. Not-found handler
+6. Global /api rate limiter
    |
    v
-7. Centralized error handler
+7. JSON body parser (explicit size limit)
+   |
+   v
+8. GET /metrics (Prometheus scrape)
+   |
+   v
+9. /api/v1 routes
+   |
+   v
+10. Not-found handler
+   |
+   v
+11. Centralized error handler
 ```
+
+The rate limiter runs **before** body parsing, so a client that is already
+over quota cannot make the server buffer and parse a large payload first.
 
 ### CORS
 
@@ -340,26 +355,46 @@ CORS_ORIGIN=http://localhost:3000
 If the variable is not set, the application uses
 `http://localhost:3000`.
 
-Credentials are enabled.
+Credentials are enabled. `X-Request-Id` is exposed to browser clients so the
+correlation id can be attached to a bug report.
 
 ### JSON body parsing
 
 The application uses:
 
 ```javascript
-app.use(express.json());
+express.json({ limit: process.env.REQUEST_BODY_LIMIT || "100kb" });
 ```
 
-No custom JSON body-size limit is configured in `app.js`.
+The wrapper in `backend/src/middleware/bodyParser.js` translates parser
+failures into `AppError` instances, so the centralized error handler renders
+them with the standard envelope:
+
+| Failure | Status | Code |
+| --- | --- | --- |
+| Body above the limit | `413` | `PAYLOAD_TOO_LARGE` |
+| Malformed JSON | `400` | `INVALID_JSON` |
+| Unsupported content encoding | `415` | `UNSUPPORTED_CONTENT_ENCODING` |
 
 The application does not currently install an URL-encoded body parser
 in this middleware chain.
 
 ### Security headers
 
-Helmet is not installed in the current `app.js` middleware chain.
-Do not assume Helmet-provided headers or Content Security Policy
-are active.
+Helmet is installed in `backend/src/app.js` via
+`backend/src/middleware/securityHeaders.js`.
+
+The policy is deliberately API-oriented rather than document-oriented:
+
+- Content Security Policy: `default-src 'none'; frame-ancestors 'none'`.
+- `Cross-Origin-Resource-Policy: cross-origin`, because the Next.js frontend
+  is served from a different origin.
+- Defaults retained for `X-Content-Type-Options`, `Referrer-Policy`,
+  `X-Frame-Options`, HSTS, and related headers.
+- `X-Powered-By` is disabled.
+
+`SECURITY_HEADERS_ENABLED=false` disables the middleware for diagnostics only;
+it is not a supported production configuration.
 
 ---
 
@@ -393,13 +428,19 @@ Additional error details are included when available.
 The request logger records:
 
 - HTTP method.
-- Request URL.
+- Request URL, with the query string stripped.
 - Response status code.
 - Request duration.
+- Correlation id (`requestId`, echoed as `X-Request-Id`).
+- Authenticated user id (`userId`), or `null` for anonymous requests.
+
+Headers, bodies, and credentials are never logged. Sensitive key names
+(`password`, `token`, `secret`, `authorization`, `cookie`, `apiKey`, …) are
+redacted centrally in `backend/src/utils/logger.js` before any line is written.
 
 The error handler logs warning-level responses for client errors and
 error-level responses for server errors. Server-error logs include
-the error stack when available.
+the error stack when available, plus the same `requestId`.
 
 This request/error logging is not a complete security audit trail of
 all sensitive user actions.
@@ -426,11 +467,11 @@ all sensitive user actions.
 | CORS origin configuration             | Implemented                                                                        |
 | Prisma query parameterization         | Used through Prisma Client                                                         |
 | Resource ownership checks             | Implemented in relevant domain flows                                               |
-| Helmet security headers               | Not installed in current app middleware                                            |
-| Explicit Content Security Policy      | Not configured in current app middleware                                           |
+| Helmet security headers               | Implemented (`middleware/securityHeaders.js`)                                      |
+| Explicit Content Security Policy      | Implemented for the JSON API (`default-src 'none'`)                                |
 | CSRF token protection                 | Not implemented in current app middleware                                          |
 | Dedicated XSS sanitization middleware | Not installed in current app middleware                                            |
-| Custom JSON body-size limit           | Not configured in `app.js`                                                         |
+| Custom JSON body-size limit           | Implemented (`REQUEST_BODY_LIMIT`, default `100kb`)                                |
 | URL-encoded body parser               | Not installed in current app middleware                                            |
 | Complete security audit trail         | Not implemented                                                                    |
 | HTTPS enforcement in Express          | Not implemented in `app.js`; deployment infrastructure must be assessed separately |

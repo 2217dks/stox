@@ -136,16 +136,26 @@ describe("request logging middleware", () => {
     });
   });
 
+  // Contract updated for task 49.1 (structured logging fields): request logs
+  // now carry a correlation id and the authenticated user id. The field set is
+  // still closed — no headers, bodies, or arbitrary metadata may be added.
   describe("payload shape (contract: exactly these fields)", () => {
-    test("entries contain method, url, statusCode, durationMs and nothing else", async () => {
-      await request(app).get("/api/v1/health");
+    test("entries contain method, url, statusCode, durationMs, requestId, userId and nothing else", async () => {
+      const response = await request(app).get("/api/v1/health");
 
       const payloads = loggedPayloads(infoSpy, "/api/v1/health");
       expect(payloads.length).toBeGreaterThanOrEqual(1);
 
       const payload = payloads[payloads.length - 1];
       const keys = Object.keys(payload).sort();
-      expect(keys).toEqual(["durationMs", "method", "statusCode", "url"]);
+      expect(keys).toEqual([
+        "durationMs",
+        "method",
+        "requestId",
+        "statusCode",
+        "url",
+        "userId",
+      ]);
 
       expect(typeof payload.method).toBe("string");
       expect(typeof payload.url).toBe("string");
@@ -153,6 +163,8 @@ describe("request logging middleware", () => {
       expect(Number.isInteger(payload.statusCode)).toBe(true);
       expect(Number.isInteger(payload.durationMs)).toBe(true);
       expect(payload.durationMs).toBeGreaterThanOrEqual(0);
+      expect(payload.requestId).toBe(response.headers["x-request-id"]);
+      expect(payload.userId).toBeNull();
     });
 
     test("method and url reflect the actual request", async () => {

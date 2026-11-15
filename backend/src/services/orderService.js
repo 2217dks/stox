@@ -4,6 +4,8 @@ const { AppError } = require("../utils/errors");
 const { hasEventBus, publishOrderStatus } = require("../realtime/orderEvents");
 const { Prisma } = require("@prisma/client");
 const marketDataService = require("./marketData");
+const { enqueueOrderExecution } = require("../queues/orderQueue");
+const logger = require("../utils/logger");
 const { recordOrderEvent, getOrderEvents } = require("./orderEventService");
 
 const ZERO = new Prisma.Decimal(0);
@@ -571,6 +573,22 @@ async function createOrder({
 
   const serialized = serializeOrder(order);
   triggerOrderStatus(serialized);
+
+  // Best-effort: ask the BullMQ worker to fill the order immediately instead
+  // of waiting for the next scan. The repeatable scan and the polling worker
+  // remain the fallback, so a Redis outage never blocks order placement.
+  // `enqueueOrderExecution` validates its payload and catches Redis errors;
+  // the catch here covers a validation failure so this floating promise can
+  // never become an unhandled rejection.
+  void enqueueOrderExecution({
+    orderId: order.id,
+    portfolioId: order.portfolioId,
+  }).catch((error) => {
+    logger.warn("Order execution enqueue failed", {
+      orderId: order.id,
+      message: error.message,
+    });
+  });
 
   return serialized;
 }
