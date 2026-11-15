@@ -131,7 +131,7 @@ async function getMonthlyTradeStatistics(userId, filters = {}, options = {}) {
 
   const rows = await prisma.$queryRaw(Prisma.sql`
     SELECT
-      TO_CHAR(timezone('UTC', t."executedAt"), 'YYYY-MM') AS "month",
+      TO_CHAR(t."executedAt", 'YYYY-MM') AS "month",
       COUNT(*)::int AS "totalTrades",
       COUNT(CASE WHEN t."realizedPnl" > 0 THEN 1 END)::int AS "winningTrades",
       COUNT(CASE WHEN t."realizedPnl" < 0 THEN 1 END)::int AS "losingTrades",

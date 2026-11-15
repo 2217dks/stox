@@ -123,7 +123,7 @@ async function getPortfolioMonthlyPerformance(portfolioId, userId, options = {})
 
   const tradeMonthlyRows = await prisma.$queryRaw(Prisma.sql`
     SELECT
-      TO_CHAR(timezone('UTC', t."executedAt"), 'YYYY-MM') AS "month",
+      TO_CHAR(t."executedAt", 'YYYY-MM') AS "month",
       COALESCE(SUM(t."realizedPnl"), 0)::text AS "realizedPnl"
     FROM "Trade" t
     WHERE ${Prisma.join(conditions, " AND ")}
