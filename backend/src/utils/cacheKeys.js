@@ -12,6 +12,23 @@ function normalizeSymbol(symbol) {
   return required(symbol, "symbol").trim().toUpperCase();
 }
 
+function normalizeDateBound(date) {
+  if (!date) return "";
+  if (date instanceof Date) return date.toISOString();
+  return String(date).trim();
+}
+
+function normalizeNumber(num, fallback) {
+  if (num === undefined || num === null || num === "") return String(fallback);
+  const n = Number(num);
+  return Number.isFinite(n) ? String(n) : String(fallback);
+}
+
+function normalizeString(str) {
+  if (str === undefined || str === null) return "";
+  return String(str).trim();
+}
+
 const cacheKeys = {
   price(assetClass, symbol) {
     return `${PREFIX}:price:${required(assetClass, "assetClass")}:${normalizeSymbol(symbol)}`;
@@ -58,6 +75,73 @@ const cacheKeys = {
 
   metric(name) {
     return `${PREFIX}:metrics:cache:${required(name, "name")}`;
+  },
+
+  portfolioAnalyticsGeneration(portfolioId) {
+    return `${PREFIX}:analytics:generation:portfolio:${required(
+      portfolioId,
+      "portfolioId",
+    )}`;
+  },
+
+  userAnalyticsGeneration(userId) {
+    return `${PREFIX}:analytics:generation:user:${required(
+      userId,
+      "userId",
+    )}`;
+  },
+
+  analyticsPortfolioHeatmap(portfolioId, userId, options = {}) {
+    const period = normalizeString(options.period || "1M").toUpperCase();
+    const year = normalizeString(options.year);
+    return `${PREFIX}:analytics:p:${required(portfolioId, "portfolioId")}:u:${required(userId, "userId")}:heatmap:${period}:${year}`;
+  },
+
+  analyticsPortfolioRiskMetrics(portfolioId, userId, options = {}) {
+    const period = normalizeString(options.period || "1M").toUpperCase();
+    const riskFreeRate = normalizeNumber(options.riskFreeRate, 0.02);
+    return `${PREFIX}:analytics:p:${required(portfolioId, "portfolioId")}:u:${required(userId, "userId")}:risk-metrics:${period}:${riskFreeRate}`;
+  },
+
+  analyticsPortfolioBenchmark(portfolioId, userId, symbol = "SPY", options = {}) {
+    const sym = normalizeSymbol(symbol || "SPY");
+    const period = normalizeString(options.period || "1M").toUpperCase();
+    return `${PREFIX}:analytics:p:${required(portfolioId, "portfolioId")}:u:${required(userId, "userId")}:benchmark:${sym}:${period}`;
+  },
+
+  analyticsPortfolioBenchmarkComparison(portfolioId, userId, symbol = "SPY", options = {}) {
+    const sym = normalizeSymbol(symbol || "SPY");
+    const period = normalizeString(options.period || "1M").toUpperCase();
+    const riskFreeRate = normalizeNumber(options.riskFreeRate, 0.02);
+    return `${PREFIX}:analytics:p:${required(portfolioId, "portfolioId")}:u:${required(userId, "userId")}:benchmark-comparison:${sym}:${period}:${riskFreeRate}`;
+  },
+
+  analyticsPortfolioMonthlyPerformance(portfolioId, userId, options = {}) {
+    const year = normalizeString(options.year);
+    const from = normalizeDateBound(options.from);
+    const to = normalizeDateBound(options.to);
+    return `${PREFIX}:analytics:p:${required(portfolioId, "portfolioId")}:u:${required(userId, "userId")}:monthly:${year}:${from}:${to}`;
+  },
+
+  analyticsUserStatistics(userId, filters = {}) {
+    const portfolioId = normalizeString(filters.portfolioId);
+    const sym = filters.symbol ? normalizeSymbol(filters.symbol) : "";
+    const side = normalizeString(filters.side).toUpperCase();
+    const assetType = normalizeString(filters.assetType).toUpperCase();
+    const from = normalizeDateBound(filters.from);
+    const to = normalizeDateBound(filters.to);
+    const includeMonthly = filters.includeMonthly ? "1" : "0";
+    return `${PREFIX}:analytics:u:${required(userId, "userId")}:stats:${portfolioId}:${sym}:${side}:${assetType}:${from}:${to}:${includeMonthly}`;
+  },
+
+  analyticsUserMonthlyStatistics(userId, filters = {}) {
+    const portfolioId = normalizeString(filters.portfolioId);
+    const sym = filters.symbol ? normalizeSymbol(filters.symbol) : "";
+    const side = normalizeString(filters.side).toUpperCase();
+    const assetType = normalizeString(filters.assetType).toUpperCase();
+    const from = normalizeDateBound(filters.from);
+    const to = normalizeDateBound(filters.to);
+    return `${PREFIX}:analytics:u:${required(userId, "userId")}:stats-monthly:${portfolioId}:${sym}:${side}:${assetType}:${from}:${to}`;
   },
 };
 
