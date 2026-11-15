@@ -5,6 +5,12 @@ const DEFAULT_TTL_SECONDS = Object.freeze({
   historicalPrices: 60 * 60,
   symbol: 24 * 60 * 60,
   session: 7 * 24 * 60 * 60,
+  analyticsHeatmap: 300,
+  analyticsRiskMetrics: 300,
+  analyticsBenchmark: 3600,
+  analyticsBenchmarkComparison: 300,
+  analyticsMonthlyPerformance: 300,
+  userStatistics: 120,
 });
 
 const TTL_ENV_KEYS = Object.freeze({
@@ -14,6 +20,12 @@ const TTL_ENV_KEYS = Object.freeze({
   historicalPrices: "CACHE_TTL_HISTORICAL_PRICES_SECONDS",
   symbol: "CACHE_TTL_SYMBOL_SECONDS",
   session: "CACHE_TTL_SESSION_SECONDS",
+  analyticsHeatmap: "CACHE_TTL_ANALYTICS_HEATMAP_SECONDS",
+  analyticsRiskMetrics: "CACHE_TTL_ANALYTICS_RISK_METRICS_SECONDS",
+  analyticsBenchmark: "CACHE_TTL_ANALYTICS_BENCHMARK_SECONDS",
+  analyticsBenchmarkComparison: "CACHE_TTL_ANALYTICS_BENCHMARK_COMPARISON_SECONDS",
+  analyticsMonthlyPerformance: "CACHE_TTL_ANALYTICS_MONTHLY_PERFORMANCE_SECONDS",
+  userStatistics: "CACHE_TTL_USER_STATISTICS_SECONDS",
 });
 
 function readTtl(value, fallback, envName) {
