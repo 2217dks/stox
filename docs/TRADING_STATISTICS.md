@@ -206,3 +206,38 @@ Task 39 reconciles both perspectives:
 ## Backward Compatibility & Verification
 * Standard calls to `GET /api/v1/users/me/statistics` with no query parameters continue to return the exact 8 keys expected by existing clients and test scripts (`totalTrades`, `winningTrades`, `losingTrades`, `winRate`, `totalVolume`, `averageReturn`, `bestTrade`, `worstTrade`).
 * Verified against `backend/scripts/test-user-statistics-api.js` and comprehensive Jest unit/integration test suites.
+
+---
+
+## Verification & Implementation Notes
+
+### Delivered Components & Files
+
+1. **Validators & Schemas:**
+   - `backend/src/validators/userValidator.js`: Added `tradeStatisticsQuerySchema` supporting `portfolioId`, `symbol`, `side`, `from`, `to`, and `includeMonthly`.
+   - `backend/src/validators/portfolioValidator.js`: Added `monthlyPerformanceQuerySchema` supporting `year`, `from`, `to`.
+   - `backend/tests/unit/validators/userValidator.test.js`: Black-box unit tests for query parameter coercion, symbol casing, UUID validation, and date bounds.
+   - `backend/tests/unit/validators/portfolioAnalyticsValidator.test.js`: Added tests for `monthlyPerformanceQuerySchema`.
+
+2. **Services & Helpers:**
+   - `backend/src/services/userStatisticsService.js`:
+     - Isolated pure helper functions: `computeWinRate`, `toDecimalString`, `serializeTradeSummary`, `buildTradeFilter`.
+     - Added portfolio ownership validation (`PORTFOLIO_NOT_FOUND` when foreign portfolio requested).
+     - Added `getMonthlyTradeStatistics(userId, filters)` for calendar-month trade statistics breakdown.
+     - Enforced deterministic ordering for best/worst trade tie-breaking (`[{ realizedPnl: "desc" }, { executedAt: "desc" }]`).
+   - `backend/src/services/portfolioMonthlyService.js`:
+     - Added `getPortfolioMonthlyPerformance(portfolioId, userId, options)`.
+     - Handles month starting valuations $V_{\text{start}}$ (using prior month's ending snapshot or initial snapshot), ending valuations $V_{\text{end}}$, net PnL, simple return percentage, realized trade P&L, and unrealized valuation changes.
+     - Pure UTC month boundary helpers (`toUtcYearMonth`, `getUtcMonthStart`, `getUtcMonthEnd`) with leap year handling.
+
+3. **Controllers & Routes:**
+   - `backend/src/controllers/userController.js`: Added `getMyMonthlyStatistics` and wired `filters` to `getMyStatistics`.
+   - `backend/src/routes/userRoutes.js`: Registered validated `GET /me/statistics` and `GET /me/statistics/monthly`.
+   - `backend/src/controllers/portfolioController.js`: Added `getMonthlyPerformance`.
+   - `backend/src/routes/portfolioRoutes.js`: Registered `GET /:portfolioId/analytics/monthly-performance` and `GET /:portfolioId/monthly-performance`.
+
+4. **Integration & Regression Testing:**
+   - `backend/tests/integration/monthlyPerformance.integration.test.js`: Real PostgreSQL integration test testing unauthenticated rejection (401), cross-user portfolio isolation (404), owner success (200), year filtering, invalid ranges, and monthly trade statistics.
+   - `backend/tests/unit/services/userStatisticsService.test.js`: Unit tests covering zero trades, only BUY trades, breakeven trades, 100% win rate, 0% win rate, high-precision decimals, and multi-month rollover.
+   - `backend/tests/unit/services/portfolioMonthlyService.test.js`: Unit tests for monthly portfolio performance aggregation and boundary helpers.
+
