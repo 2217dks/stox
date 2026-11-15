@@ -112,26 +112,29 @@ async function getPortfolioMonthlyPerformance(portfolioId, userId, options = {})
     priorSnapshot = await findLatestSnapshot(portfolioId, fromDate);
   }
 
-  // 4. Query trades in range for realized P&L aggregation
-  const tradeWhere = {
-    portfolioId,
-  };
-  if (fromDate || toDate) {
-    tradeWhere.executedAt = {};
-    if (fromDate) tradeWhere.executedAt.gte = fromDate;
-    if (toDate) tradeWhere.executedAt.lte = toDate;
+  // 4. Query trades in range aggregated by month for realized P&L
+  const conditions = [Prisma.sql`t."portfolioId" = ${portfolioId}`];
+  if (fromDate) {
+    conditions.push(Prisma.sql`t."executedAt" >= ${fromDate}`);
+  }
+  if (toDate) {
+    conditions.push(Prisma.sql`t."executedAt" <= ${toDate}`);
   }
 
-  const trades = await prisma.trade.findMany({
-    where: tradeWhere,
-    select: {
-      realizedPnl: true,
-      executedAt: true,
-    },
-    orderBy: {
-      executedAt: "asc",
-    },
-  });
+  const tradeMonthlyRows = await prisma.$queryRaw(Prisma.sql`
+    SELECT
+      TO_CHAR(timezone('UTC', t."executedAt"), 'YYYY-MM') AS "month",
+      COALESCE(SUM(t."realizedPnl"), 0)::text AS "realizedPnl"
+    FROM "Trade" t
+    WHERE ${Prisma.join(conditions, " AND ")}
+    GROUP BY "month"
+    ORDER BY "month" ASC;
+  `);
+
+  const tradePnlByMonth = new Map();
+  for (const row of tradeMonthlyRows) {
+    tradePnlByMonth.set(row.month, new Prisma.Decimal(row.realizedPnl));
+  }
 
   // 5. Group snapshots and trades by UTC month (YYYY-MM)
   const monthBuckets = new Map();
@@ -141,7 +144,6 @@ async function getPortfolioMonthlyPerformance(portfolioId, userId, options = {})
       monthBuckets.set(monthKey, {
         month: monthKey,
         snapshots: [],
-        trades: [],
       });
     }
     return monthBuckets.get(monthKey);
@@ -152,9 +154,8 @@ async function getPortfolioMonthlyPerformance(portfolioId, userId, options = {})
     getOrCreateBucket(key).snapshots.push(snapshot);
   }
 
-  for (const trade of trades) {
-    const key = toUtcYearMonth(trade.executedAt);
-    getOrCreateBucket(key).trades.push(trade);
+  for (const monthKey of tradePnlByMonth.keys()) {
+    getOrCreateBucket(monthKey);
   }
 
   // Sort months chronologically
@@ -167,15 +168,9 @@ async function getPortfolioMonthlyPerformance(portfolioId, userId, options = {})
   for (const monthKey of sortedMonthKeys) {
     const bucket = monthBuckets.get(monthKey);
     const monthSnapshots = bucket.snapshots;
-    const monthTrades = bucket.trades;
 
-    // Calculate sum of realized PnL from trades in this month
-    let realizedPnl = ZERO;
-    for (const trade of monthTrades) {
-      if (trade.realizedPnl !== null && trade.realizedPnl !== undefined) {
-        realizedPnl = realizedPnl.plus(trade.realizedPnl);
-      }
-    }
+    // Realized PnL from trades in this month
+    const realizedPnl = tradePnlByMonth.get(monthKey) || ZERO;
 
     if (monthSnapshots.length === 0) {
       // Month with trades but no snapshots: emit realized P&L, null valuation fields

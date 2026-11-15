@@ -7,6 +7,7 @@ jest.mock("../../../src/config/database", () => ({
   trade: {
     findMany: jest.fn(),
   },
+  $queryRaw: jest.fn(),
   $disconnect: jest.fn(),
 }));
 
@@ -88,7 +89,7 @@ describe("portfolioMonthlyService", () => {
     test("returns empty months array when portfolio has no snapshots or trades", async () => {
       prisma.portfolio.findFirst.mockResolvedValue({ id: portfolioId });
       findSnapshots.mockResolvedValue([]);
-      prisma.trade.findMany.mockResolvedValue([]);
+      prisma.$queryRaw.mockResolvedValue([]);
 
       const result = await getPortfolioMonthlyPerformance(portfolioId, userId);
 
@@ -121,15 +122,15 @@ describe("portfolioMonthlyService", () => {
         },
       ]);
 
-      // Trades in Jan and Feb
-      prisma.trade.findMany.mockResolvedValue([
+      // Monthly aggregated trades in Jan and Feb
+      prisma.$queryRaw.mockResolvedValue([
         {
-          realizedPnl: new Prisma.Decimal("200"),
-          executedAt: new Date("2026-01-10T12:00:00.000Z"),
+          month: "2026-01",
+          realizedPnl: "200",
         },
         {
-          realizedPnl: new Prisma.Decimal("300"),
-          executedAt: new Date("2026-02-20T12:00:00.000Z"),
+          month: "2026-02",
+          realizedPnl: "300",
         },
       ]);
 
@@ -180,7 +181,7 @@ describe("portfolioMonthlyService", () => {
         },
       ]);
 
-      prisma.trade.findMany.mockResolvedValue([]);
+      prisma.$queryRaw.mockResolvedValue([]);
 
       const result = await getPortfolioMonthlyPerformance(portfolioId, userId, {
         from: "2026-02",
@@ -220,14 +221,14 @@ describe("portfolioMonthlyService", () => {
       ]);
 
       // February has a trade with realized P&L, March has a trade
-      prisma.trade.findMany.mockResolvedValue([
+      prisma.$queryRaw.mockResolvedValue([
         {
-          realizedPnl: new Prisma.Decimal("300"),
-          executedAt: new Date("2026-02-15T12:00:00.000Z"),
+          month: "2026-02",
+          realizedPnl: "300",
         },
         {
-          realizedPnl: new Prisma.Decimal("150"),
-          executedAt: new Date("2026-03-20T12:00:00.000Z"),
+          month: "2026-03",
+          realizedPnl: "150",
         },
       ]);
 
@@ -294,7 +295,7 @@ describe("portfolioMonthlyService", () => {
         },
       ]);
 
-      prisma.trade.findMany.mockResolvedValue([]);
+      prisma.$queryRaw.mockResolvedValue([]);
 
       const result = await getPortfolioMonthlyPerformance(portfolioId, userId, {
         from: "2026-03",
