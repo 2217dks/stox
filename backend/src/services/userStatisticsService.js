@@ -154,9 +154,7 @@ async function getUserStatistics(userId, filters = {}) {
             not: null,
           },
         },
-        orderBy: {
-          realizedPnl: "desc",
-        },
+        orderBy: [{ realizedPnl: "desc" }, { executedAt: "desc" }],
         select: TRADE_STAT_FIELDS,
       }),
       prisma.trade.findFirst({
@@ -166,9 +164,7 @@ async function getUserStatistics(userId, filters = {}) {
             not: null,
           },
         },
-        orderBy: {
-          realizedPnl: "asc",
-        },
+        orderBy: [{ realizedPnl: "asc" }, { executedAt: "desc" }],
         select: TRADE_STAT_FIELDS,
       }),
     ]);
