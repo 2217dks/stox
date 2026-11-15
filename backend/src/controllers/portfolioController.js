@@ -237,10 +237,17 @@ async function getBenchmark(req, res, next) {
 
     await portfolioService.getPortfolioById(userId, portfolioId);
 
-    const result = await benchmarkService.getBenchmarkData(symbol, {
-      period,
+    const result = await cacheService.getOrSetPortfolioBenchmark(
       portfolioId,
-    });
+      userId,
+      symbol,
+      { period },
+      () =>
+        benchmarkService.getBenchmarkData(symbol, {
+          period,
+          portfolioId,
+        }),
+    );
 
     return res.status(200).json({
       success: true,
