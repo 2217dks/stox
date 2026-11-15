@@ -6,6 +6,7 @@ const benchmarkComparisonService = require("../services/benchmarkComparisonServi
 const {
   getPortfolioMonthlyPerformance,
 } = require("../services/portfolioMonthlyService");
+const cacheService = require("../services/cacheService");
 
 async function listPortfolios(req, res, next) {
   try {
@@ -180,9 +181,15 @@ async function getPnlHeatmap(req, res, next) {
 
     await portfolioService.getPortfolioById(userId, portfolioId);
 
-    const result = await portfolioHeatmapService.getPortfolioPnlHeatmap(
+    const result = await cacheService.getOrSetPortfolioHeatmap(
       portfolioId,
+      userId,
       { period, year },
+      () =>
+        portfolioHeatmapService.getPortfolioPnlHeatmap(portfolioId, {
+          period,
+          year,
+        }),
     );
 
     return res.status(200).json({
