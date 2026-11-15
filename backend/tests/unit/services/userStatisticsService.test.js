@@ -282,4 +282,120 @@ describe("userStatisticsService unit tests", () => {
       }),
     );
   });
+
+  describe("breakeven, null, and edge-case trade histories", () => {
+    test("handles user with only BUY trades (all realizedPnl is null)", async () => {
+      prisma.trade.aggregate.mockResolvedValue({
+        _count: 4,
+        _sum: { totalValue: new Prisma.Decimal("4000") },
+        _avg: { realizedPnlPct: null },
+      });
+      prisma.trade.count
+        .mockResolvedValueOnce(0) // winningTrades
+        .mockResolvedValueOnce(0); // losingTrades
+      prisma.trade.findFirst
+        .mockResolvedValueOnce(null) // bestTrade
+        .mockResolvedValueOnce(null); // worstTrade
+
+      const result = await getUserStatistics(userId);
+
+      expect(result.totalTrades).toBe(4);
+      expect(result.totalVolume).toBe("4000");
+      expect(result.winningTrades).toBe(0);
+      expect(result.losingTrades).toBe(0);
+      expect(result.winRate).toBe(0);
+      expect(result.averageReturn).toBeNull();
+      expect(result.bestTrade).toBeNull();
+      expect(result.worstTrade).toBeNull();
+    });
+
+    test("handles user with only breakeven trades (realizedPnl == 0)", async () => {
+      prisma.trade.aggregate.mockResolvedValue({
+        _count: 2,
+        _sum: { totalValue: new Prisma.Decimal("1000") },
+        _avg: { realizedPnlPct: new Prisma.Decimal("0") },
+      });
+      prisma.trade.count
+        .mockResolvedValueOnce(0) // winningTrades
+        .mockResolvedValueOnce(0); // losingTrades
+      prisma.trade.findFirst
+        .mockResolvedValueOnce({
+          symbol: "NVDA",
+          realizedPnl: new Prisma.Decimal("0"),
+          realizedPnlPct: new Prisma.Decimal("0"),
+        })
+        .mockResolvedValueOnce({
+          symbol: "NVDA",
+          realizedPnl: new Prisma.Decimal("0"),
+          realizedPnlPct: new Prisma.Decimal("0"),
+        });
+
+      const result = await getUserStatistics(userId);
+
+      expect(result.totalTrades).toBe(2);
+      expect(result.winningTrades).toBe(0);
+      expect(result.losingTrades).toBe(0);
+      expect(result.winRate).toBe(0);
+      expect(result.averageReturn).toBe("0");
+      expect(result.bestTrade?.realizedPnl).toBe("0");
+      expect(result.worstTrade?.realizedPnl).toBe("0");
+    });
+
+    test("handles 100% win rate (all wins, no losses)", async () => {
+      prisma.trade.aggregate.mockResolvedValue({
+        _count: 3,
+        _sum: { totalValue: new Prisma.Decimal("3000") },
+        _avg: { realizedPnlPct: new Prisma.Decimal("15") },
+      });
+      prisma.trade.count
+        .mockResolvedValueOnce(3) // winningTrades
+        .mockResolvedValueOnce(0); // losingTrades
+      prisma.trade.findFirst
+        .mockResolvedValueOnce({
+          symbol: "AAPL",
+          realizedPnl: new Prisma.Decimal("300"),
+          realizedPnlPct: new Prisma.Decimal("15"),
+        })
+        .mockResolvedValueOnce({
+          symbol: "GOOG",
+          realizedPnl: new Prisma.Decimal("100"),
+          realizedPnlPct: new Prisma.Decimal("5"),
+        });
+
+      const result = await getUserStatistics(userId);
+
+      expect(result.totalTrades).toBe(3);
+      expect(result.winningTrades).toBe(3);
+      expect(result.losingTrades).toBe(0);
+      expect(result.winRate).toBe(1);
+    });
+
+    test("handles 0% win rate when all decided trades are losses", async () => {
+      prisma.trade.aggregate.mockResolvedValue({
+        _count: 2,
+        _sum: { totalValue: new Prisma.Decimal("2000") },
+        _avg: { realizedPnlPct: new Prisma.Decimal("-10") },
+      });
+      prisma.trade.count
+        .mockResolvedValueOnce(0) // winningTrades
+        .mockResolvedValueOnce(2); // losingTrades
+      prisma.trade.findFirst
+        .mockResolvedValueOnce({
+          symbol: "TSLA",
+          realizedPnl: new Prisma.Decimal("-50"),
+          realizedPnlPct: new Prisma.Decimal("-5"),
+        })
+        .mockResolvedValueOnce({
+          symbol: "TSLA",
+          realizedPnl: new Prisma.Decimal("-150"),
+          realizedPnlPct: new Prisma.Decimal("-15"),
+        });
+
+      const result = await getUserStatistics(userId);
+
+      expect(result.winningTrades).toBe(0);
+      expect(result.losingTrades).toBe(2);
+      expect(result.winRate).toBe(0);
+    });
+  });
 });
