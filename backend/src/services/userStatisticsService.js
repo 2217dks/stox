@@ -17,11 +17,11 @@ const TRADE_STAT_FIELDS = {
  * follow the same convention to avoid precision loss in JSON.
  */
 function toDecimalString(value) {
-  if (value === null || value === undefined) {
+  if (value === null || value === undefined || value === "") {
     return null;
   }
 
-  return value.toString();
+  return new Prisma.Decimal(value).toString();
 }
 
 function serializeTradeSummary(trade) {
@@ -188,70 +188,93 @@ async function getUserStatistics(userId, filters = {}, options = {}) {
     }
   }
 
-  const ownedTradeFilter = buildTradeFilter(userId, filters);
+  const conditions = [Prisma.sql`p."userId" = ${userId}`];
+  if (filters.portfolioId) {
+    conditions.push(Prisma.sql`t."portfolioId" = ${filters.portfolioId}`);
+  }
+  if (filters.symbol) {
+    conditions.push(Prisma.sql`t."symbol" = ${filters.symbol}`);
+  }
+  if (filters.side) {
+    conditions.push(Prisma.sql`t."side" = ${filters.side}::"OrderSide"`);
+  }
+  if (filters.from) {
+    conditions.push(Prisma.sql`t."executedAt" >= ${filters.from}`);
+  }
+  if (filters.to) {
+    conditions.push(Prisma.sql`t."executedAt" < ${filters.to}`);
+  }
 
-  const [totals, winningTrades, losingTrades, bestTrade, worstTrade] =
-    await Promise.all([
-      prisma.trade.aggregate({
-        where: ownedTradeFilter,
-        _count: true,
-        _sum: {
-          totalValue: true,
-        },
-        // SQL AVG ignores NULLs, so trades without a realized return are
-        // excluded from the average automatically.
-        _avg: {
-          realizedPnlPct: true,
-        },
-      }),
-      prisma.trade.count({
-        where: {
-          ...ownedTradeFilter,
-          realizedPnl: {
-            gt: 0,
-          },
-        },
-      }),
-      prisma.trade.count({
-        where: {
-          ...ownedTradeFilter,
-          realizedPnl: {
-            lt: 0,
-          },
-        },
-      }),
-      prisma.trade.findFirst({
-        where: {
-          ...ownedTradeFilter,
-          realizedPnl: {
-            not: null,
-          },
-        },
-        orderBy: [{ realizedPnl: "desc" }, { executedAt: "desc" }],
-        select: TRADE_STAT_FIELDS,
-      }),
-      prisma.trade.findFirst({
-        where: {
-          ...ownedTradeFilter,
-          realizedPnl: {
-            not: null,
-          },
-        },
-        orderBy: [{ realizedPnl: "asc" }, { executedAt: "desc" }],
-        select: TRADE_STAT_FIELDS,
-      }),
-    ]);
+  // Consolidate totals, counts, volume, average return, and best/worst trade
+  // into a single database round trip using CTEs.
+  const rows = await prisma.$queryRaw(Prisma.sql`
+    WITH filtered_trades AS (
+      SELECT
+        t.id,
+        t.symbol,
+        t."realizedPnl",
+        t."realizedPnlPct",
+        t."totalValue",
+        t."executedAt"
+      FROM "Trade" t
+      JOIN "Portfolio" p ON t."portfolioId" = p."id"
+      WHERE ${Prisma.join(conditions, " AND ")}
+    ),
+    summary AS (
+      SELECT
+        COUNT(*)::int AS "totalTrades",
+        COUNT(CASE WHEN "realizedPnl" > 0 THEN 1 END)::int AS "winningTrades",
+        COUNT(CASE WHEN "realizedPnl" < 0 THEN 1 END)::int AS "losingTrades",
+        SUM("totalValue")::text AS "totalVolume",
+        AVG("realizedPnlPct")::text AS "avgRealizedPnlPct"
+      FROM filtered_trades
+    ),
+    best AS (
+      SELECT
+        f.symbol,
+        f."realizedPnl"::text AS "realizedPnl",
+        f."realizedPnlPct"::text AS "realizedPnlPct"
+      FROM filtered_trades f
+      WHERE f."realizedPnl" IS NOT NULL
+      ORDER BY f."realizedPnl" DESC, f."executedAt" DESC
+      LIMIT 1
+    ),
+    worst AS (
+      SELECT
+        f.symbol,
+        f."realizedPnl"::text AS "realizedPnl",
+        f."realizedPnlPct"::text AS "realizedPnlPct"
+      FROM filtered_trades f
+      WHERE f."realizedPnl" IS NOT NULL
+      ORDER BY f."realizedPnl" ASC, f."executedAt" DESC
+      LIMIT 1
+    )
+    SELECT
+      s."totalTrades",
+      s."winningTrades",
+      s."losingTrades",
+      s."totalVolume",
+      s."avgRealizedPnlPct",
+      (SELECT to_jsonb(b) FROM best b) AS "bestTrade",
+      (SELECT to_jsonb(w) FROM worst w) AS "worstTrade"
+    FROM summary s;
+  `);
+
+  const row = rows[0] || {};
+  const totalTrades = Number(row.totalTrades) || 0;
+  const winningTrades = Number(row.winningTrades) || 0;
+  const losingTrades = Number(row.losingTrades) || 0;
 
   const response = {
-    totalTrades: totals._count,
+    totalTrades,
     winningTrades,
     losingTrades,
     winRate: computeWinRate(winningTrades, losingTrades),
     // An empty aggregate sums to null; expose "0" so the shape stays stable.
-    totalVolume: toDecimalString(totals._sum.totalValue) ?? "0",
-    averageReturn: toDecimalString(totals._avg.realizedPnlPct),
-    bestTrade: serializeTradeSummary(bestTrade),
-    worstTrade: serializeTradeSummary(worstTrade),
+    totalVolume: toDecimalString(row.totalVolume) ?? "0",
+    averageReturn: toDecimalString(row.avgRealizedPnlPct),
+    bestTrade: serializeTradeSummary(row.bestTrade),
+    worstTrade: serializeTradeSummary(row.worstTrade),
   };
 
   if (filters.includeMonthly) {

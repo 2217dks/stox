@@ -120,21 +120,25 @@ describe("userStatisticsService unit tests", () => {
   });
 
   test("returns zeroed statistics shape when user has no trades", async () => {
-    prisma.trade.aggregate.mockResolvedValue({
-      _count: 0,
-      _sum: { totalValue: null },
-      _avg: { realizedPnlPct: null },
-    });
-    prisma.trade.count
-      .mockResolvedValueOnce(0) // winningTrades
-      .mockResolvedValueOnce(0); // losingTrades
-    prisma.trade.findFirst
-      .mockResolvedValueOnce(null) // bestTrade
-      .mockResolvedValueOnce(null); // worstTrade
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        totalTrades: 0,
+        winningTrades: 0,
+        losingTrades: 0,
+        totalVolume: null,
+        avgRealizedPnlPct: null,
+        bestTrade: null,
+        worstTrade: null,
+      },
+    ]);
 
     const result = await getUserStatistics(userId);
 
     expect(getCurrentUser).toHaveBeenCalledWith(userId);
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.trade.aggregate).not.toHaveBeenCalled();
+    expect(prisma.trade.count).not.toHaveBeenCalled();
+    expect(prisma.trade.findFirst).not.toHaveBeenCalled();
     expect(result).toEqual({
       totalTrades: 0,
       winningTrades: 0,
@@ -148,25 +152,25 @@ describe("userStatisticsService unit tests", () => {
   });
 
   test("computes statistics correctly for user with winning and losing trades", async () => {
-    prisma.trade.aggregate.mockResolvedValue({
-      _count: 5,
-      _sum: { totalValue: new Prisma.Decimal("5400") },
-      _avg: { realizedPnlPct: new Prisma.Decimal("5.5") },
-    });
-    prisma.trade.count
-      .mockResolvedValueOnce(2) // winningTrades
-      .mockResolvedValueOnce(1); // losingTrades
-    prisma.trade.findFirst
-      .mockResolvedValueOnce({
-        symbol: "MSFT",
-        realizedPnl: new Prisma.Decimal("500"),
-        realizedPnlPct: new Prisma.Decimal("20"),
-      }) // bestTrade
-      .mockResolvedValueOnce({
-        symbol: "TSLA",
-        realizedPnl: new Prisma.Decimal("-300"),
-        realizedPnlPct: new Prisma.Decimal("-8"),
-      }); // worstTrade
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        totalTrades: 5,
+        winningTrades: 2,
+        losingTrades: 1,
+        totalVolume: "5400",
+        avgRealizedPnlPct: "5.5",
+        bestTrade: {
+          symbol: "MSFT",
+          realizedPnl: "500",
+          realizedPnlPct: "20",
+        },
+        worstTrade: {
+          symbol: "TSLA",
+          realizedPnl: "-300",
+          realizedPnlPct: "-8",
+        },
+      },
+    ]);
 
     const result = await getUserStatistics(userId);
 
@@ -186,36 +190,31 @@ describe("userStatisticsService unit tests", () => {
       realizedPnl: "-300",
       realizedPnlPct: "-8",
     });
+    expect(prisma.trade.aggregate).not.toHaveBeenCalled();
+    expect(prisma.trade.count).not.toHaveBeenCalled();
+    expect(prisma.trade.findFirst).not.toHaveBeenCalled();
   });
 
   test("scopes queries to the authenticated user's portfolio", async () => {
-    prisma.trade.aggregate.mockResolvedValue({
-      _count: 0,
-      _sum: { totalValue: null },
-      _avg: { realizedPnlPct: null },
-    });
-    prisma.trade.count.mockResolvedValue(0);
-    prisma.trade.findFirst.mockResolvedValue(null);
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        totalTrades: 0,
+        winningTrades: 0,
+        losingTrades: 0,
+        totalVolume: null,
+        avgRealizedPnlPct: null,
+        bestTrade: null,
+        worstTrade: null,
+      },
+    ]);
 
     await getUserStatistics(userId);
 
-    const expectedFilter = {
-      portfolio: {
-        userId,
-      },
-    };
-
-    expect(prisma.trade.aggregate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expectedFilter,
-      }),
-    );
-    expect(prisma.trade.count).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        where: expect.objectContaining(expectedFilter),
-      }),
-    );
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    const sqlArg = prisma.$queryRaw.mock.calls[0][0];
+    expect(sqlArg.values).toContain(userId);
+    expect(sqlArg.text).toContain('p."userId" = $1');
+    expect(prisma.trade.aggregate).not.toHaveBeenCalled();
   });
 
   test("throws PORTFOLIO_NOT_FOUND when portfolioId is not owned by user", async () => {
@@ -236,68 +235,70 @@ describe("userStatisticsService unit tests", () => {
       },
       select: { id: true },
     });
+    expect(prisma.$queryRaw).not.toHaveBeenCalled();
     expect(prisma.trade.aggregate).not.toHaveBeenCalled();
   });
 
   test("scopes queries to specific portfolio when portfolioId belongs to user", async () => {
     prisma.portfolio.findFirst.mockResolvedValue({ id: "owned-port-id" });
-    prisma.trade.aggregate.mockResolvedValue({
-      _count: 1,
-      _sum: { totalValue: new Prisma.Decimal("100") },
-      _avg: { realizedPnlPct: new Prisma.Decimal("10") },
-    });
-    prisma.trade.count.mockResolvedValue(1);
-    prisma.trade.findFirst.mockResolvedValue(null);
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        totalTrades: 1,
+        winningTrades: 1,
+        losingTrades: 0,
+        totalVolume: "100",
+        avgRealizedPnlPct: "10",
+        bestTrade: null,
+        worstTrade: null,
+      },
+    ]);
 
     await getUserStatistics(userId, { portfolioId: "owned-port-id" });
 
-    expect(prisma.trade.aggregate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          portfolio: { userId },
-          portfolioId: "owned-port-id",
-        }),
-      }),
-    );
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    const sqlArg = prisma.$queryRaw.mock.calls[0][0];
+    expect(sqlArg.values).toContain(userId);
+    expect(sqlArg.values).toContain("owned-port-id");
+    expect(prisma.trade.aggregate).not.toHaveBeenCalled();
   });
 
   test("filters aggregate trade count and volume by symbol and side", async () => {
-    prisma.trade.aggregate.mockResolvedValue({
-      _count: 3,
-      _sum: { totalValue: new Prisma.Decimal("3000") },
-      _avg: { realizedPnlPct: new Prisma.Decimal("12.5") },
-    });
-    prisma.trade.count.mockResolvedValue(2);
-    prisma.trade.findFirst.mockResolvedValue(null);
+    prisma.$queryRaw.mockResolvedValue([
+      {
+        totalTrades: 3,
+        winningTrades: 2,
+        losingTrades: 0,
+        totalVolume: "3000",
+        avgRealizedPnlPct: "12.5",
+        bestTrade: null,
+        worstTrade: null,
+      },
+    ]);
 
     const result = await getUserStatistics(userId, { symbol: "AAPL", side: "SELL" });
 
     expect(result.totalTrades).toBe(3);
     expect(result.totalVolume).toBe("3000");
-    expect(prisma.trade.aggregate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          portfolio: { userId },
-          symbol: "AAPL",
-          side: "SELL",
-        }),
-      }),
-    );
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    const sqlArg = prisma.$queryRaw.mock.calls[0][0];
+    expect(sqlArg.values).toContain("AAPL");
+    expect(sqlArg.values).toContain("SELL");
+    expect(prisma.trade.aggregate).not.toHaveBeenCalled();
   });
 
   describe("breakeven, null, and edge-case trade histories", () => {
     test("handles user with only BUY trades (all realizedPnl is null)", async () => {
-      prisma.trade.aggregate.mockResolvedValue({
-        _count: 4,
-        _sum: { totalValue: new Prisma.Decimal("4000") },
-        _avg: { realizedPnlPct: null },
-      });
-      prisma.trade.count
-        .mockResolvedValueOnce(0) // winningTrades
-        .mockResolvedValueOnce(0); // losingTrades
-      prisma.trade.findFirst
-        .mockResolvedValueOnce(null) // bestTrade
-        .mockResolvedValueOnce(null); // worstTrade
+      prisma.$queryRaw.mockResolvedValue([
+        {
+          totalTrades: 4,
+          winningTrades: 0,
+          losingTrades: 0,
+          totalVolume: "4000",
+          avgRealizedPnlPct: null,
+          bestTrade: null,
+          worstTrade: null,
+        },
+      ]);
 
       const result = await getUserStatistics(userId);
 
@@ -312,25 +313,25 @@ describe("userStatisticsService unit tests", () => {
     });
 
     test("handles user with only breakeven trades (realizedPnl == 0)", async () => {
-      prisma.trade.aggregate.mockResolvedValue({
-        _count: 2,
-        _sum: { totalValue: new Prisma.Decimal("1000") },
-        _avg: { realizedPnlPct: new Prisma.Decimal("0") },
-      });
-      prisma.trade.count
-        .mockResolvedValueOnce(0) // winningTrades
-        .mockResolvedValueOnce(0); // losingTrades
-      prisma.trade.findFirst
-        .mockResolvedValueOnce({
-          symbol: "NVDA",
-          realizedPnl: new Prisma.Decimal("0"),
-          realizedPnlPct: new Prisma.Decimal("0"),
-        })
-        .mockResolvedValueOnce({
-          symbol: "NVDA",
-          realizedPnl: new Prisma.Decimal("0"),
-          realizedPnlPct: new Prisma.Decimal("0"),
-        });
+      prisma.$queryRaw.mockResolvedValue([
+        {
+          totalTrades: 2,
+          winningTrades: 0,
+          losingTrades: 0,
+          totalVolume: "1000",
+          avgRealizedPnlPct: "0",
+          bestTrade: {
+            symbol: "NVDA",
+            realizedPnl: "0",
+            realizedPnlPct: "0",
+          },
+          worstTrade: {
+            symbol: "NVDA",
+            realizedPnl: "0",
+            realizedPnlPct: "0",
+          },
+        },
+      ]);
 
       const result = await getUserStatistics(userId);
 
@@ -344,25 +345,25 @@ describe("userStatisticsService unit tests", () => {
     });
 
     test("handles 100% win rate (all wins, no losses)", async () => {
-      prisma.trade.aggregate.mockResolvedValue({
-        _count: 3,
-        _sum: { totalValue: new Prisma.Decimal("3000") },
-        _avg: { realizedPnlPct: new Prisma.Decimal("15") },
-      });
-      prisma.trade.count
-        .mockResolvedValueOnce(3) // winningTrades
-        .mockResolvedValueOnce(0); // losingTrades
-      prisma.trade.findFirst
-        .mockResolvedValueOnce({
-          symbol: "AAPL",
-          realizedPnl: new Prisma.Decimal("300"),
-          realizedPnlPct: new Prisma.Decimal("15"),
-        })
-        .mockResolvedValueOnce({
-          symbol: "GOOG",
-          realizedPnl: new Prisma.Decimal("100"),
-          realizedPnlPct: new Prisma.Decimal("5"),
-        });
+      prisma.$queryRaw.mockResolvedValue([
+        {
+          totalTrades: 3,
+          winningTrades: 3,
+          losingTrades: 0,
+          totalVolume: "3000",
+          avgRealizedPnlPct: "15",
+          bestTrade: {
+            symbol: "AAPL",
+            realizedPnl: "300",
+            realizedPnlPct: "15",
+          },
+          worstTrade: {
+            symbol: "GOOG",
+            realizedPnl: "100",
+            realizedPnlPct: "5",
+          },
+        },
+      ]);
 
       const result = await getUserStatistics(userId);
 
@@ -373,25 +374,25 @@ describe("userStatisticsService unit tests", () => {
     });
 
     test("handles 0% win rate when all decided trades are losses", async () => {
-      prisma.trade.aggregate.mockResolvedValue({
-        _count: 2,
-        _sum: { totalValue: new Prisma.Decimal("2000") },
-        _avg: { realizedPnlPct: new Prisma.Decimal("-10") },
-      });
-      prisma.trade.count
-        .mockResolvedValueOnce(0) // winningTrades
-        .mockResolvedValueOnce(2); // losingTrades
-      prisma.trade.findFirst
-        .mockResolvedValueOnce({
-          symbol: "TSLA",
-          realizedPnl: new Prisma.Decimal("-50"),
-          realizedPnlPct: new Prisma.Decimal("-5"),
-        })
-        .mockResolvedValueOnce({
-          symbol: "TSLA",
-          realizedPnl: new Prisma.Decimal("-150"),
-          realizedPnlPct: new Prisma.Decimal("-15"),
-        });
+      prisma.$queryRaw.mockResolvedValue([
+        {
+          totalTrades: 2,
+          winningTrades: 0,
+          losingTrades: 2,
+          totalVolume: "2000",
+          avgRealizedPnlPct: "-10",
+          bestTrade: {
+            symbol: "TSLA",
+            realizedPnl: "-50",
+            realizedPnlPct: "-5",
+          },
+          worstTrade: {
+            symbol: "TSLA",
+            realizedPnl: "-150",
+            realizedPnlPct: "-15",
+          },
+        },
+      ]);
 
       const result = await getUserStatistics(userId);
 
@@ -401,21 +402,21 @@ describe("userStatisticsService unit tests", () => {
     });
 
     test("preserves 8 decimal place high precision values without float distortion", async () => {
-      prisma.trade.aggregate.mockResolvedValue({
-        _count: 1,
-        _sum: { totalValue: new Prisma.Decimal("12345678.12345678") },
-        _avg: { realizedPnlPct: new Prisma.Decimal("12.34567891") },
-      });
-      prisma.trade.count
-        .mockResolvedValueOnce(1)
-        .mockResolvedValueOnce(0);
-      prisma.trade.findFirst
-        .mockResolvedValueOnce({
-          symbol: "BTCUSDT",
-          realizedPnl: new Prisma.Decimal("98765.43210987"),
-          realizedPnlPct: new Prisma.Decimal("12.34567891"),
-        })
-        .mockResolvedValueOnce(null);
+      prisma.$queryRaw.mockResolvedValue([
+        {
+          totalTrades: 1,
+          winningTrades: 1,
+          losingTrades: 0,
+          totalVolume: "12345678.12345678",
+          avgRealizedPnlPct: "12.34567891",
+          bestTrade: {
+            symbol: "BTCUSDT",
+            realizedPnl: "98765.43210987",
+            realizedPnlPct: "12.34567891",
+          },
+          worstTrade: null,
+        },
+      ]);
 
       const result = await getUserStatistics(userId);
 
