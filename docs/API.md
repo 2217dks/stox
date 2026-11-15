@@ -482,12 +482,14 @@ Requires Bearer JWT authentication and verifies portfolio ownership.
 ```
 
 > **Calculation Semantics:**
-> - `startValue`: Starting valuation for the month, taken from the prior month's final snapshot if available, or the first snapshot of this month.
+> - `startValue`: Starting valuation for the month, taken from the immediately preceding calendar month's final snapshot if available without gap, or the first snapshot of this month.
 > - `endValue`: Ending valuation for the month from the latest recorded snapshot.
 > - `netPnl`: $V_{\text{end}} - V_{\text{start}}$.
 > - `returnPct`: $\frac{V_{\text{end}} - V_{\text{start}}}{V_{\text{start}}} \times 100$.
 > - `realizedPnl`: Sum of realized P&L from trades executed in that portfolio during the month.
 > - `unrealizedPnl`: Net shift in unrealized holding valuation ($netPnl - realizedPnl$).
+> - Months with trades but no snapshots report `snapshotCount: 0`, preserve `realizedPnl`, and set valuation fields to `null`.
+> - Months following a snapshot gap do not carry forward stale multi-month baselines, starting instead from the first snapshot of that month.
 > - Months without recorded snapshots or trades are omitted (never fabricated with fake zero returns).
 
 ---

@@ -200,6 +200,9 @@ Task 39 reconciles both perspectives:
 ### Missing & Empty Months Policy
 * Months without recorded snapshots or trade executions are **omitted** (or explicitly empty without fabricated data).
 * Zero returns or artificial valuations are never synthesized for unobserved periods.
+* **Months with trades but no snapshots:** Preserve `realizedPnl` from trades in that month, setting `snapshotCount: 0` and `null` for valuation fields (`startValue`, `endValue`, `netPnl`, `returnPct`, `unrealizedPnl`).
+* **Gap-isolated baseline semantics:** If a month follows a gap in snapshot coverage (an intervening month with no snapshots or an unobserved calendar gap), it does **not** inherit a stale multi-month baseline. Instead, its `startValue` is set to the first recorded snapshot of that month, ensuring monthly P&L and return percentages never span across missing-snapshot gaps.
+* **Requested range boundary semantics:** When filtering with a `from` boundary, a prior snapshot is only carried forward as `startValue` if it belongs to the immediately preceding calendar month ($M - 1$). If the latest prior snapshot is older than the immediately preceding month, it is treated as a snapshot gap and the first month uses its own first recorded snapshot as its start baseline.
 
 ---
 

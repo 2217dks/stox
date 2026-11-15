@@ -22,6 +22,18 @@ function toUtcYearMonth(date) {
 }
 
 /**
+ * Returns the UTC YYYY-MM string for the calendar month immediately preceding yearMonthStr.
+ * E.g. "2026-03" -> "2026-02", "2026-01" -> "2025-12".
+ */
+function getPreviousUtcYearMonth(yearMonthStr) {
+  const [year, month] = yearMonthStr.split("-").map(Number);
+  if (month === 1) {
+    return `${year - 1}-12`;
+  }
+  return `${year}-${String(month - 1).padStart(2, "0")}`;
+}
+
+/**
  * Get the first UTC millisecond of a month from a YYYY-MM string.
  */
 function getUtcMonthStart(yearMonthStr) {
@@ -149,7 +161,8 @@ async function getPortfolioMonthlyPerformance(portfolioId, userId, options = {})
   const sortedMonthKeys = Array.from(monthBuckets.keys()).sort();
 
   const months = [];
-  let previousMonthEndValue = priorSnapshot ? priorSnapshot.totalValue : null;
+  let lastSnapshotMonth = priorSnapshot ? toUtcYearMonth(priorSnapshot.snapshotDate) : null;
+  let lastSnapshotEndValue = priorSnapshot ? priorSnapshot.totalValue : null;
 
   for (const monthKey of sortedMonthKeys) {
     const bucket = monthBuckets.get(monthKey);
@@ -165,7 +178,7 @@ async function getPortfolioMonthlyPerformance(portfolioId, userId, options = {})
     }
 
     if (monthSnapshots.length === 0) {
-      // Month with trades but no snapshots
+      // Month with trades but no snapshots: emit realized P&L, null valuation fields
       months.push({
         month: monthKey,
         startValue: null,
@@ -176,12 +189,23 @@ async function getPortfolioMonthlyPerformance(portfolioId, userId, options = {})
         unrealizedPnl: null,
         snapshotCount: 0,
       });
+
+      // Clear snapshot baseline so subsequent months do not span across missing snapshots
+      lastSnapshotMonth = null;
+      lastSnapshotEndValue = null;
       continue;
     }
 
-    // Determine startValue: previous month's ending value if available, else first snapshot in month
-    const startValue = previousMonthEndValue !== null
-      ? previousMonthEndValue
+    // Determine startValue:
+    // Only use prior ending snapshot if it was recorded in the immediately preceding calendar month
+    const expectedPriorMonth = getPreviousUtcYearMonth(monthKey);
+    const hasImmediatePriorSnapshot =
+      lastSnapshotMonth !== null &&
+      lastSnapshotMonth === expectedPriorMonth &&
+      lastSnapshotEndValue !== null;
+
+    const startValue = hasImmediatePriorSnapshot
+      ? lastSnapshotEndValue
       : monthSnapshots[0].totalValue;
 
     const endValue = monthSnapshots[monthSnapshots.length - 1].totalValue;
@@ -207,8 +231,9 @@ async function getPortfolioMonthlyPerformance(portfolioId, userId, options = {})
       snapshotCount: monthSnapshots.length,
     });
 
-    // Update previousMonthEndValue for the next consecutive month
-    previousMonthEndValue = endValue;
+    // Update last snapshot baseline for consecutive month tracking
+    lastSnapshotMonth = monthKey;
+    lastSnapshotEndValue = endValue;
   }
 
   return {
@@ -220,6 +245,7 @@ async function getPortfolioMonthlyPerformance(portfolioId, userId, options = {})
 module.exports = {
   getPortfolioMonthlyPerformance,
   toUtcYearMonth,
+  getPreviousUtcYearMonth,
   getUtcMonthStart,
   getUtcMonthEnd,
 };
