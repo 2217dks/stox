@@ -15,7 +15,96 @@ jest.mock("../../../src/services/authService", () => ({
 
 const prisma = require("../../../src/config/database");
 const { getCurrentUser } = require("../../../src/services/authService");
-const { getUserStatistics } = require("../../../src/services/userStatisticsService");
+const {
+  getUserStatistics,
+  computeWinRate,
+  toDecimalString,
+  serializeTradeSummary,
+  buildTradeFilter,
+} = require("../../../src/services/userStatisticsService");
+
+describe("userStatisticsService helper functions", () => {
+  describe("toDecimalString", () => {
+    test("returns null for null or undefined", () => {
+      expect(toDecimalString(null)).toBeNull();
+      expect(toDecimalString(undefined)).toBeNull();
+    });
+
+    test("converts Decimal or numbers to string", () => {
+      expect(toDecimalString(new Prisma.Decimal("123.45"))).toBe("123.45");
+      expect(toDecimalString(100)).toBe("100");
+    });
+  });
+
+  describe("serializeTradeSummary", () => {
+    test("returns null for empty trade", () => {
+      expect(serializeTradeSummary(null)).toBeNull();
+      expect(serializeTradeSummary(undefined)).toBeNull();
+    });
+
+    test("serializes trade summary with decimal strings", () => {
+      const summary = serializeTradeSummary({
+        symbol: "AAPL",
+        realizedPnl: new Prisma.Decimal("150.25"),
+        realizedPnlPct: new Prisma.Decimal("15.025"),
+      });
+
+      expect(summary).toEqual({
+        symbol: "AAPL",
+        realizedPnl: "150.25",
+        realizedPnlPct: "15.025",
+      });
+    });
+  });
+
+  describe("computeWinRate", () => {
+    test("returns 0 when there are no decided trades", () => {
+      expect(computeWinRate(0, 0)).toBe(0);
+    });
+
+    test("computes correct ratio rounded to 4 decimals", () => {
+      expect(computeWinRate(2, 1)).toBe(0.6667);
+      expect(computeWinRate(3, 0)).toBe(1);
+      expect(computeWinRate(0, 5)).toBe(0);
+      expect(computeWinRate(1, 1)).toBe(0.5);
+    });
+  });
+
+  describe("buildTradeFilter", () => {
+    const userId = "user-123";
+
+    test("builds basic user portfolio filter", () => {
+      const filter = buildTradeFilter(userId);
+      expect(filter).toEqual({
+        portfolio: { userId },
+      });
+    });
+
+    test("applies optional filters: portfolioId, symbol, side, from, to", () => {
+      const from = new Date("2026-01-01T00:00:00.000Z");
+      const to = new Date("2026-02-01T00:00:00.000Z");
+
+      const filter = buildTradeFilter(userId, {
+        portfolioId: "port-1",
+        symbol: "AAPL",
+        side: "BUY",
+        from,
+        to,
+      });
+
+      expect(filter).toEqual({
+        portfolio: { userId },
+        portfolioId: "port-1",
+        symbol: "AAPL",
+        side: "BUY",
+        executedAt: {
+          gte: from,
+          lt: to,
+        },
+      });
+    });
+  });
+});
 
 describe("userStatisticsService unit tests (baseline fixtures)", () => {
   const userId = "user-uuid-1111";

@@ -52,24 +52,53 @@ function computeWinRate(winningTrades, losingTrades) {
 }
 
 /**
+ * Construct Prisma filter scoped to user's portfolios and optional filters.
+ */
+function buildTradeFilter(userId, filters = {}) {
+  const where = {
+    portfolio: {
+      userId,
+    },
+  };
+
+  if (filters.portfolioId) {
+    where.portfolioId = filters.portfolioId;
+  }
+
+  if (filters.symbol) {
+    where.symbol = filters.symbol;
+  }
+
+  if (filters.side) {
+    where.side = filters.side;
+  }
+
+  if (filters.from || filters.to) {
+    where.executedAt = {};
+    if (filters.from) {
+      where.executedAt.gte = filters.from;
+    }
+    if (filters.to) {
+      where.executedAt.lt = filters.to;
+    }
+  }
+
+  return where;
+}
+
+/**
  * Build trading statistics for a single user.
  *
  * Statistics are always scoped to the caller's own portfolios. `userId` comes
  * from the verified access token (never from the request), so one user can
  * never read another user's numbers.
  */
-async function getUserStatistics(userId) {
+async function getUserStatistics(userId, filters = {}) {
   // Reuse the existing auth helper so a deleted or suspended account gets the
   // same 404/403 semantics as GET /auth/me and cannot read statistics.
   await getCurrentUser(userId);
 
-  // `portfolio.userId` ties every trade back to the authenticated user, which
-  // is also where the isolation is enforced.
-  const ownedTradeFilter = {
-    portfolio: {
-      userId,
-    },
-  };
+  const ownedTradeFilter = buildTradeFilter(userId, filters);
 
   const [totals, winningTrades, losingTrades, bestTrade, worstTrade] =
     await Promise.all([
@@ -141,5 +170,9 @@ async function getUserStatistics(userId) {
 }
 
 module.exports = {
+  toDecimalString,
+  serializeTradeSummary,
+  computeWinRate,
+  buildTradeFilter,
   getUserStatistics,
 };
