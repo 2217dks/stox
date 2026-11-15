@@ -266,13 +266,17 @@ async function getBenchmarkComparison(req, res, next) {
 
     await portfolioService.getPortfolioById(userId, portfolioId);
 
-    const result = await benchmarkComparisonService.getBenchmarkComparison(
+    const result = await cacheService.getOrSetPortfolioBenchmarkComparison(
       portfolioId,
-      {
-        symbol,
-        period,
-        riskFreeRate,
-      },
+      userId,
+      symbol,
+      { period, riskFreeRate },
+      () =>
+        benchmarkComparisonService.getBenchmarkComparison(portfolioId, {
+          symbol,
+          period,
+          riskFreeRate,
+        }),
     );
 
     return res.status(200).json({
