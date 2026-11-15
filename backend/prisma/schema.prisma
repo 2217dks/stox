@@ -123,6 +123,8 @@ model User {
   // Social
   following Follow[]   @relation("UserFollowing")
   followers Follow[]   @relation("UserFollowers")
+  copyTraders CopyTrader[] @relation("Copier")
+  copiedBy   CopyTrader[] @relation("Copied")
   posts     Post[]
   postLikes PostLike[]
 
@@ -445,6 +447,31 @@ model Follow {
   @@unique([followerId, followingId])
   @@index([followerId])
   @@index([followingId])
+}
+
+// ============================================================
+// COPY TRADER
+// ============================================================
+
+model CopyTrader {
+  id String @id @default(uuid())
+
+  copierId String
+  copiedId String
+
+  copier  User @relation("Copier", fields: [copierId], references: [id], onDelete: Cascade)
+  copied  User @relation("Copied", fields: [copiedId], references: [id], onDelete: Cascade)
+
+  allocationPct Decimal  @default(100) @db.Decimal(5, 2)
+  maxTradeSize  Decimal? @db.Decimal(18, 8)
+  isActive      Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([copierId, copiedId])
+  @@index([copierId])
+  @@index([copiedId])
 }
 
 // ============================================================
