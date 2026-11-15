@@ -93,20 +93,22 @@ function buildTradeFilter(userId, filters = {}) {
 /**
  * Build monthly trade statistics aggregated by UTC calendar month.
  */
-async function getMonthlyTradeStatistics(userId, filters = {}) {
-  await getCurrentUser(userId);
+async function getMonthlyTradeStatistics(userId, filters = {}, options = {}) {
+  if (!options.prevalidated) {
+    await getCurrentUser(userId);
 
-  if (filters.portfolioId) {
-    const portfolio = await prisma.portfolio.findFirst({
-      where: {
-        id: filters.portfolioId,
-        userId,
-      },
-      select: { id: true },
-    });
+    if (filters.portfolioId) {
+      const portfolio = await prisma.portfolio.findFirst({
+        where: {
+          id: filters.portfolioId,
+          userId,
+        },
+        select: { id: true },
+      });
 
-    if (!portfolio) {
-      throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+      if (!portfolio) {
+        throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+      }
     }
   }
 
@@ -251,7 +253,7 @@ async function getUserStatistics(userId, filters = {}) {
   };
 
   if (filters.includeMonthly) {
-    response.monthly = await getMonthlyTradeStatistics(userId, filters);
+    response.monthly = await getMonthlyTradeStatistics(userId, filters, { prevalidated: true });
   }
 
   return response;
