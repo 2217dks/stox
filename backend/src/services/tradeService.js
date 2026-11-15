@@ -572,7 +572,11 @@ async function executeOrder(orderOrId, price) {
     },
   );
 
-  await cacheService.invalidatePortfolio(executedOrder.portfolioId);
+  await Promise.all([
+    cacheService.invalidatePortfolio(executedOrder.portfolioId),
+    cacheService.invalidatePortfolioAnalytics(executedOrder.portfolioId),
+    cacheService.invalidateUserAnalytics(executedOrder.portfolio.userId),
+  ]);
 
   try {
     await createOrderExecutedNotification({
