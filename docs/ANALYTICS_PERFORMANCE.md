@@ -130,7 +130,7 @@ All cache operations are wrapped in safe error handlers. If Redis encounters net
 
 ### Monthly Aggregation in Database
 Instead of fetching all individual trade entities into Node.js:
-- Group and aggregate trades in PostgreSQL by `TO_CHAR("executedAt" AT TIME ZONE 'UTC', 'YYYY-MM')`.
+- Group and aggregate trades in PostgreSQL directly by `TO_CHAR(t."executedAt", 'YYYY-MM')` (as `executedAt` is stored as a UTC `timestamp without time zone`, formatting it directly avoids session timezone shifts).
 - Compute counts, sums (`totalValue`, `realizedPnl`), and return sums (`realizedPnlPct`) within the database engine.
 - Drastically reduces row transfer, deserialization overhead, and garbage collection churn.
 
