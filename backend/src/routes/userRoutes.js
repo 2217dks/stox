@@ -2,6 +2,7 @@ const express = require("express");
 
 const {
   getMyStatistics,
+  getMyMonthlyStatistics,
   getPublicProfile,
 } = require("../controllers/userController");
 const authMiddleware = require("../middleware/auth");
@@ -21,6 +22,13 @@ router.get(
   authMiddleware,
   validate(tradeStatisticsQuerySchema, "query", "validatedQuery"),
   getMyStatistics,
+);
+
+router.get(
+  "/me/statistics/monthly",
+  authMiddleware,
+  validate(tradeStatisticsQuerySchema, "query", "validatedQuery"),
+  getMyMonthlyStatistics,
 );
 
 router.get(

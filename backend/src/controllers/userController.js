@@ -1,4 +1,7 @@
-const { getUserStatistics } = require("../services/userStatisticsService");
+const {
+  getUserStatistics,
+  getMonthlyTradeStatistics,
+} = require("../services/userStatisticsService");
 const {
   getPublicProfile: getPublicSocialProfile,
 } = require("../services/socialService");
@@ -28,6 +31,22 @@ async function getMyStatistics(req, res, next) {
   }
 }
 
+async function getMyMonthlyStatistics(req, res, next) {
+  try {
+    const filters = req.validatedQuery ?? req.query ?? {};
+    const monthly = await getMonthlyTradeStatistics(req.user.userId, filters);
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        monthly,
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function getPublicProfile(req, res, next) {
   try {
     const user = await getPublicSocialProfile(req.params.id, req.user?.userId);
@@ -45,5 +64,6 @@ async function getPublicProfile(req, res, next) {
 
 module.exports = {
   getMyStatistics,
+  getMyMonthlyStatistics,
   getPublicProfile,
 };

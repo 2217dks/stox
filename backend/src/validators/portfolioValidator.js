@@ -55,6 +55,8 @@ const riskFreeRateSchema = z.preprocess((val) => {
   return Number.isFinite(num) ? num : val;
 }, z.number().min(0, "Risk-free rate must be non-negative.").max(1, "Risk-free rate must not exceed 1.0 (100%).").default(0.02));
 
+const { dateBoundSchema } = require("./orderValidator");
+
 const yearSchema = z.preprocess((val) => {
   if (val === undefined || val === null || val === "") return undefined;
   const num = parseInt(val, 10);
@@ -82,6 +84,22 @@ const benchmarkComparisonQuerySchema = z.object({
   riskFreeRate: riskFreeRateSchema,
 });
 
+const monthlyPerformanceQuerySchema = z
+  .object({
+    year: yearSchema,
+    from: dateBoundSchema(0).optional(),
+    to: dateBoundSchema(1).optional(),
+  })
+  .superRefine((query, ctx) => {
+    if (query.from && query.to && query.from >= query.to) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["to"],
+        message: "'to' must be later than 'from'.",
+      });
+    }
+  });
+
 module.exports = {
   portfolioIdParamsSchema,
   updatePortfolioSchema,
@@ -89,4 +107,5 @@ module.exports = {
   benchmarkQuerySchema,
   riskMetricsQuerySchema,
   benchmarkComparisonQuerySchema,
+  monthlyPerformanceQuerySchema,
 };
