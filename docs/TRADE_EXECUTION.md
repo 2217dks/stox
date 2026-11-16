@@ -516,7 +516,9 @@ The fan-out:
 5. Sizes the order as
    `sourceQuantity × allocationPct / 100`, capped by
    `maxTradeSize / sourcePrice` when a notional cap is configured, rounded down
-   to 8 decimal places.
+   to 8 decimal places. `maxTradeSize` is a sizing cap at the source price, not
+   a guarantee of the follower's final executed notional: the copied order is
+   `MARKET`, so its fill price can differ.
 6. Places a `MARKET` order through `orderService.createOrder` with
    `source: "COPY_TRADE"`, the copier as owner, and `copyPortfolioId` (or the
    copier's default active portfolio) as the destination. Balance, position,

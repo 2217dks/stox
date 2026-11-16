@@ -557,9 +557,12 @@ copier's default active portfolio when the request omits it. The column stays
 nullable so deleting a portfolio does not erase the relationship; fan-out
 resolves the default again in that case.
 
-`maxTradeSize` is a notional (quote-currency) cap. Fan-out converts it to a
-quantity at the source trade price and rounds the copied quantity down to the
-8-decimal column scale.
+`maxTradeSize` is a notional (quote-currency) sizing cap. Fan-out converts it
+to a quantity at the source trade price and rounds the copied quantity down to
+the 8-decimal column scale. Copied orders are `MARKET` orders, so the follower's
+actual fill price can differ and the final executed notional is not guaranteed
+to be at or below the cap; the cap bounds the quantity sized from the source
+price.
 
 ## CopyTradeExecution
 

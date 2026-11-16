@@ -223,7 +223,7 @@ Starts copying another trader. Body:
 
 - `traderId` is required and must be an existing, non-suspended user other than the caller.
 - `allocationPct` is optional (default `100`) and must satisfy `0 < allocationPct <= 100` with at most 2 decimal places.
-- `maxTradeSize` is optional (default `null`) and, when provided, must be greater than zero with at most 8 decimal places. It is a **notional (quote-currency) cap** per copied order.
+- `maxTradeSize` is optional (default `null`) and, when provided, must be greater than zero with at most 8 decimal places. It is a **notional (quote-currency) sizing cap** applied at fan-out using the source trade price. It bounds the copied quantity, not the follower's final executed notional: copied orders are `MARKET` orders and may fill at a different price. A strict execution-notional guarantee is not provided.
 - `copyPortfolioId` is optional. When omitted, the copier's default active portfolio is stored. When provided, it must belong to the caller and be active.
 - `isActive` is optional (default `true`).
 
@@ -239,7 +239,7 @@ UUID path. Stops copying by setting `isActive=false` (a soft delete that preserv
 
 #### Copy execution semantics
 
-After a source order executes, the backend fans out one market order per active relationship where the source portfolio owner is the copied trader. Fan-out is post-commit, best-effort, and per-follower isolated: one follower's failure never rolls back the source trade or blocks another follower. The copied quantity is `sourceQuantity × allocationPct / 100`, capped by `maxTradeSize / sourcePrice` when a notional cap is set, and rounded down to 8 decimal places. Copied orders use `source:"COPY_TRADE"`, are placed in `copyPortfolioId`, and pass through the normal reservation/execution path. A source trade whose own order is already `COPY_TRADE` is not copied again, which prevents copy chains. A durable `(sourceTradeId, copierId)` execution row makes replayed fan-out jobs idempotent.
+After a source order executes, the backend fans out one market order per active relationship where the source portfolio owner is the copied trader. Fan-out is post-commit, best-effort, and per-follower isolated: one follower's failure never rolls back the source trade or blocks another follower. The copied quantity is `sourceQuantity × allocationPct / 100`, capped by `maxTradeSize / sourcePrice` when a notional cap is set, and rounded down to 8 decimal places. Because the copied order is `MARKET`, the follower's actual fill price can differ from `sourcePrice`; `maxTradeSize` therefore caps the sized quantity, not the final executed notional. Copied orders use `source:"COPY_TRADE"`, are placed in `copyPortfolioId`, and pass through the normal reservation/execution path. A source trade whose own order is already `COPY_TRADE` is not copied again, which prevents copy chains. A durable `(sourceTradeId, copierId)` execution row makes replayed fan-out jobs idempotent; the recovery lookup runs before the retry-budget check so a committed order is never paired with a `FAILED` execution.
 
 ### Public market data
 

@@ -565,6 +565,74 @@ describe("fanOutCopyTrades idempotency and retries", () => {
     expect(execution.order).toBeNull();
   });
 
+  test("recovers an existing copied order even after the attempt budget is exhausted", async () => {
+    const trade = await createSourceTrade({ quantity: "1", price: "100" });
+
+    const config = await createConfig({
+      copierId: copierA.id,
+      copyPortfolioId: copierAPortfolioId,
+    });
+
+    // Simulate the crash window: the order committed on the final permitted
+    // attempt, but the worker died before marking the execution PLACED.
+    const execution = await prisma.copyTradeExecution.create({
+      data: {
+        sourceTradeId: trade.id,
+        copierId: copierA.id,
+        copyTraderId: config.id,
+        status: "PENDING",
+        attempts: 3,
+      },
+    });
+
+    const existingOrder = await prisma.order.create({
+      data: {
+        portfolioId: copierAPortfolioId,
+        symbol: "AAPL",
+        assetType: "STOCK",
+        side: "BUY",
+        type: "MARKET",
+        status: "PENDING",
+        quantity: "1",
+        reservedCash: "0",
+        source: "COPY_TRADE",
+        copyTradeExecutionId: execution.id,
+      },
+    });
+
+    const result = await fanOutCopyTrades({
+      tradeId: trade.id,
+      maxAttempts: 3,
+    });
+
+    expect(result).toMatchObject({
+      eligible: 1,
+      placed: 1,
+      failed: 0,
+      retryable: 0,
+    });
+
+    const storedExecution = await prisma.copyTradeExecution.findUnique({
+      where: { id: execution.id },
+      include: { order: true },
+    });
+
+    expect(storedExecution.status).toBe("PLACED");
+    expect(storedExecution.failureCode).toBeNull();
+    expect(storedExecution.failureMessage).toBeNull();
+    expect(storedExecution.order.id).toBe(existingOrder.id);
+
+    // The recovery path must not create a second copied order.
+    expect(
+      await prisma.order.count({
+        where: {
+          portfolioId: copierAPortfolioId,
+          source: "COPY_TRADE",
+        },
+      }),
+    ).toBe(1);
+  });
+
   test("marks a fanned-out trade so the recovery scan does not replay it", async () => {
     const trade = await createSourceTrade({ quantity: "1", price: "100" });
 

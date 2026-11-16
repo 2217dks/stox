@@ -40,9 +40,14 @@ const PERMANENT_COPY_ERRORS = new Set([
  * Size a copied order.
  *
  * `allocationPct` mirrors a fraction of the source quantity. `maxTradeSize` is
- * a notional (quote-currency) cap, so it is converted to a quantity at the
- * source trade price. The result is rounded DOWN to the storage scale so the
- * copied notional can never exceed the configured cap.
+ * a notional (quote-currency) sizing cap, converted to a quantity at the source
+ * trade price. The result is rounded DOWN to the storage scale so the quantity
+ * implied by the source price never exceeds the cap.
+ *
+ * This is not a guarantee of the follower's final executed notional: copied
+ * orders are MARKET orders, so the follower can fill at a different price. A
+ * strict execution-notional cap would need a limit price or an execution-time
+ * guard, which is a deliberate non-goal for this pipeline.
  */
 function computeCopyQuantity({
   sourceQuantity,
@@ -258,18 +263,10 @@ async function attemptFollower({
     return { status: "skipped", execution };
   }
 
-  if (execution.attempts >= maxAttempts) {
-    const failed = await updateExecution(execution.id, {
-      status: "FAILED",
-      failureCode: "MAX_ATTEMPTS_EXCEEDED",
-      failureMessage: `Copy-trade fan-out exceeded ${maxAttempts} attempts.`,
-    });
-
-    return { status: "failed", execution: failed };
-  }
-
-  // Recovery path: the order committed but the execution update did not. The
-  // unique `Order.copyTradeExecutionId` makes this lookup authoritative.
+  // Recovery must run before the retry-budget check. If the order committed
+  // but the worker crashed before marking the execution PLACED, the execution
+  // may already be at the attempt limit. Marking it FAILED first would pair a
+  // real copied order with a terminal failure row.
   const existingOrder = await prisma.order.findUnique({
     where: { copyTradeExecutionId: execution.id },
   });
@@ -282,6 +279,16 @@ async function attemptFollower({
     });
 
     return { status: "placed", execution: placed, order: existingOrder };
+  }
+
+  if (execution.attempts >= maxAttempts) {
+    const failed = await updateExecution(execution.id, {
+      status: "FAILED",
+      failureCode: "MAX_ATTEMPTS_EXCEEDED",
+      failureMessage: `Copy-trade fan-out exceeded ${maxAttempts} attempts.`,
+    });
+
+    return { status: "failed", execution: failed };
   }
 
   let portfolio;
