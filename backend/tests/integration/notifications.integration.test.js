@@ -176,4 +176,54 @@ describe("Notification integration API", () => {
 
     expect(unread).toBe(0);
   });
+
+  test("creates ORDER_CANCELLED notification when an order is cancelled", async () => {
+    const portfolio = await prisma.portfolio.create({
+      data: {
+        userId: user1Id,
+        name: "Cancel Order Test Portfolio",
+        startingBalance: "10000",
+        cashBalance: "10000",
+      },
+    });
+
+    const order = await prisma.order.create({
+      data: {
+        portfolioId: portfolio.id,
+        symbol: "TSLA",
+        assetType: "STOCK",
+        side: "BUY",
+        type: "LIMIT",
+        limitPrice: "250.00",
+        quantity: "2",
+        status: "PENDING",
+      },
+    });
+
+    try {
+      const cancelRes = await request(app)
+        .delete(`/api/v1/orders/${order.id}`)
+        .set("Authorization", `Bearer ${user1AccessToken}`);
+
+      expect(cancelRes.status).toBe(200);
+
+      const notification = await prisma.notification.findFirst({
+        where: {
+          userId: user1Id,
+          type: "ORDER_CANCELLED",
+        },
+        orderBy: { createdAt: "desc" },
+      });
+
+      expect(notification).not.toBeNull();
+      expect(notification.title).toBe("Order cancelled");
+      expect(notification.data.orderId).toBe(order.id);
+      expect(notification.data.symbol).toBe("TSLA");
+      expect(notification.data.side).toBe("BUY");
+      expect(notification.data.reason).toBe("USER_CANCELLED");
+    } finally {
+      await prisma.order.deleteMany({ where: { portfolioId: portfolio.id } });
+      await prisma.portfolio.deleteMany({ where: { id: portfolio.id } });
+    }
+  });
 });

@@ -7,6 +7,9 @@ const marketDataService = require("./marketData");
 const { enqueueOrderExecution } = require("../queues/orderQueue");
 const logger = require("../utils/logger");
 const { recordOrderEvent, getOrderEvents } = require("./orderEventService");
+const {
+  createOrderCancelledNotification,
+} = require("./notificationEvents");
 
 const ZERO = new Prisma.Decimal(0);
 const MAX_MONEY = new Prisma.Decimal("9999999999.99999999");
@@ -429,6 +432,19 @@ async function cancelOrder({ userId, orderId }) {
 
   const serialized = serializeOrder(updated);
   triggerOrderStatus(serialized);
+
+  try {
+    await createOrderCancelledNotification({
+      userId,
+      order: serialized,
+      reason: "USER_CANCELLED",
+    });
+  } catch (notificationError) {
+    logger.warn("Failed to create order-cancelled notification", {
+      orderId,
+      error: notificationError.message,
+    });
+  }
 
   return serialized;
 }
