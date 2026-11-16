@@ -4,6 +4,9 @@ const { Prisma } = require("@prisma/client");
 
 const prisma = require("../config/database");
 const { createOrderExecutedNotification } = require("./notificationEvents");
+const {
+  evaluateAndGrantAchievements,
+} = require("./achievementService");
 const { publishExecutionEvents } = require("../realtime/orderEvents");
 const { recordOrderEvent } = require("./orderEventService");
 const { AppError } = require("../utils/errors");
@@ -586,6 +589,19 @@ async function executeOrder(orderOrId, price) {
     });
   } catch (error) {
     logger.warn("Failed to create order-executed notification", {
+      orderId: executedOrder.id,
+      error: error.message,
+    });
+  }
+
+  try {
+    await evaluateAndGrantAchievements(executedOrder.portfolio.userId, {
+      trade,
+      order: executedOrder,
+      portfolioId: executedOrder.portfolioId,
+    });
+  } catch (error) {
+    logger.warn("Failed to evaluate achievements post-commit", {
       orderId: executedOrder.id,
       error: error.message,
     });

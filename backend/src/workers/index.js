@@ -11,6 +11,7 @@ const { ensureOrderScanScheduler } = require("../queues/orderQueue");
 const { closeQueues, isQueuesEnabled } = require("../queues");
 const { startPortfolioSnapshotWorker } = require("./portfolioSnapshotWorker");
 const { startLeaderboardSnapshotWorker } = require("./leaderboardSnapshotWorker");
+const { startAchievementWorker } = require("./achievementWorker");
 
 const SHUTDOWN_TIMEOUT_MS = 5000;
 
@@ -49,6 +50,7 @@ const scanScheduler = queuesEnabled
 
 const snapshotWorker = startPortfolioSnapshotWorker();
 const leaderboardWorker = startLeaderboardSnapshotWorker();
+const achievementWorker = startAchievementWorker();
 
 logger.info(
   queuesEnabled
@@ -57,6 +59,7 @@ logger.info(
 );
 logger.info("Portfolio snapshot worker started for daily scheduled captures");
 logger.info("Leaderboard snapshot worker started for daily scheduled refreshes");
+logger.info("Achievement worker started for durable achievement reconciliation");
 
 let shuttingDown = false;
 
@@ -72,6 +75,7 @@ async function shutdown(signal) {
   orderWorker?.stop();
   snapshotWorker.stop();
   leaderboardWorker.stop();
+  achievementWorker.stop();
 
   if (queueWorker) {
     try {

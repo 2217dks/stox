@@ -134,6 +134,7 @@ model User {
   notifications      Notification[]
   leaderboardEntries LeaderboardEntry[]
   sentimentVotes     SentimentVote[]
+  userAchievements   UserAchievement[]
 
   // Preferences
   preference UserPreference?
@@ -617,4 +618,37 @@ model SentimentVote {
 
   @@unique([userId, symbol])
   @@index([symbol, updatedAt])
+}
+
+// ============================================================
+// ACHIEVEMENTS
+// ============================================================
+
+model Achievement {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  description String
+  iconUrl     String?
+  category    String
+  criteria    Json?
+
+  createdAt   DateTime @default(now())
+
+  userAchievements UserAchievement[]
+}
+
+model UserAchievement {
+  id            String   @id @default(uuid())
+  userId        String
+  achievementId String
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  unlockedAt DateTime @default(now())
+
+  @@unique([userId, achievementId])
+  @@index([userId])
+  @@index([achievementId])
 }
