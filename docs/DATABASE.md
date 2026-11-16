@@ -519,6 +519,10 @@ model CopyTrader {
 }
 ```
 
+PostgreSQL CHECK constraints require `allocationPct` to be greater than `0` and
+at most `100`, reject self-copy relationships where `copierId = copiedId`, and
+require a provided `maxTradeSize` to be greater than `0`.
+
 ---
 
 # 🏆 Leaderboards
