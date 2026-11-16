@@ -209,6 +209,16 @@ describe("processPendingOrders", () => {
     expect(storedOrder.status).toBe("EXPIRED");
     expect(storedOrder.reservedCash.toString()).toBe("0");
     expect(portfolio.reservedCash.toString()).toBe("0");
+
+    const expiredNotification = await prisma.notification.findFirst({
+      where: {
+        userId,
+        type: "ORDER_EXPIRED",
+      },
+    });
+    expect(expiredNotification).not.toBeNull();
+    expect(expiredNotification.data.orderId).toBe(order.id);
+    expect(expiredNotification.data.symbol).toBe("AAPL");
   });
 
   test("rejects an order that cannot be funded and releases its reservation", async () => {
@@ -239,6 +249,16 @@ describe("processPendingOrders", () => {
     expect(storedOrder.reservedCash.toString()).toBe("0");
     expect(portfolio.reservedCash.toString()).toBe("0");
     expect(await prisma.trade.count({ where: { orderId: order.id } })).toBe(0);
+
+    const rejectedNotification = await prisma.notification.findFirst({
+      where: {
+        userId,
+        type: "ORDER_REJECTED",
+      },
+    });
+    expect(rejectedNotification).not.toBeNull();
+    expect(rejectedNotification.data.orderId).toBe(order.id);
+    expect(rejectedNotification.data.symbol).toBe("AAPL");
   });
 
   test("leaves an order pending when the provider fails", async () => {

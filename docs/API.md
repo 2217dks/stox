@@ -529,6 +529,12 @@ Place an order.
 }
 ```
 
+#### Competition / League Portfolio Constraints
+- **Active Competition Window Only**: If `portfolioId` belongs to a competition league (`isLeague: true`), orders can only be placed while the league is active ($startDate \le now \le endDate$).
+  - Pre-start attempts return `400 LEAGUE_NOT_ACTIVE`.
+  - Post-end attempts return `400 LEAGUE_ENDED`.
+- **Short Selling Prohibited**: Naked short selling is disallowed on competition portfolios. Sell orders that exceed current held long shares return `400 SHORT_SELLING_DISALLOWED`.
+
 ## `GET /orders/:id`
 
 Get order details.
@@ -936,6 +942,26 @@ Delete an alert.
 
 Get the social feed.
 
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `sort` | enum | `latest` | Ordering mode: `latest` (chronological) or `trending` (decay-ranked) |
+| `asOf` | string | `now()` | Optional ISO 8601 timestamp to freeze recency age decay during pagination |
+| `page` | int | `1` | Page number ($\ge 1$) |
+| `limit` | int | `20` | Items per page ($1 \le \text{limit} \le 50$) |
+
+### Trending Ranking & Candidate Window
+
+In `trending` mode, candidates are bounded to a maximum of 200 posts created within the last 7 days (`createdAt >= NOW() - INTERVAL '7 days'`). Posts from suspended authors or marked hidden are strictly excluded.
+
+Posts are scored using the decay formula:
+
+$$\text{Score} = \frac{\text{likes} + 1 + (\text{isFollowing} ? 2 : 0)}{(\text{ageHours} + 2)^{1.2}}$$
+
+- **Recency stability**: Supplying `asOf` freezes the age calculation across pages. Concurrent like changes or follow relationship updates can dynamically shift scores as documented for trending feeds.
+- **Tie-breakers**: Ranked by `score DESC, createdAt DESC, id ASC`.
+
 ## `POST /social/posts`
 
 Create a social post.
@@ -1032,6 +1058,29 @@ Get the global leaderboard.
 
 Get the leaderboard of followed users/friends.
 
+## `GET /leaderboard/history`
+
+Get historical stored snapshot rankings from the persistent global leaderboard.
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `period` | enum | `ALL_TIME` | Snapshot period: `DAILY`, `WEEKLY`, `MONTHLY`, `ALL_TIME` |
+| `date` | string | latest snapshot | Optional exact snapshot date (`YYYY-MM-DD`) |
+| `from` | string | - | Optional start of historical snapshot date range (`YYYY-MM-DD`) |
+| `to` | string | - | Optional end of historical snapshot date range (`YYYY-MM-DD`) |
+| `page` | int | `1` | Page number ($\ge 1$) |
+| `limit` | int | `20` | Items per page ($1 \le \text{limit} \le 100$) |
+
+### Stored Ranks & Rank Preservation
+
+- Queries historical entries recorded in `LeaderboardSnapshot` for `GLOBAL` scope.
+- Preserves recorded `rank` values verbatim. If suspended users are omitted from output, remaining entries preserve their stored rank values with natural gaps (e.g. Rank 1, Rank 3). Ranks are never re-indexed.
+- **Ordering**:
+  - Date range queries: `snapshotDate DESC, rank ASC, userId ASC`.
+  - Single date queries: `rank ASC, userId ASC`.
+
 ### Snapshot generation
 
 Global leaderboard entries are calculated and saved as daily snapshots.
@@ -1052,17 +1101,69 @@ Portfolio value is cash plus the recorded invested basis of open holdings.
 
 # 🏟️ Leagues
 
+## `POST /leagues`
+
+Create a new trading competition/league.
+
+### Request Body
+
+```json
+{
+  "name": "Global Championship 2026",
+  "description": "Quarterly competition for all active traders",
+  "startingBalance": 10000,
+  "startDate": "2026-12-01T00:00:00.000Z",
+  "endDate": "2026-12-31T23:59:59.999Z",
+  "maxParticipants": 500
+}
+```
+
 ## `GET /leagues`
 
-List leagues.
+List leagues with pagination and optional status filtering.
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `status` | enum | - | Filter by status: `UPCOMING`, `ACTIVE`, `COMPLETED`, `CANCELLED` |
+| `page` | int | `1` | Page number ($\ge 1$) |
+| `limit` | int | `20` | Items per page ($1 \le \text{limit} \le 100$) |
+
+## `GET /leagues/:id`
+
+Get single league details including participant member count.
 
 ## `POST /leagues/:id/join`
 
-Join a league.
+Join an upcoming league.
+
+### League Portfolio Isolation & Restrictions
+
+- **Dedicated competition portfolios**: Every participant is provisioned an isolated competition portfolio initialized with `league.startingBalance`. Reusing or linking pre-existing personal portfolios is strictly disallowed (`portfolioId` in request is rejected with `400 PORTFOLIO_ASSIGNMENT_NOT_SUPPORTED`).
+- **Atomic capacity check**: Capacity is enforced atomically with a row lock (`SELECT ... FOR UPDATE` on `League`); if `currentParticipants >= maxParticipants`, returns `400 LEAGUE_FULL`.
+- **Strict registration deadline**: Late joining is disallowed once the competition starts (`joinedAt <= startDate` required; requires status `UPCOMING` and `now < startDate`). Attempting to join after start returns `400 LEAGUE_ALREADY_STARTED`.
+- **Duplicate joins**: A user can join each league once; duplicate join returns `409 ALREADY_JOINED`.
 
 ## `GET /leagues/:id/leaderboard`
 
-Get league rankings.
+Get live or finalized rankings for a league.
+
+### Scoring Formula & Mark-to-Market Valuation
+
+$$\text{Return \%} = \frac{\text{Current Valuation} - \text{startingBalance}}{\text{startingBalance}} \times 100$$
+
+- **Fee accounting**: Net cash strictly deducts all trade transaction fees via the `Trade.fees` column.
+- **Position valuation & short liabilities**: Long holdings add `quantity * marketPrice`; short position liabilities are deducted (`quantity * marketPrice` where `quantity < 0`).
+- **Strict market data enforcement**: Live and historical market quotes are strictly enforced. If market data is unavailable or fails, returns `503 MARKET_DATA_PROVIDER_UNAVAILABLE` (substituting trade execution prices is strictly prohibited).
+- **Tie-breaker hierarchy**:
+  1. `returnPct DESC`
+  2. `totalValue DESC`
+  3. `tradeCount DESC`
+  4. `joinedAt ASC`
+  5. `userId ASC`
+- **Zero-trade participants**: Ranked strictly alongside all other participants using score and tie-breakers without artificial demotion.
+- **Finalization & immutability**: Upon completion ($now \ge endDate$ or status `COMPLETED`), final rankings and returns are persisted to `LeagueMember.rank` and `LeagueMember.finalReturn` inside an atomic transaction, making outcomes permanent and immutable.
 
 ---
 
@@ -1070,11 +1171,23 @@ Get league rankings.
 
 ## `GET /achievements`
 
-Get all achievements.
+Get all available achievements in the catalog.
+
+### Supported Achievement Types
+
+- `FIRST_TRADE`: First trade executed on any portfolio.
+- `FIRST_PROFIT`: First trade executed with positive realized P&L (`realizedPnl > 0`).
+- `TEN_SUCCESSFUL_TRADES`: Reaching 10 executed trades with positive realized P&L.
+- `PORTFOLIO_MILESTONE`: Portfolio total valuation reaching or exceeding twice starting balance ($\text{totalValue} \ge \text{startingBalance} \times 2$).
 
 ## `GET /achievements/mine`
 
-Get the authenticated user's achievements.
+Get achievements unlocked by the authenticated caller.
+
+### Durable Evaluation & Crash Recovery
+
+- Achievements are evaluated post-commit during trade execution (`tradeService.executeOrder`).
+- A scheduled background worker (`achievementWorker`) performs periodic reconciliation on startup and recurring intervals, guaranteeing that unrecorded achievements are granted even in the event of worker or process restarts.
 
 ---
 
@@ -1082,19 +1195,39 @@ Get the authenticated user's achievements.
 
 ## `GET /sentiment/:symbol`
 
-Get community sentiment.
+Get aggregated community sentiment for a market symbol across time windows.
+
+### Query Parameters
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `window` | enum | `all` | Observation window: `24h`, `7d`, `30d`, `all` |
+
+### Aggregation Rules & Thresholds
+
+- **Sample threshold**: Requires a fixed minimum sample threshold of $N_{\min} = 5$ votes across all environments.
+- **Classifications**:
+  - $T = 0$: `classification = "NO_DATA"`, `status = "ZERO_VOTES"`, `sampleThresholdMet = false`.
+  - $0 < T < 5$: `classification = "NO_DATA"`, `status = "INSUFFICIENT_SAMPLE"`, `sampleThresholdMet = false`, reports exact vote count.
+  - $T \ge 5$: `sampleThresholdMet = true`.
+    - `BULLISH`: Bullish votes exceed 50% ($p_B > 50\%$) and $B > R$.
+    - `BEARISH`: Bearish votes exceed 50% ($p_R > 50\%$) and $R > B$.
+    - `NEUTRAL`: Neither side exceeds 50% once minimum sample is reached.
+- **Vote recency**: Changing a vote updates `updatedAt = now()`, immediately refreshing its recency into active rolling windows.
 
 ## `POST /sentiment/:symbol/vote`
 
-Submit or update a sentiment vote.
+Submit or update a sentiment vote for a symbol.
 
-### Request
+### Request Body
 
 ```json
 {
-    "sentiment": "BULLISH"
+  "sentiment": "BULLISH"
 }
 ```
+
+Allowed values: `BULLISH`, `BEARISH`, `NEUTRAL`.
 
 ---
 
@@ -1103,6 +1236,21 @@ Submit or update a sentiment vote.
 ## `GET /notifications`
 
 List the authenticated user's notifications.
+
+### Supported Notification Types
+
+- `ORDER_FILLED`: Order was fully executed.
+- `ORDER_CANCELLED`: Order was cancelled.
+- `ORDER_REJECTED`: Order was rejected during execution or validation.
+- `ORDER_EXPIRED`: Order expired before execution.
+- `PRICE_ALERT`: Price threshold alert triggered.
+- `ACHIEVEMENT_UNLOCKED`: New achievement granted to the user.
+- `COPY_TRADE_EXECUTED`: Trade executed on behalf of copier.
+- `LEAGUE_UPDATE`: Updates and results for enrolled leagues.
+- `NEW_FOLLOWER`: A user followed the authenticated trader.
+- `SYSTEM`: Platform notifications.
+
+Each order transition notification includes structured metadata in its JSON `data` attribute (`orderId`, `symbol`, `side`, `quantity`, `price` or `limitPrice`, and `reason`).
 
 ## `PATCH /notifications/:id/read`
 

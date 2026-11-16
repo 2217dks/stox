@@ -616,7 +616,16 @@ For environments running without full BullMQ / Redis worker clusters, or for dai
   - Current date ($T$) is never snapshotted mid-day before closing.
 - **Graceful Shutdown:** Handles `SIGINT` / `SIGTERM` signals cleanly with timer cancellation.
 
-### 2. Standalone Snapshot Scripts
+### 2. Leaderboard Snapshot Worker (`src/workers/leaderboardSnapshotWorker.js`)
+- **Execution:** Started automatically by `npm run workers` (`src/workers/index.js`).
+- **Cadence:** Daily schedule at 02:00 UTC targeting completed date $D = T - 1$.
+- **Distributed Locking & Concurrency Control:**
+  - Uses Redis key `leaderboard:snapshot:lock` with a unique worker identifier token.
+  - **Fail-Closed Locking**: Aborts immediately if Redis is unreachable, preventing uncoordinated, duplicate snapshot generation across multi-replica worker environments.
+  - **Atomic Lua Lease Release**: Releases the lease via an atomic Lua script verifying token ownership, preventing race conditions where slow workers clear another instance's lock.
+  - **Heartbeat Lease Renewal**: A 10-second interval heartbeat extends the Redis lease by 30 seconds for long runs, ensuring the lock never expires prematurely mid-execution.
+
+### 3. Standalone Snapshot Scripts
 - **Leaderboard Snapshots:** `npm run leaderboard:snapshot` (`scripts/generate-leaderboard-snapshots.js`)
 - **Portfolio Snapshots:** `npm run portfolio:snapshot` (`scripts/generate-portfolio-snapshots.js`)
   - Supports `--date=YYYY-MM-DD` to target a specific date's EOD valuation.

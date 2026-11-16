@@ -1,6 +1,7 @@
 const {
   getGlobalLeaderboard,
   getFriendsLeaderboard,
+  getLeaderboardHistory,
 } = require("../services/leaderboardService");
 
 async function global(req, res, next) {
@@ -32,7 +33,21 @@ async function friends(req, res, next) {
   }
 }
 
+async function history(req, res, next) {
+  try {
+    const result = await getLeaderboardHistory(req.validatedQuery);
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   global,
   friends,
+  history,
 };

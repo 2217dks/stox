@@ -29,7 +29,7 @@ async function handleExecuteOrder(job, options) {
     where: { id: orderId },
     include: {
       portfolio: {
-        select: { id: true, isActive: true },
+        select: { id: true, isActive: true, userId: true },
       },
     },
   });
