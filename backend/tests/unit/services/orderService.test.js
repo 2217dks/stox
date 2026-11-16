@@ -20,6 +20,12 @@ jest.mock("../../../src/config/database", () => ({
   portfolio: {
     findFirst: jest.fn(),
   },
+  holding: {
+    findFirst: jest.fn(),
+  },
+  leagueMember: {
+    findUnique: jest.fn(),
+  },
   order: {
     findFirst: jest.fn(),
     findUnique: jest.fn(),

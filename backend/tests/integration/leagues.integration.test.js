@@ -3,6 +3,7 @@ const { Prisma } = require("@prisma/client");
 
 const app = require("../../src/app");
 const prisma = require("../../src/config/database");
+const marketDataService = require("../../src/services/marketData");
 const {
   getLeagueLeaderboard,
   joinLeague,
@@ -15,6 +16,7 @@ let user2Id, user2Token;
 let user3Id, user3Token;
 let suspendedUserId, suspendedUserToken;
 let createdLeagueIds = [];
+let quoteSpy;
 
 async function createTestTrade({
   portfolioId,
@@ -59,6 +61,12 @@ async function createTestTrade({
 beforeAll(async () => {
   jest.setTimeout(30000);
 
+  quoteSpy = jest.spyOn(marketDataService, "getQuote").mockResolvedValue({
+    symbol: "AAPL",
+    price: 150,
+    timestamp: new Date().toISOString(),
+  });
+
   // User 1
   const u1 = await request(app).post("/api/v1/auth/register").send({
     name: "League User 1",
@@ -102,6 +110,9 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (quoteSpy) {
+    quoteSpy.mockRestore();
+  }
   try {
     for (const leagueId of createdLeagueIds) {
       const members = await prisma.leagueMember.findMany({
@@ -227,6 +238,255 @@ describe("Leagues & Competitions Integration (#128)", () => {
 
     expect(res.status).toBe(400);
     expect(res.body.error.code).toBe("LEAGUE_ALREADY_STARTED");
+  });
+
+  test("POST /api/v1/leagues/:id/join rejects custom or existing portfolioId with 400", async () => {
+    const p = await prisma.portfolio.create({
+      data: {
+        userId: user2Id,
+        name: "User2 Existing Portfolio",
+        startingBalance: 10000,
+        cashBalance: 10000,
+        reservedCash: 0,
+      },
+    });
+
+    const res = await request(app)
+      .post(`/api/v1/leagues/${upcomingLeagueId}/join`)
+      .set("Authorization", `Bearer ${user2Token}`)
+      .send({ portfolioId: p.id });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("EXISTING_PORTFOLIO_NOT_ALLOWED");
+
+    await prisma.portfolio.delete({ where: { id: p.id } });
+  });
+
+  test("POST /api/v1/leagues/:id/join allocates dedicated portfolio with exact league startingBalance", async () => {
+    const res = await request(app)
+      .post(`/api/v1/leagues/${upcomingLeagueId}/join`)
+      .set("Authorization", `Bearer ${user2Token}`)
+      .send({});
+
+    expect(res.status).toBe(200);
+    const member = res.body.data.member;
+    expect(member.portfolioId).toBeDefined();
+
+    const allocatedPortfolio = await prisma.portfolio.findUnique({
+      where: { id: member.portfolioId },
+    });
+    expect(Number(allocatedPortfolio.startingBalance)).toBe(20000);
+    expect(Number(allocatedPortfolio.cashBalance)).toBe(20000);
+    expect(Number(allocatedPortfolio.reservedCash)).toBe(0);
+  });
+
+  test("POST /api/v1/orders rejects order execution on league portfolio before startDate", async () => {
+    const member = await prisma.leagueMember.findUnique({
+      where: {
+        leagueId_userId: {
+          leagueId: upcomingLeagueId,
+          userId: user2Id,
+        },
+      },
+    });
+
+    const res = await request(app)
+      .post("/api/v1/orders")
+      .set("Authorization", `Bearer ${user2Token}`)
+      .send({
+        portfolioId: member.portfolioId,
+        symbol: "AAPL",
+        assetType: "STOCK",
+        side: "BUY",
+        type: "MARKET",
+        quantity: "1",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("LEAGUE_NOT_ACTIVE");
+  });
+
+  test("POST /api/v1/leagues/:id/join handles concurrent joins from same user without orphan portfolios", async () => {
+    const startDate = new Date(Date.now() + 86400000).toISOString();
+    const endDate = new Date(Date.now() + 86400000 * 7).toISOString();
+
+    const league = await prisma.league.create({
+      data: {
+        name: "Concurrent Join League",
+        startingBalance: 10000,
+        startDate,
+        endDate,
+        status: "UPCOMING",
+      },
+    });
+    createdLeagueIds.push(league.id);
+
+    const initialPortfolios = await prisma.portfolio.count({
+      where: { userId: user3Id },
+    });
+
+    const [res1, res2] = await Promise.all([
+      request(app)
+        .post(`/api/v1/leagues/${league.id}/join`)
+        .set("Authorization", `Bearer ${user3Token}`)
+        .send({}),
+      request(app)
+        .post(`/api/v1/leagues/${league.id}/join`)
+        .set("Authorization", `Bearer ${user3Token}`)
+        .send({}),
+    ]);
+
+    const statuses = [res1.status, res2.status].sort();
+    expect(statuses).toEqual([200, 409]);
+
+    const finalPortfolios = await prisma.portfolio.count({
+      where: { userId: user3Id },
+    });
+    expect(finalPortfolios - initialPortfolios).toBe(1);
+
+    const membersCount = await prisma.leagueMember.count({
+      where: { leagueId: league.id },
+    });
+    expect(membersCount).toBe(1);
+  });
+
+  test("POST /api/v1/leagues/:id/join enforces capacity atomically when only one slot remains", async () => {
+    const startDate = new Date(Date.now() + 86400000).toISOString();
+    const endDate = new Date(Date.now() + 86400000 * 7).toISOString();
+
+    const league = await prisma.league.create({
+      data: {
+        name: "Capacity 1 League",
+        startingBalance: 10000,
+        maxParticipants: 1,
+        startDate,
+        endDate,
+        status: "UPCOMING",
+      },
+    });
+    createdLeagueIds.push(league.id);
+
+    const [res1, res2] = await Promise.all([
+      request(app)
+        .post(`/api/v1/leagues/${league.id}/join`)
+        .set("Authorization", `Bearer ${user1Token}`)
+        .send({}),
+      request(app)
+        .post(`/api/v1/leagues/${league.id}/join`)
+        .set("Authorization", `Bearer ${user2Token}`)
+        .send({}),
+    ]);
+
+    const statuses = [res1.status, res2.status].sort();
+    expect(statuses).toEqual([200, 400]);
+
+    const codes = [res1.body?.error?.code, res2.body?.error?.code].filter(Boolean);
+    expect(codes).toContain("LEAGUE_FULL");
+
+    const memberCount = await prisma.leagueMember.count({
+      where: { leagueId: league.id },
+    });
+    expect(memberCount).toBe(1);
+  });
+
+  test("POST /api/v1/orders rejects order execution on league portfolio after endDate", async () => {
+    const startDate = new Date(Date.now() - 10 * 86400000);
+    const endDate = new Date(Date.now() - 86400000);
+
+    const league = await prisma.league.create({
+      data: {
+        name: "Ended League For Orders",
+        startingBalance: 10000,
+        startDate,
+        endDate,
+        status: "COMPLETED",
+      },
+    });
+    createdLeagueIds.push(league.id);
+
+    const p = await prisma.portfolio.create({
+      data: {
+        userId: user1Id,
+        name: "Ended-P",
+        startingBalance: 10000,
+        cashBalance: 10000,
+        reservedCash: 0,
+      },
+    });
+
+    await prisma.leagueMember.create({
+      data: {
+        leagueId: league.id,
+        userId: user1Id,
+        portfolioId: p.id,
+        joinedAt: new Date(startDate.getTime() - 10000),
+      },
+    });
+
+    const res = await request(app)
+      .post("/api/v1/orders")
+      .set("Authorization", `Bearer ${user1Token}`)
+      .send({
+        portfolioId: p.id,
+        symbol: "AAPL",
+        assetType: "STOCK",
+        side: "BUY",
+        type: "MARKET",
+        quantity: "1",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("LEAGUE_ENDED");
+  });
+
+  test("POST /api/v1/orders rejects short selling on league portfolios", async () => {
+    const startDate = new Date(Date.now() - 86400000);
+    const endDate = new Date(Date.now() + 5 * 86400000);
+
+    const league = await prisma.league.create({
+      data: {
+        name: "Active Short Reject League",
+        startingBalance: 10000,
+        startDate,
+        endDate,
+        status: "ACTIVE",
+      },
+    });
+    createdLeagueIds.push(league.id);
+
+    const p = await prisma.portfolio.create({
+      data: {
+        userId: user1Id,
+        name: "Active-No-Short-P",
+        startingBalance: 10000,
+        cashBalance: 10000,
+        reservedCash: 0,
+      },
+    });
+
+    await prisma.leagueMember.create({
+      data: {
+        leagueId: league.id,
+        userId: user1Id,
+        portfolioId: p.id,
+        joinedAt: new Date(startDate.getTime() - 10000),
+      },
+    });
+
+    const res = await request(app)
+      .post("/api/v1/orders")
+      .set("Authorization", `Bearer ${user1Token}`)
+      .send({
+        portfolioId: p.id,
+        symbol: "AAPL",
+        assetType: "STOCK",
+        side: "SELL",
+        type: "MARKET",
+        quantity: "5",
+      });
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("SHORT_SELLING_DISALLOWED");
   });
 
   test("GET /api/v1/leagues/:id/leaderboard calculates mark-to-market returns and applies tie-breaker hierarchy", async () => {

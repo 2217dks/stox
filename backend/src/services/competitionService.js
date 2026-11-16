@@ -140,110 +140,111 @@ async function getLeagueById(id) {
  * Join a league.
  *
  * Rules:
- * - Late joining after startDate is strictly disallowed.
+ * - Every participant must use a fresh, dedicated league portfolio funded with exactly startingBalance.
+ * - Existing portfolios cannot be submitted (400 EXISTING_PORTFOLIO_NOT_ALLOWED).
+ * - Late joining after startDate is strictly disallowed (400 LEAGUE_ALREADY_STARTED).
  * - League status must be UPCOMING and now < startDate.
- * - Duplicate join is rejected (409).
- * - Member capacity is enforced if maxParticipants is defined.
- * - Uses dedicated competition portfolio (or supplied unused user portfolio).
+ * - Atomic capacity enforcement via row lock prevents race conditions on maxParticipants.
+ * - Duplicate join is rejected atomically (409 ALREADY_JOINED) without leaving orphan portfolios.
  */
 async function joinLeague({ leagueId, userId, portfolioId, now = new Date() }) {
-  const league = await prisma.league.findUnique({
-    where: { id: leagueId },
-    include: {
-      _count: {
-        select: { members: true },
+  if (portfolioId) {
+    throw new AppError(
+      "Existing portfolios are not permitted for leagues. A dedicated league portfolio is automatically allocated.",
+      {
+        statusCode: 400,
+        code: "EXISTING_PORTFOLIO_NOT_ALLOWED",
       },
-    },
-  });
-
-  if (!league) {
-    throw new AppError("League not found.", {
-      statusCode: 404,
-      code: "LEAGUE_NOT_FOUND",
-    });
+    );
   }
 
   const currentDate = now instanceof Date ? now : new Date(now);
 
-  // Late joining disallowed: joinedAt <= startDate required; joining requires status UPCOMING and now < startDate
-  if (currentDate >= new Date(league.startDate) || league.status !== "UPCOMING") {
-    throw new AppError("Cannot join league after it has started.", {
-      statusCode: 400,
-      code: "LEAGUE_ALREADY_STARTED",
-    });
-  }
+  const member = await prisma.$transaction(async (tx) => {
+    // 1. Lock the League row FOR UPDATE to atomically serialize join capacity checks
+    const leagues = await tx.$queryRaw`
+      SELECT id, name, "startingBalance", "maxParticipants", "startDate", "endDate", status
+      FROM "League"
+      WHERE id = ${leagueId}
+      FOR UPDATE
+    `;
 
-  if (league.maxParticipants && league._count.members >= league.maxParticipants) {
-    throw new AppError("League is full.", {
-      statusCode: 400,
-      code: "LEAGUE_FULL",
-    });
-  }
-
-  const existingMember = await prisma.leagueMember.findUnique({
-    where: {
-      leagueId_userId: {
-        leagueId,
-        userId,
-      },
-    },
-  });
-
-  if (existingMember) {
-    throw new AppError("User is already a member of this league.", {
-      statusCode: 409,
-      code: "ALREADY_JOINED",
-    });
-  }
-
-  let targetPortfolioId = portfolioId;
-
-  if (targetPortfolioId) {
-    const portfolio = await prisma.portfolio.findFirst({
-      where: { id: targetPortfolioId, userId },
-    });
-    if (!portfolio) {
-      throw new AppError("Portfolio not found or does not belong to user.", {
+    const league = leagues[0];
+    if (!league) {
+      throw new AppError("League not found.", {
         statusCode: 404,
-        code: "PORTFOLIO_NOT_FOUND",
+        code: "LEAGUE_NOT_FOUND",
       });
     }
-    const portfolioUsed = await prisma.leagueMember.findUnique({
-      where: { portfolioId: targetPortfolioId },
+
+    // 2. Late joining disallowed: joinedAt <= startDate required; joining requires status UPCOMING and now < startDate
+    const startDate = new Date(league.startDate);
+    if (currentDate >= startDate || league.status !== "UPCOMING") {
+      throw new AppError("Cannot join league after it has started.", {
+        statusCode: 400,
+        code: "LEAGUE_ALREADY_STARTED",
+      });
+    }
+
+    // 3. Atomically enforce member capacity
+    if (league.maxParticipants !== null && league.maxParticipants !== undefined) {
+      const currentMemberCount = await tx.leagueMember.count({
+        where: { leagueId },
+      });
+      if (currentMemberCount >= Number(league.maxParticipants)) {
+        throw new AppError("League is full.", {
+          statusCode: 400,
+          code: "LEAGUE_FULL",
+        });
+      }
+    }
+
+    // 4. Duplicate join check
+    const existingMember = await tx.leagueMember.findUnique({
+      where: {
+        leagueId_userId: {
+          leagueId,
+          userId,
+        },
+      },
     });
-    if (portfolioUsed) {
-      throw new AppError("Portfolio is already assigned to a league.", {
+
+    if (existingMember) {
+      throw new AppError("User is already a member of this league.", {
         statusCode: 409,
-        code: "PORTFOLIO_ALREADY_IN_LEAGUE",
+        code: "ALREADY_JOINED",
       });
     }
-  } else {
-    // Create dedicated competition portfolio
-    const newPortfolio = await prisma.portfolio.create({
+
+    // 5. Create fresh, dedicated league portfolio funded with exactly startingBalance
+    const startingBalance = new Prisma.Decimal(league.startingBalance);
+    const newPortfolio = await tx.portfolio.create({
       data: {
         userId,
         name: `${league.name} - ${Date.now()}`,
         description: `Competition portfolio for ${league.name}`,
-        startingBalance: league.startingBalance,
-        cashBalance: league.startingBalance,
+        startingBalance,
+        cashBalance: startingBalance,
         reservedCash: ZERO,
         isDefault: false,
         isActive: true,
       },
     });
-    targetPortfolioId = newPortfolio.id;
-  }
 
-  const member = await prisma.leagueMember.create({
-    data: {
-      leagueId,
-      userId,
-      portfolioId: targetPortfolioId,
-      joinedAt: currentDate,
-    },
-    include: {
-      portfolio: true,
-    },
+    // 6. Create league member
+    const newMember = await tx.leagueMember.create({
+      data: {
+        leagueId,
+        userId,
+        portfolioId: newPortfolio.id,
+        joinedAt: currentDate,
+      },
+      include: {
+        portfolio: true,
+      },
+    });
+
+    return newMember;
   });
 
   return member;

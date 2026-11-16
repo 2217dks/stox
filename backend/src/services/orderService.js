@@ -484,6 +484,56 @@ async function createOrder({
     );
   }
 
+  // League portfolio restrictions:
+  // 1. Pre-start trading disallowed (LEAGUE_NOT_ACTIVE).
+  // 2. Post-end trading disallowed (LEAGUE_ENDED).
+  // 3. Short selling disallowed (SHORT_SELLING_DISALLOWED).
+  const leagueMember = prisma.leagueMember
+    ? await prisma.leagueMember.findUnique({
+        where: { portfolioId },
+        include: { league: true },
+      })
+    : null;
+
+  if (leagueMember && leagueMember.league) {
+    const league = leagueMember.league;
+    const now = new Date();
+    const startDate = new Date(league.startDate);
+    const endDate = new Date(league.endDate);
+
+    if (now < startDate || league.status === "UPCOMING") {
+      throw AppError.badRequest(
+        "Trading is not permitted before the league has started.",
+        "LEAGUE_NOT_ACTIVE",
+      );
+    }
+
+    if (now >= endDate || league.status === "COMPLETED") {
+      throw AppError.badRequest(
+        "Trading is not permitted after the league has ended.",
+        "LEAGUE_ENDED",
+      );
+    }
+
+    if (side === "SELL") {
+      const holding = prisma.holding
+        ? await prisma.holding.findFirst({
+            where: {
+              portfolioId,
+              symbol: normalizedSymbol,
+            },
+          })
+        : null;
+      const heldQty = holding ? new Prisma.Decimal(holding.quantity) : ZERO;
+      if (heldQty.lt(new Prisma.Decimal(quantity))) {
+        throw AppError.badRequest(
+          "Short selling is not permitted in league portfolios. Insufficient shares held.",
+          "SHORT_SELLING_DISALLOWED",
+        );
+      }
+    }
+  }
+
   // Calculate the reservation before opening the database transaction.
   // This avoids holding a portfolio row lock while waiting for a market quote.
   const reservation = await calculateOrderReservation({
