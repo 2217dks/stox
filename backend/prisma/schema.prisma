@@ -133,6 +133,7 @@ model User {
   alerts             Alert[]
   notifications      Notification[]
   leaderboardEntries LeaderboardEntry[]
+  sentimentVotes     SentimentVote[]
 
   // Preferences
   preference UserPreference?
@@ -590,4 +591,30 @@ model UserPreference {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+}
+
+// ============================================================
+// SENTIMENT
+// ============================================================
+
+enum Sentiment {
+  BULLISH
+  BEARISH
+  NEUTRAL
+}
+
+model SentimentVote {
+  id String @id @default(uuid())
+
+  userId String
+  symbol String
+  sentiment Sentiment
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, symbol])
+  @@index([symbol, updatedAt])
 }
