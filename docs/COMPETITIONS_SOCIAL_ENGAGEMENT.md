@@ -7,7 +7,7 @@
 ## 📌 Table of Contents
 
 - [Executive Summary](#executive-summary)
-- [Source-Backed Existing Code Inventory](#source-backed-existing-code-inventory)
+- [Maintainer Product Decision Sheet](#maintainer-product-decision-sheet)
   - [47.1 Competition Scoring Rules (#128)](#471-competition-scoring-rules-128)
   - [47.2 Leaderboard Refresh Job (#129)](#472-leaderboard-refresh-job-129)
   - [47.3 Achievement Trigger Rules (#130)](#473-achievement-trigger-rules-130)
@@ -15,14 +15,6 @@
   - [47.5 Social Feed Ranking (#132)](#475-social-feed-ranking-132)
   - [47.6 Order-Execution Notifications (#133)](#476-order-execution-notifications-133)
   - [47.7 Sentiment Aggregation (#134)](#477-sentiment-aggregation-134)
-- [Maintainer Product Decision Sheet](#maintainer-product-decision-sheet)
-  - [Decision 1: Competition Scoring Rules & Boundary Conventions (#128)](#decision-1-competition-scoring-rules--boundary-conventions-128)
-  - [Decision 2: Leaderboard Refresh Canonical Scheduler & Transport (#129)](#decision-2-leaderboard-refresh-canonical-scheduler--transport-129)
-  - [Decision 3: Achievement Rules Catalog & Event Hooks (#130)](#decision-3-achievement-rules-catalog--event-hooks-130)
-  - [Decision 4: Leaderboard History API & Date-Range Contract (#131)](#decision-4-leaderboard-history-api--date-range-contract-131)
-  - [Decision 5: Social Feed Ranking Signals, Bounded Queries & Pagination (#132)](#decision-5-social-feed-ranking-signals-bounded-queries--pagination-132)
-  - [Decision 6: Order Lifecycle Notifications — Enum vs Structured Event Data (#133)](#decision-6-order-lifecycle-notifications--enum-vs-structured-event-data-133)
-  - [Decision 7: Sentiment Aggregation — Values, Windows & Complete Classification (#134)](#decision-7-sentiment-aggregation--values-windows--complete-classification-134)
 - [Commit Sequence & Execution Roadmap](#commit-sequence--execution-roadmap)
 
 ---
@@ -33,459 +25,430 @@ Task 47 encompasses seven related features across competitions, leaderboards, so
 
 A thorough review of `main` reveals that while certain foundational components exist (such as `LeaderboardSnapshot`, `portfolioValuationService`, in-app `createOrderExecutedNotification`, and chronological post feeds), significant architectural models and routes are currently absent from `schema.prisma` and `backend/src/` (notably Leagues/Competitions, Achievements, Sentiment Votes, historical leaderboard queries, and order lifecycle event notifications).
 
-Per project instructions, this revised decision sheet explicitly separates confirmed baseline requirements from recommendations, evaluates alternatives, and details practical impact across database performance, data consistency, and API contracts.
-
----
-
-## Source-Backed Existing Code Inventory
-
-### 47.1 Competition Scoring Rules (#128)
-- **Current Main Implementation**:
-  - `backend/prisma/schema.prisma` defines enum `OrderSource.LEAGUE` (line 57) and `NotificationType.LEAGUE_UPDATE` (line 79).
-  - **CRITICAL GAP**: No Prisma models exist for `League`, `Competition`, `LeagueMember`, or league rules in `schema.prisma` or migrations.
-  - No services, controllers, or routes exist in `backend/src/` for leagues or competitions.
-  - `docs/DATABASE.md` (lines 570–616) and `docs/FEATURES.md` (lines 285–310) document prospective designs for `model League` and `model LeagueMember`.
-  - Existing portfolio valuation (`backend/src/services/portfolioValuationService.js`) calculates mark-to-market valuation `totalValue = cashBalance + holdingsValue` using live quotes or historical candle closes, with strict non-zero pricing invariants.
-  - Existing daily performance snapshots (`backend/src/services/portfolioSnapshotService.js`) capture end-of-day balances and returns.
-
-### 47.2 Leaderboard Refresh Job (#129)
-- **Current Main Implementation**:
-  - `backend/src/services/leaderboardService.js` provides `generateLeaderboardSnapshots({ date })`:
-    - Normalizes dates to UTC midnight: `normalizeSnapshotDate(date)`.
-    - Iterates over active users (`isSuspended: false`).
-    - Calculates period P&L from trades in UTC date ranges (`DAILY`, `WEEKLY`, `MONTHLY`, `ALL_TIME`).
-    - Computes `returnPct` (4 decimals) and `totalValue` (8 decimals).
-    - Persists snapshots into `LeaderboardSnapshot` and `LeaderboardEntry` within `prisma.$transaction`.
-  - `backend/scripts/generate-leaderboard-snapshots.js` provides a manual CLI runner (`npm run leaderboard:snapshot`).
-  - **CRITICAL GAP**: `backend/src/workers/index.js` orchestrates `scanScheduler`, `orderWorker` / `orderQueueWorker`, and `portfolioSnapshotWorker` (`startPortfolioSnapshotWorker`), but **does NOT schedule or trigger leaderboard snapshot generation**.
-
-### 47.3 Achievement Trigger Rules (#130)
-- **Current Main Implementation**:
-  - `NotificationType` enum includes `ACHIEVEMENT_UNLOCKED`.
-  - **CRITICAL GAP**: No `Achievement` or `UserAchievement` tables exist in `schema.prisma` or database migrations.
-  - No achievement service, trigger rules, or evaluation hooks exist in `backend/src/`.
-  - `docs/FEATURES.md` (lines 312–326) defines achievement examples (`First Trade`, `First Profit`, `10 Successful Trades`, `Portfolio Milestone`, `League Winner`, `Consistent Trader`).
-  - `docs/DATABASE.md` (lines 535–567) documents prospective `Achievement` and `UserAchievement` schemas.
-
-### 47.4 Leaderboard History API (#131)
-- **Current Main Implementation**:
-  - `backend/src/routes/leaderboardRoutes.js` registers:
-    - `GET /api/v1/leaderboard` (latest global snapshot)
-    - `GET /api/v1/leaderboard/friends` (friends filtered from latest global snapshot)
-  - `LeaderboardSnapshot` and `LeaderboardEntry` models exist in Prisma and store historical runs indexed by `[scope, period, snapshotDate]`.
-  - **CRITICAL GAP**: No route or controller exists to query historical leaderboard snapshots by specific date or across date ranges.
-
-### 47.5 Social Feed Ranking (#132)
-- **Current Main Implementation**:
-  - `backend/src/services/socialService.js#getFeed` queries posts with `where: { isHidden: false }` ordered strictly by `createdAt: "desc"`.
-  - Includes `_count: { likes: true }` and author public profile.
-  - **CRITICAL GAP**: Feed is purely chronological; no engagement ranking signals, recency decay, or author affinity boosts exist. Suspended authors (`isSuspended: true`) are not currently filtered out of `getFeed`.
-
-### 47.6 Order-Execution Notifications (#133)
-- **Current Main Implementation**:
-  - `backend/src/services/notificationEvents.js#createOrderExecutedNotification` writes an in-app `ORDER_EXECUTED` notification row with structured payload in `data: Json`.
-  - Called from `tradeService.js` post-commit.
-  - **CRITICAL GAP**: Terminal non-executed states (`CANCELLED`, `EXPIRED`, `REJECTED`) do not emit notifications, and `NotificationType` enum currently lacks values for cancellations, rejections, and expirations.
-
-### 47.7 Sentiment Aggregation (#134)
-- **Current Main Implementation**:
-  - **CRITICAL GAP**: No `SentimentVote` model or `Sentiment` enum exists in `schema.prisma`.
-  - No sentiment routes or services exist in `backend/src/`.
-  - `docs/FEATURES.md` (lines 331–337) specifies votes: `BULLISH`, `BEARISH`, `NEUTRAL`.
-  - `docs/DATABASE.md` (lines 622–637, 805–809) documents `enum Sentiment { BULLISH, BEARISH, NEUTRAL }` and `model SentimentVote`.
+This document serves as the formal decision sheet. For each issue, it details:
+1. **Existing Implementation Evidence**: Grounded strictly in current code, tests, and documentation.
+2. **Exact Remaining Work**: What must be constructed.
+3. **Migration & Scope Impact**: Database changes and affected models.
+4. **Proposed Behavior [DECISIONS AWAITING APPROVAL]**: Clear proposals explicitly flagged as awaiting maintainer approval.
+5. **Alternatives Considered**: Other viable architectures and reasons for rejection.
+6. **Decision Still Needed**: Specific items requiring maintainer sign-off.
 
 ---
 
 ## Maintainer Product Decision Sheet
 
-### Decision 1: Competition Scoring Rules & Boundary Conventions (#128)
+### 47.1 Competition Scoring Rules (#128)
 
-#### Confirmed / Baseline Requirements
-- **Goal**: Define and implement scoring for supported competition formats using approved product rules. Confirm inputs, period boundaries, tie-breaks, and insufficient-activity behavior; make scoring deterministic and test ties.
-- **Documented Features**: Trading leagues are time-bound competitions with `startDate`, `endDate`, `startingBalance`, `maxParticipants`, and statuses (`UPCOMING`, `ACTIVE`, `COMPLETED`, `CANCELLED`). Each participant receives an isolated league portfolio.
-- **Missing Database Models**: `model League` and `model LeagueMember` do not currently exist in `schema.prisma` and require a migration.
-- **Existing Valuation Conventions**:
-  - `calculatePortfolioValuation(portfolioId, { asOf, client, priceProvider })`: Computes `totalValue = cashBalance + holdingsValue`. Invariant: Never treats missing/stale prices as zero; surfaces 503 if quote is unavailable.
-  - `captureDailyPortfolioSnapshots`: Captures EOD close comparing against initial balance or prior day.
+#### 1. Existing Implementation Evidence
+* `backend/prisma/schema.prisma` line 57: `OrderSource` enum contains `LEAGUE`.
+* `backend/prisma/schema.prisma` line 79: `NotificationType` enum contains `LEAGUE_UPDATE`.
+* `docs/FEATURES.md` lines 285–310: Documents league concept, fields (`name`, `description`, `startDate`, `endDate`, `startingBalance`, `maxParticipants`), statuses (`UPCOMING`, `ACTIVE`, `COMPLETED`, `CANCELLED`), and the requirement that each participant receives a league-specific portfolio.
+* `docs/DATABASE.md` lines 570–616: Documents prospective `model League` and `model LeagueMember` schemas.
+* `backend/src/services/portfolioValuationService.js`: `calculatePortfolioValuation(portfolioId, { asOf, client, priceProvider })` calculates mark-to-market portfolio value ($\text{cashBalance} + \text{holdingsValue}$) using live quotes or historical candle closes with strict non-zero pricing invariants (surfaces 503 if quotes unavailable).
+* `backend/src/services/portfolioSnapshotService.js`: Captures daily EOD valuation snapshots comparing against initial balance or prior day.
+* **CRITICAL GAP**: Neither `League` nor `LeagueMember` models exist in `schema.prisma` or database migrations. No competition routes or scoring services exist in `backend/src/`.
 
-#### Proposed Recommendation
-1. **Scoring Metric**: Percentage portfolio return over the competition duration:
-   $$\text{Return \%} = \frac{\text{Current Valuation} - \text{startingBalance}}{\text{startingBalance}} \times 100$$
-   - For `ACTIVE` leagues: $\text{Current Valuation}$ computed via `calculatePortfolioValuation()` using live quotes (or cached valuation).
-   - For `COMPLETED` leagues: Valued using historical candle close as of `league.endDate` (or the last completed daily performance snapshot for that league portfolio as of `endDate`).
-2. **Boundary & Trade Filtering**:
-   - Only trades executed within $[\text{startDate}, \text{endDate}]$ UTC belong to the competition. Trades attempted prior to `startDate` or after `endDate` are rejected.
-   - The competition portfolio is created with `OrderSource.LEAGUE`, `isDefault: false`, `startingBalance: league.startingBalance`, and `cashBalance: league.startingBalance`. External deposits and withdrawals are strictly disabled.
-3. **Insufficient Activity**:
-   - Participants with 0 trades maintain their starting balance ($0.00\%$ return). They are ranked below active participants who traded and achieved $\ge 0.00\%$ return.
-4. **Deterministic Tie-Breaking**:
-   - 1) `returnPct DESC`, 2) `totalValue DESC`, 3) `tradeCount DESC`, 4) `joinedAt ASC` (earlier join ranks higher), 5) `userId ASC`.
-5. **Required Models to Add via Migration**:
-   ```prisma
-   enum LeagueStatus {
-     UPCOMING
-     ACTIVE
-     COMPLETED
-     CANCELLED
-   }
+#### 2. Exact Remaining Work
+* Prisma schema update and migration adding `LeagueStatus` enum, `League`, and `LeagueMember` models.
+* Creation of `backend/src/services/competitionService.js` with deterministic scoring calculation, boundary checks, and tie-breaking.
+* Unit and integration test suite covering scoring calculation, edge boundaries, tie breaks, and zero-activity participants.
 
-   model League {
-     id              String        @id @default(uuid())
-     name            String
-     description     String?
-     startDate       DateTime
-     endDate         DateTime
-     startingBalance Decimal       @default(10000) @db.Decimal(18, 8)
-     maxParticipants Int?
-     status          LeagueStatus  @default(UPCOMING)
-     createdAt       DateTime      @default(now())
-     updatedAt       DateTime      @updatedAt
-     members         LeagueMember[]
-     @@index([status])
-     @@index([startDate])
-   }
+#### 3. Scope & Migration Impact
+* **New Models**:
+  ```prisma
+  enum LeagueStatus {
+    UPCOMING
+    ACTIVE
+    COMPLETED
+    CANCELLED
+  }
 
-   model LeagueMember {
-     id          String    @id @default(uuid())
-     leagueId    String
-     userId      String
-     portfolioId String    @unique
-     rank        Int?
-     finalReturn Decimal?  @db.Decimal(10, 4)
-     joinedAt    DateTime  @default(now())
-     league      League    @relation(fields: [leagueId], references: [id], onDelete: Cascade)
-     user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-     @@unique([leagueId, userId])
-     @@index([leagueId])
-     @@index([userId])
-   }
-   ```
+  model League {
+    id              String        @id @default(uuid())
+    name            String
+    description     String?
+    startDate       DateTime
+    endDate         DateTime
+    startingBalance Decimal       @default(10000) @db.Decimal(18, 8)
+    maxParticipants Int?
+    status          LeagueStatus  @default(UPCOMING)
+    createdAt       DateTime      @default(now())
+    updatedAt       DateTime      @updatedAt
+    members         LeagueMember[]
+    @@index([status])
+    @@index([startDate])
+  }
 
-#### Alternatives Considered
-- **Alternative A: Realized P&L Only**: Sum realized trade profits during the competition window, ignoring open holdings.
-  - *Drawback*: Severely penalizes long-term or swing positions; participants holding profitable unclosed positions would register 0% return.
-- **Alternative B: Time-Weighted Rate of Return (TWRR)**:
-  - *Drawback*: TWRR exists to neutralize cash inflows/outflows. Since league portfolios prohibit external cash deposits and withdrawals, TWRR mathematically collapses to standard percentage return while adding unnecessary computational complexity.
+  model LeagueMember {
+    id          String    @id @default(uuid())
+    leagueId    String
+    userId      String
+    portfolioId String    @unique
+    rank        Int?
+    finalReturn Decimal?  @db.Decimal(10, 4)
+    joinedAt    DateTime  @default(now())
+    league      League    @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+    user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+    portfolio   Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+    @@unique([leagueId, userId])
+    @@index([leagueId])
+    @@index([userId])
+  }
+  ```
+* **Impact on Existing Tables**: Adds relation `leagueMembers LeagueMember[]` to `User` and `leagueMember LeagueMember?` to `Portfolio`. Existing users and portfolios remain untouched; zero data backfill required.
 
-#### Practical Impact
-- Reuses existing robust financial primitives (`calculatePortfolioValuation`).
-- Eliminates any cash-deposit gaming.
-- Deterministic multi-tier sort guarantees zero flaky ranking assertions across concurrent test runs.
+#### 4. Proposed Behavior [DECISIONS AWAITING APPROVAL]
+* **[AWAITING APPROVAL] Scoring Metric**: Total percentage return based on mark-to-market valuation:
+  $$\text{Return \%} = \frac{\text{Current Valuation} - \text{startingBalance}}{\text{startingBalance}} \times 100$$
+  * Active leagues: Valued via `calculatePortfolioValuation()` using live quotes.
+  * Completed leagues: Valued using historical candle close as of `league.endDate`.
+* **[AWAITING APPROVAL] Portfolio Isolation**: Each participant enters with an isolated competition portfolio (`OrderSource.LEAGUE`, `isDefault: false`, `startingBalance: league.startingBalance`, `cashBalance: league.startingBalance`). Cash deposits and withdrawals are disallowed to prevent return distortion.
+* **[AWAITING APPROVAL] Boundary & Trades**: Only trades with `executedAt >= league.startDate` and `executedAt <= league.endDate` belong to the competition. Trades outside this window are rejected.
+* **[AWAITING APPROVAL] Late-Join Policy**: Allowed while league status is `ACTIVE` and current time $< \text{endDate}$. The late joiner starts with the full `startingBalance` in cash.
+* **[AWAITING APPROVAL] Insufficient Activity**: Participants with 0 trades remain at starting balance ($0.00\%$ return) and are sorted below participants who made trades and achieved $\ge 0.00\%$ return.
+* **[AWAITING APPROVAL] Deterministic Tie-Breakers**: 1) `returnPct DESC`, 2) `totalValue DESC`, 3) `tradeCount DESC`, 4) `joinedAt ASC`, 5) `userId ASC`.
 
----
+#### 5. Alternatives Considered
+* **Alternative A (Realized P&L Only)**: Only count closed trade cash gains.
+  * *Drawback*: Penalizes open swing/position holdings; participants holding winning open positions would show 0% return.
+* **Alternative B (Time-Weighted Rate of Return / TWRR)**:
+  * *Drawback*: Unnecessary complexity; because external deposits/withdrawals are disallowed in competition portfolios, TWRR mathematically collapses to standard percentage return.
 
-### Decision 2: Leaderboard Refresh Canonical Scheduler & Transport (#129)
-
-#### Confirmed / Baseline Requirements
-- **Goal**: Schedule/enqueue leaderboard snapshot refreshes for supported periods (`DAILY`, `WEEKLY`, `MONTHLY`, `ALL_TIME`). Reuse existing snapshot-generation logic (`generateLeaderboardSnapshots`), define cadence/timezone, make reruns idempotent, and ensure APIs read consistent completed snapshots.
-- **Existing Worker Setup**:
-  - `backend/src/workers/index.js` manages worker lifecycles.
-  - `backend/src/workers/portfolioSnapshotWorker.js` runs as an in-process scheduled worker (`startPortfolioSnapshotWorker`) polling every 60 seconds with an allowable settlement window from 00:00 to 02:00 UTC for yesterday's close.
-  - BullMQ is reserved specifically for transactional queues (`orders` queue with `orderQueueWorker`).
-
-#### Proposed Recommendation
-- **Canonical Transport**: Implement `backend/src/workers/leaderboardSnapshotWorker.js` as an **in-process scheduled worker** matching the exact architecture of `portfolioSnapshotWorker.js`, and start it in `backend/src/workers/index.js`.
-- **Do not run a dual polling + BullMQ scheduler**:
-  - A single in-process worker matches `portfolioSnapshotWorker` and guarantees the snapshot generator runs identically across local development, test suites, and production without requiring Redis queues.
-- **Cadence & Window**:
-  - Daily at **02:00 UTC**.
-  - *Rationale*: `portfolioSnapshotWorker` runs between 00:00 and 02:00 UTC to finalize all daily portfolio valuations for the prior day. Scheduling leaderboard snapshots at 02:00 UTC ensures all portfolio closing values and trades have settled.
-- **Rerun Idempotency**:
-  - `generateLeaderboardSnapshots` already uses `leaderboardSnapshot.upsert` and deletes existing entries for `(scope, period, snapshotDate)` inside a transaction before inserting new ones. Reruns safely refresh the snapshot without data duplication.
-
-#### Alternatives Considered
-- **Alternative A: BullMQ Repeatable Cron Job**:
-  - Create a new BullMQ queue (`leaderboard-snapshots`) with a repeatable job scheduled via Redis.
-  - *Drawback*: Adds unnecessary distributed lock and Redis dependency for a single daily job; breaks environments running with `QUEUES_ENABLED=false` (e.g. CI, offline dev).
-
-#### Practical Impact
-- Zero additional infrastructure requirements.
-- Clean sequential orchestration: EOD Portfolio Snapshots settle (00:00–02:00 UTC) $\to$ Leaderboard Snapshots generate (02:00 UTC).
-- Graceful shutdown handled seamlessly alongside existing workers in `backend/src/workers/index.js`.
+#### 6. Decision Still Needed
+* Maintainer confirmation on:
+  1. Percentage return formula using mark-to-market valuation vs realized P&L only.
+  2. Late-join policy (permitted with standard starting balance vs disallowed after start).
+  3. Tie-breaker hierarchy and zero-trade rank demotion.
 
 ---
 
-### Decision 3: Achievement Rules Catalog & Event Hooks (#130)
+### 47.2 Leaderboard Refresh Job (#129)
 
-#### Confirmed / Baseline Requirements
-- **Goal**: Build achievement trigger rules. Unlocking must be processed asynchronously or via event hooks.
-- **Existing Enum**: `NotificationType.ACHIEVEMENT_UNLOCKED` exists in `schema.prisma`.
-- **Missing Models**: `Achievement` and `UserAchievement` tables are not in `schema.prisma` and require a migration.
-- **Documented Examples in `docs/FEATURES.md` (lines 318–324)**:
-  - First Trade
-  - First Profit
-  - 10 Successful Trades
-  - Portfolio Milestone
-  - League Winner
-  - Consistent Trader
+#### 1. Existing Implementation Evidence
+* `backend/src/services/leaderboardService.js`: `generateLeaderboardSnapshots({ date })` computes and persists snapshots for `DAILY`, `WEEKLY`, `MONTHLY`, `ALL_TIME`.
+* `backend/scripts/generate-leaderboard-snapshots.js`: Manual CLI trigger (`npm run leaderboard:snapshot`).
+* `backend/src/workers/portfolioSnapshotWorker.js`: In-process scheduled worker (`startPortfolioSnapshotWorker`) polling every 60s with an allowable settlement window from 00:00 to 02:00 UTC for yesterday's close.
+* `backend/src/workers/index.js`: Manages worker lifecycles (`orderWorker`/`queueWorker`, `scanScheduler`, `portfolioSnapshotWorker`).
+* **CRITICAL GAP**: Leaderboard snapshot generation is completely absent from `backend/src/workers/index.js`. No background job currently executes it.
 
-#### Proposed Recommendation
-1. **Initial Catalog (Grounded in `docs/FEATURES.md`)**:
-   - `FIRST_TRADE` ("First Trade"): Executed at least 1 trade (`totalTrades >= 1`).
-   - `FIRST_PROFIT` ("First Profit"): Closed at least 1 trade with `realizedPnl > 0`.
-   - `TEN_SUCCESSFUL_TRADES` ("10 Successful Trades"): Achieved 10 trades with `realizedPnl > 0`.
-   - `PORTFOLIO_MILESTONE` ("Portfolio Milestone"): Total portfolio value crosses $\ge \$25,000$ (from initial $\$10,000$).
-   - *(Optional / Phase 2)*: `LEAGUE_WINNER` ("League Winner"): Won 1st place in a completed league (depends on League completion job).
-   - *(Optional / Phase 2)*: `CONSISTENT_TRADER` ("Consistent Trader"): Traded on 5 distinct consecutive calendar days (requires historical activity tracking).
-2. **Trigger Mechanism**:
-   - Event-driven post-commit hook in `tradeService.js` (following the pattern of `createOrderExecutedNotification`).
-   - Executes evaluation asynchronously after the trade transaction has committed (`setImmediate` or async worker).
-   - Idempotent unlock via `prisma.userAchievement.create` catching unique constraint violations (`P2002`) or using `upsert`.
-   - Automatically writes an in-app `Notification` with `type: "ACHIEVEMENT_UNLOCKED"`.
-3. **Required Models to Add via Migration**:
-   ```prisma
-   model Achievement {
-     id          String            @id @default(uuid())
-     code        String            @unique
-     name        String
-     description String
-     iconUrl     String?
-     category    String            @default("TRADING")
-     criteria    Json
-     createdAt   DateTime          @default(now())
-     users       UserAchievement[]
-   }
+#### 2. Exact Remaining Work
+* Implement `backend/src/workers/leaderboardSnapshotWorker.js`.
+* Register `startLeaderboardSnapshotWorker` in `backend/src/workers/index.js` with lifecycle start and graceful shutdown.
+* Define fallback and retry policies when prior EOD portfolio snapshots are missing.
 
-   model UserAchievement {
-     id            String      @id @default(uuid())
-     userId        String
-     achievementId String
-     unlockedAt    DateTime    @default(now())
-     user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-     achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
-     @@unique([userId, achievementId])
-     @@index([userId])
-   }
-   ```
+#### 3. Scope & Migration Impact
+* No schema migration required.
+* Worker orchestration update only.
 
-#### Alternatives Considered
-- **Alternative A: Heavy BullMQ Queue Evaluation**:
-  - Enqueue an `evaluate-achievements` job to Redis for every single user interaction.
-  - *Drawback*: High queue overhead for straightforward counter checks.
-- **Alternative B: Nightly Batch Evaluation**:
-  - Run a daily batch scanner to award achievements.
-  - *Drawback*: Completely eliminates real-time user delight; achievements unlock hours or days after the achievement event took place.
+#### 4. Proposed Behavior [DECISIONS AWAITING APPROVAL]
+* **[AWAITING APPROVAL] Canonical Transport**: Single **in-process scheduled worker** (`leaderboardSnapshotWorker.js`) started in `backend/src/workers/index.js`.
+  * *Rationale*: Matches `portfolioSnapshotWorker.js`. Avoids dual scheduling, runs identically across local development, CI (`QUEUES_ENABLED=false`), and production without Redis queue dependencies.
+* **[AWAITING APPROVAL] Schedule & Cadence**: Daily at **02:00 UTC** targeting yesterday ($T - 1$).
+  * *Rationale*: `portfolioSnapshotWorker` runs between 00:00 and 02:00 UTC to finalize EOD portfolio snapshots. 02:00 UTC ensures all EOD closing prices and trades have settled.
+* **[AWAITING APPROVAL] Missing/Failed Portfolio Snapshot Handling**:
+  If at 02:00 UTC some active portfolios have failed or missing EOD snapshots:
+  * **Option 1 (Recommended Retry + Fallback)**:
+    1. Check if all active portfolios have completed EOD snapshots for date $D$.
+    2. If missing, retry up to 3 times with 15-minute intervals (02:15, 02:30, 02:45 UTC).
+    3. If still missing at 03:00 UTC, execute approved fallback: compute period rankings directly using live portfolio cash and holdings basis (the current behavior of `generateLeaderboardSnapshots`), log a high-priority warning, and record metric `LEADERBOARD_REFRESH_PARTIAL_FALLBACK`.
+  * **Option 2 (Strict Block)**: Skip leaderboard generation for that date entirely and alert operators. (Drawback: a single failing portfolio prevents all users from having updated leaderboard rankings).
+  * **Option 3 (Independent Direct Calculation)**: Re-calculate each user's period P&L and total valuation directly from trades and current balances (current `generateLeaderboardSnapshots` logic), completely decoupled from `PerformanceSnapshot`.
+* **[AWAITING APPROVAL] Rerun Idempotency**: `generateLeaderboardSnapshots` uses `leaderboardSnapshot.upsert` and replaces `leaderboardEntry` within `prisma.$transaction`. Reruns safely refresh the snapshot without data duplication.
 
-#### Practical Impact
-- Immediate user feedback.
-- Strict `@@unique([userId, achievementId])` database constraint guarantees zero duplicate unlocks.
-- Post-commit execution ensures trade execution latency is unaffected.
+#### 5. Alternatives Considered
+* **Alternative A (BullMQ Repeatable Job)**:
+  * *Drawback*: Breaks environments running with `QUEUES_ENABLED=false` (CI, offline dev). In-process scheduling aligns directly with `portfolioSnapshotWorker`.
+
+#### 6. Decision Still Needed
+* Maintainer confirmation on:
+  1. Adopting the canonical in-process worker model at 02:00 UTC.
+  2. Selecting the missing-snapshot failure policy: Option 1 (Retry with fallback), Option 2 (Strict block), or Option 3 (Decoupled direct calculation).
 
 ---
 
-### Decision 4: Leaderboard History API & Date-Range Contract (#131)
+### 47.3 Achievement Trigger Rules (#130)
 
-#### Confirmed / Baseline Requirements
-- **Goal**: Expose historical leaderboard snapshots for supported periods/date ranges. Define ordering, pagination, snapshot selection, and visibility rules; return stored historical results rather than recalculating old rankings from current data.
-- **Existing Schema**: `LeaderboardSnapshot` (`id`, `scope`, `period`, `snapshotDate`, `createdAt`, `@@unique([scope, period, snapshotDate])`) and `LeaderboardEntry` (`id`, `snapshotId`, `userId`, `rank`, `totalValue`, `returnPct`, `snapshotDate`).
-- **Required Capability**: Must support both single-date snapshots and date-range retrieval.
+#### 1. Existing Implementation Evidence
+* `backend/prisma/schema.prisma` line 77: Enum `NotificationType.ACHIEVEMENT_UNLOCKED`.
+* `docs/FEATURES.md` lines 312–326: Documents achievement criteria examples (`First Trade`, `First Profit`, `10 Successful Trades`, `Portfolio Milestone`, `League Winner`, `Consistent Trader`) and notes that unlocking is processed asynchronously.
+* `docs/DATABASE.md` lines 535–567: Documents prospective `Achievement` and `UserAchievement` schemas.
+* **CRITICAL GAP**: Neither `Achievement` nor `UserAchievement` models exist in `schema.prisma` or database migrations. No trigger service exists in `backend/src/`.
 
-#### Proposed Recommendation
-- **Endpoint**: `GET /api/v1/leaderboard/history`
-- **Query Parameters**:
-  - `period`: enum (`DAILY`, `WEEKLY`, `MONTHLY`, `ALL_TIME`, default: `ALL_TIME`).
-  - `date`: optional `YYYY-MM-DD` date string (exact single-day historical leaderboard).
-  - `from` and `to`: optional `YYYY-MM-DD` date range bounds.
-  - `page`: default 1 (bounded $1 \le \text{page}$).
-  - `limit`: default 20 (bounded $1 \le \text{limit} \le 100$).
-- **Response Modes & Ordering**:
-  1. **Single-Date Historical Leaderboard** (`date` provided, or defaults to latest available date when neither `date` nor `from`/`to` provided):
-     - Returns the ranked leaderboard entries for that snapshot date.
-     - Ordering: Stable `rank ASC`, `userId ASC`.
-     - Shape:
-       ```json
-       {
-         "snapshotDate": "2026-11-10",
-         "period": "MONTHLY",
-         "scope": "GLOBAL",
-         "leaderboard": [
-           { "rank": 1, "userId": "...", "user": { "name": "...", "avatarUrl": "..." }, "totalValue": "11500.00000000", "returnPct": "15.0000" }
-         ],
-         "pagination": { "page": 1, "limit": 20, "total": 150, "totalPages": 8 }
-       }
-       ```
-  2. **Date-Range Snapshot Summary** (`from` and `to` provided):
-     - Returns available snapshot runs within $[from, to]$ with top performers or caller's historical performance.
-     - Ordering: `snapshotDate DESC`.
-     - Shape:
-       ```json
-       {
-         "period": "DAILY",
-         "scope": "GLOBAL",
-         "from": "2026-11-01",
-         "to": "2026-11-10",
-         "snapshots": [
-           { "snapshotDate": "2026-11-10", "totalEntries": 42, "topUser": { "userId": "...", "name": "...", "returnPct": "12.5000" } }
-         ],
-         "pagination": { "page": 1, "limit": 20, "total": 10, "totalPages": 1 }
-       }
-       ```
-- **Visibility**: Excludes suspended users (`user.isSuspended: false`).
-- **Data Source**: Reads strictly from indexed `LeaderboardSnapshot` and `LeaderboardEntry`. Never dynamic recalculation.
+#### 2. Exact Remaining Work
+* Prisma schema update and migration adding `Achievement` and `UserAchievement` tables.
+* Seeding baseline achievement definitions in `backend/prisma/seed.js`.
+* Implementation of durable trigger handler in `backend/src/services/achievementService.js`.
+* Integration of post-commit evaluation hooks in `tradeService.js` and `socialService.js`.
 
-#### Alternatives Considered
-- **Alternative A: Dynamic Historical Querying**:
-  - Re-run transaction calculations across historical trade tables for arbitrary past dates.
-  - *Drawback*: Extreme database load; contradicts issue #131's explicit mandate: "return stored historical results rather than recalculating old rankings from current data".
+#### 3. Scope & Migration Impact
+* **New Models**:
+  ```prisma
+  model Achievement {
+    id          String            @id @default(uuid())
+    code        String            @unique
+    name        String
+    description String
+    iconUrl     String?
+    category    String            @default("TRADING")
+    criteria    Json
+    createdAt   DateTime          @default(now())
+    users       UserAchievement[]
+  }
 
-#### Practical Impact
-- Sub-millisecond indexed database queries.
-- Bounded memory and network usage via standard pagination.
-- Full compliance with date-range query specifications.
+  model UserAchievement {
+    id            String      @id @default(uuid())
+    userId        String
+    achievementId String
+    unlockedAt    DateTime    @default(now())
+    user          User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+    achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+    @@unique([userId, achievementId])
+    @@index([userId])
+  }
+  ```
+* Adds relation `achievements UserAchievement[]` to `User`. No changes or locks on existing tables.
 
----
+#### 4. Proposed Behavior [DECISIONS AWAITING APPROVAL]
+* **[AWAITING APPROVAL] Durable Post-Commit Evaluation (Crash-Resilient)**:
+  * Evaluated post-commit directly in `tradeService.js` (awaited in a try/catch block matching `createOrderExecutedNotification`).
+  * **Crash Recovery & Reconciliation**: To ensure achievements survive process crashes before the post-commit handler finishes:
+    1. Grants execute via idempotent upsert: `prisma.userAchievement.create` catching duplicate key constraint (`P2002`).
+    2. A reconciliation helper `reconcileUserAchievements(userId)` checks cumulative stats (`totalTrades`, `profitableTrades`, `totalPortfolioValue`) against unlocked achievements. The next user action or worker startup automatically grants any earned but unrecorded achievements.
+  * Side Effect: Writes in-app `Notification` of type `ACHIEVEMENT_UNLOCKED`.
+* **[AWAITING APPROVAL] Catalog & Proposed Thresholds**:
+  1. `FIRST_TRADE`: Executed at least 1 trade (`totalTrades >= 1`). *[Proposed]*
+  2. `FIRST_PROFIT`: Closed at least 1 trade with `realizedPnl > 0`. *[Proposed]*
+  3. `TEN_SUCCESSFUL_TRADES`: Closed at least 10 trades with `realizedPnl > 0`. *[Proposed]*
+  4. `PORTFOLIO_MILESTONE`: Total portfolio value crosses $\ge \$25,000$ (from $\$10,000$). *[Proposed]*
+  5. *(Optional / Phase 2)*: `LEAGUE_WINNER`: Won 1st place in a completed league (requires League completion settlement). *[Optional - Proposed]*
+  6. *(Optional / Phase 2)*: `CONSISTENT_TRADER`: Traded across 5 distinct consecutive calendar days. *[Optional - Proposed]*
 
-### Decision 5: Social Feed Ranking Signals, Bounded Queries & Pagination (#132)
+#### 5. Alternatives Considered
+* **Alternative A (Ephemeral `setImmediate`)**:
+  * *Drawback*: Rejected per maintainer feedback. An in-memory callback is lost if the Node.js process crashes or restarts before it executes.
+* **Alternative B (Dedicated Outbox Table)**:
+  * *Drawback*: Extra database table and polling worker when idempotent post-commit execution with query reconciliation achieves identical durability.
 
-#### Confirmed / Baseline Requirements
-- **Goal**: Define and implement feed ordering/ranking from approved product requirements. Confirm ranking signals, recency weighting, stable pagination, and fallback ordering; preserve privacy/visibility rules and avoid unbounded query cost.
-- **Existing Implementation**: `socialService.js#getFeed` queries `Post` with `where: { isHidden: false }` ordered strictly by `createdAt: "desc"`.
-
-#### Proposed Recommendation
-1. **Privacy & Visibility Rules (Strictly Enforced)**:
-   - `post.isHidden: false`.
-   - Author is active: `author.isSuspended: false`.
-2. **Ranking Signals**:
-   - **Engagement**: Total likes count (`postLikeCount`).
-   - **Social Affinity**: $+2$ boost if the author is followed by the viewing user.
-   - **Recency Decay**: Age in hours elapsed since `createdAt`.
-   - **Gravity Decay Formula**:
-     $$\text{Score} = \frac{\text{likes} + 1 + (\text{isFollowing} ? 2 : 0)}{(\text{ageHours} + 2)^{1.2}}$$
-3. **Bounded Database Execution (Preventing Table Scans)**:
-   - Computing floating-point decay across millions of posts in raw SQL causes table scans and severe CPU bottlenecks.
-   - **Bounded Candidate Pool**: Filter ranking candidates strictly to recent posts: `createdAt >= NOW() - INTERVAL '7 days'`.
-   - Query uses the composite index `[isHidden, createdAt]`.
-4. **Stable Pagination & Two Modes**:
-   - `GET /api/v1/social/feed?sort=trending` (default):
-     - Fetches candidate posts from the 7-day window.
-     - Orders by deterministic multi-tier tie-breakers: `score DESC`, `createdAt DESC`, `id ASC`.
-     - Stable pagination supported via offset/limit or composite cursor `(score, createdAt, id)`.
-   - `GET /api/v1/social/feed?sort=latest`:
-     - Bypasses decay scoring entirely.
-     - Direct indexed cursor pagination: `createdAt DESC`, `id DESC`.
-   - Posts older than 7 days remain fully accessible via `sort=latest`.
-
-#### Alternatives Considered
-- **Alternative A: Offline Background Feed Aggregation (Fan-Out on Write)**:
-  - Generate per-user timeline tables on each post or like.
-  - *Drawback*: Excessive database write amplification and architecture bloat for current scale.
-- **Alternative B: Unbounded SQL Dynamic Scoring**:
-  - Run SQL `ORDER BY ((likes + 1) / POW(EXTRACT(EPOCH FROM (NOW() - createdAt))/3600 + 2, 1.2))` without date boundaries.
-  - *Drawback*: Prevents PostgreSQL from utilizing B-tree indexes, forcing full-table sequential scans on every feed request.
-
-#### Practical Impact
-- Index-assisted candidate fetch limits database scan to the last 7 days.
-- Zero risk of pagination drifting or duplicate posts.
-- Complete privacy protection against suspended users and hidden posts.
+#### 6. Decision Still Needed
+* Maintainer confirmation on:
+  1. Approval of the 4 core achievements and the $25,000 portfolio milestone threshold.
+  2. Whether to defer `LEAGUE_WINNER` and `CONSISTENT_TRADER` to Phase 2.
 
 ---
 
-### Decision 6: Order Lifecycle Notifications — Enum vs Structured Event Data (#133)
+### 47.4 Leaderboard History API (#131)
 
-#### Confirmed / Baseline Requirements
-- **Goal**: Generate notifications for relevant order lifecycle outcomes such as filled, rejected, cancelled, or expired. Use the existing notification pipeline, ensure one notification per intended transition, and emit only after the transaction commits.
-- **Existing Schema**:
-  - `model Notification` contains: `type NotificationType`, `title String`, `message String`, `data Json?`, `isRead Boolean`, `readAt DateTime?`.
-  - Current `enum NotificationType`: `ORDER_EXECUTED`, `PRICE_ALERT`, `ACHIEVEMENT_UNLOCKED`, `COPY_TRADE_EXECUTED`, `LEAGUE_UPDATE`, `NEW_FOLLOWER`, `SYSTEM`.
-  - Current `enum OrderEventType`: `CREATED`, `EXECUTED`, `CANCELLED`, `EXPIRED`, `REJECTED`.
+#### 1. Existing Implementation Evidence
+* `backend/src/routes/leaderboardRoutes.js`: Exposes `GET /api/v1/leaderboard` (latest global snapshot) and `GET /api/v1/leaderboard/friends`.
+* `backend/prisma/schema.prisma` lines 500–526: `LeaderboardSnapshot` and `LeaderboardEntry` tables storing historical runs indexed by `[scope, period, snapshotDate]`.
+* **CRITICAL GAP**: No route or service exists to query stored historical snapshots by date or across date ranges.
 
-#### Comparison: Enum Values vs Structured Event Data
-| Angle | Option 1: Add Enum Values (`ORDER_CANCELLED`, `ORDER_REJECTED`, `ORDER_EXPIRED`) | Option 2: Retain Existing Enum + Structured Event Data in `data: Json` |
+#### 2. Exact Remaining Work
+* Implement `getHistoricalLeaderboard` service in `backend/src/services/leaderboardService.js`.
+* Mount route `GET /api/v1/leaderboard/history` in `backend/src/routes/leaderboardRoutes.js`.
+* Add query validation schema and test coverage.
+
+#### 3. Scope & Migration Impact
+* No schema migration required. Leverages existing `LeaderboardSnapshot` and `LeaderboardEntry` tables.
+
+#### 4. Proposed Behavior [DECISIONS AWAITING APPROVAL]
+* **[AWAITING APPROVAL] Endpoint Contract**: `GET /api/v1/leaderboard/history`
+* **[AWAITING APPROVAL] Query Parameters**:
+  * `period`: `DAILY`, `WEEKLY`, `MONTHLY`, `ALL_TIME` (default: `ALL_TIME`).
+  * `date`: optional `YYYY-MM-DD` (single snapshot date).
+  * `from` and `to`: optional `YYYY-MM-DD` (date range).
+  * `page`: default 1 (bounded $\ge 1$).
+  * `limit`: default 20 (bounded $1 \le \text{limit} \le 100$).
+* **[AWAITING APPROVAL] Response Structure & Stored Ranks**:
+  * Returns **historical ranked entries** (`LeaderboardEntry`) for the requested snapshot dates.
+  * **Preservation of Stored Ranks**: The `rank` field in each entry was recorded when the snapshot was generated. It is returned verbatim without recalculation or re-ranking.
+  * **Ordering**:
+    * Date range (`from`/`to`): Ordered by `snapshotDate DESC, rank ASC, userId ASC`.
+    * Single date (`date`): Ordered by `rank ASC, userId ASC`.
+  * **Visibility**: Excludes suspended users (`where: { user: { isSuspended: false } }`).
+  * **Response Shape**:
+    ```json
+    {
+      "scope": "GLOBAL",
+      "period": "DAILY",
+      "from": "2026-11-01",
+      "to": "2026-11-07",
+      "entries": [
+        {
+          "snapshotDate": "2026-11-07",
+          "rank": 1,
+          "userId": "usr_123",
+          "user": { "name": "Alice", "avatarUrl": null },
+          "totalValue": "12500.00000000",
+          "returnPct": "25.0000"
+        }
+      ],
+      "pagination": { "page": 1, "limit": 20, "total": 140, "totalPages": 7 }
+    }
+    ```
+
+#### 5. Alternatives Considered
+* **Alternative A (Dynamic Historical Recalculation)**:
+  * *Drawback*: Violates issue #131's mandate: "return stored historical results rather than recalculating old rankings from current data".
+* **Alternative B (Snapshot Metadata Catalog Only)**:
+  * *Drawback*: Rejected per maintainer feedback; issue #131 requires historical ranked entries.
+
+#### 6. Decision Still Needed
+* Maintainer confirmation on:
+  1. Route parameters and response shape for date range queries.
+  2. Confirming that suspended users are filtered from historical snapshot views.
+
+---
+
+### 47.5 Social Feed Ranking (#132)
+
+#### 1. Existing Implementation Evidence
+* `backend/src/services/socialService.js#getFeed`: Queries `Post` with `where: { isHidden: false }` ordered strictly by `createdAt: "desc"`.
+* Existing indexes in `backend/prisma/schema.prisma`:
+  * `Post`: `@@index([authorId, createdAt])`, `@@index([createdAt])`.
+  * *Note: Composite index `[isHidden, createdAt]` DOES NOT exist.*
+  * `PostLike`: `@@unique([postId, userId])`, `@@index([userId, createdAt])`.
+* **CRITICAL GAP**: Feed is purely chronological; no engagement ranking signals, recency decay, or author affinity boosts exist. Suspended authors (`isSuspended: true`) are not currently filtered out of `getFeed`.
+
+#### 2. Exact Remaining Work
+* Implement ranking algorithm in `socialService.js`.
+* Add query parameter `sort=trending|latest` (default: `trending`).
+* Add author suspension filtering (`author: { isSuspended: false }`).
+
+#### 3. Scope & Migration Impact
+* No schema migration required initially (utilizes existing `@@index([createdAt])` on `Post`). Optional composite index `[isHidden, createdAt]` could be added if candidate pools expand in the future.
+
+#### 4. Proposed Behavior [DECISIONS AWAITING APPROVAL]
+* **[AWAITING APPROVAL] Bounded Candidate Selection**:
+  * For `sort=trending`, query candidates using the existing `@@index([createdAt])` index:
+    `where: { isHidden: false, author: { isSuspended: false }, createdAt: { gte: candidateWindowStart } }`, ordered by `createdAt: 'desc'`, with a hard cap: `take: 200` (`MAX_CANDIDATES = 200`).
+  * **Bounded Row Count**: PostgreSQL uses the `createdAt` index to scan only recent rows, eliminating full-table scans.
+  * **Bounded Node.js Memory**: Node.js receives at most 200 candidate posts.
+* **[AWAITING APPROVAL] Ranking Signals & Formula**:
+  * Engagement (likes count) + Affinity (+2 if viewing user follows author) divided by age decay:
+    $$\text{Score} = \frac{\text{likes} + 1 + (\text{isFollowing} ? 2 : 0)}{(\text{ageHours} + 2)^{1.2}}$$
+* **[AWAITING APPROVAL] Pagination Under Dynamic Score Changes**:
+  * Because scores decay continuously with elapsed time, naive offset pagination can experience item shift across page requests.
+  * **Session Stabilization**: The feed API accepts an optional `asOf` timestamp (or returns a `nextCursor` containing `asOf`). When fetching page 2, the client passes `asOf`, ensuring all decay scores remain completely identical throughout that feed browsing session.
+  * Alternatively, `sort=latest` provides completely monotonic, stable pagination using `(createdAt DESC, id DESC)`.
+
+#### 5. Alternatives Considered
+* **Alternative A (Unbounded SQL Mathematical Ordering)**:
+  * Run dynamic SQL ordering without candidate caps: `ORDER BY ((likes + 1) / POW(age + 2, 1.2))`.
+  * *Drawback*: Forces full-table sequential scans on every request, degrading latency as post volume grows.
+
+#### 6. Decision Still Needed
+* Maintainer confirmation on:
+  1. Candidate pool size (200 rows) and window (7 days).
+  2. Gravity formula exponents ($+2$ following boost, $1.2$ decay exponent).
+  3. Session `asOf` pagination stabilization.
+
+---
+
+### 47.6 Order-Execution Notifications (#133)
+
+#### 1. Existing Implementation Evidence
+* `backend/src/services/notificationEvents.js#createOrderExecutedNotification`: Writes `ORDER_EXECUTED` notification with structured context in `data: Json`.
+* `backend/prisma/schema.prisma` lines 74–82: Enum `NotificationType` (`ORDER_EXECUTED`, `PRICE_ALERT`, `ACHIEVEMENT_UNLOCKED`, `COPY_TRADE_EXECUTED`, `LEAGUE_UPDATE`, `NEW_FOLLOWER`, `SYSTEM`).
+* `backend/prisma/schema.prisma` lines 45–51: Enum `OrderEventType` (`CREATED`, `EXECUTED`, `CANCELLED`, `EXPIRED`, `REJECTED`).
+* **CRITICAL GAP**: Terminal non-executed states (`CANCELLED`, `EXPIRED`, `REJECTED`) do not emit notifications, and `NotificationType` enum currently lacks values for cancellations, rejections, and expirations.
+
+#### 2. Exact Remaining Work
+* Add notification hooks for terminal outcomes: `CANCELLED` (in `orderService.cancelOrder`), `REJECTED`, and `EXPIRED` (in `orderQueueWorker.js` / `orderWorker.js`).
+* Implement enum migration or structured data routing.
+
+#### 3. Comparison: Enum Values vs Structured Event Data
+| Dimension | Option 1: Add Explicit Enum Values (`ORDER_CANCELLED`, `ORDER_REJECTED`, `ORDER_EXPIRED`) | Option 2: Retain Existing Enum + Structured Event Data in `data: Json` |
 | :--- | :--- | :--- |
-| **API & Filtering** | Clients can filter directly: `GET /notifications?type=ORDER_REJECTED` | Clients must fetch all notifications and inspect client-side `data.status` |
-| **Schema Semantics** | Explicit, type-safe notification categorization in database | Semantically confusing if `type: ORDER_EXECUTED` is stored for an order that was cancelled or rejected |
-| **Migration Risk** | Requires Prisma migration (`ALTER TYPE "NotificationType" ADD VALUE ...`) | Zero database migrations required |
-| **Current Conventions** | Matches `ACHIEVEMENT_UNLOCKED` and `COPY_TRADE_EXECUTED` as distinct top-level enum types | Reuses existing `data: Json` field in `Notification` |
+| **Client Filtering** | Direct query filtering: `GET /notifications?type=ORDER_REJECTED` | Client must fetch all notifications and inspect nested JSON `data.status` |
+| **Schema Clarity** | Type-safe, accurate categorization in DB | Semantically misleading to label a cancelled or rejected order as `ORDER_EXECUTED` or `SYSTEM` |
+| **Database Migration** | Requires Prisma migration (`ALTER TYPE "NotificationType" ADD VALUE ...`) | No schema migration required |
+| **Codebase Consistency** | Matches existing fine-grained types (`ACHIEVEMENT_UNLOCKED`, `COPY_TRADE_EXECUTED`) | Reuses existing generic `data: Json` structure |
 
-#### Proposed Recommendation
-- **Adopt Option 1 (Explicit Enum Values)**:
-  - Add `ORDER_CANCELLED`, `ORDER_REJECTED`, and `ORDER_EXPIRED` to `NotificationType` enum via migration.
-  - Store complete execution/rejection metadata in `Notification.data: Json` (`orderId`, `symbol`, `side`, `quantity`, `reason`, `notes`).
-- **Emission Invariants**:
-  - Emitted strictly post-commit from `orderService.js` (for user cancellations) and `orderQueueWorker.js` / `orderWorker.js` (for worker rejections and expirations).
-  - One notification per terminal transition; retry loops in workers will not re-emit duplicate notifications.
+#### 4. Proposed Behavior [DECISIONS AWAITING APPROVAL]
+* **[AWAITING APPROVAL] Adopt Option 1 (Explicit Enum Values)**:
+  * Add `ORDER_CANCELLED`, `ORDER_REJECTED`, and `ORDER_EXPIRED` to `NotificationType` enum in `schema.prisma`.
+  * Store structured order context in `Notification.data: Json` (`orderId`, `symbol`, `side`, `quantity`, `price`, `reason`/`notes`).
+  * Emitted strictly post-commit from `orderService.js` (for user cancellations) and `orderQueueWorker.js` / `orderWorker.js` (for rejections and expirations).
+  * Enforce transition guards so terminal transitions emit exactly once.
 
-#### Practical Impact
-- Clean, type-safe notification filtering for mobile/web clients.
-- Prevents misleading notifications where cancelled/rejected orders carry `type: "ORDER_EXECUTED"`.
+#### 5. Alternatives Considered
+* **Alternative A (Single Generic `ORDER_UPDATE` Type)**:
+  * *Drawback*: Requires breaking rename of existing `ORDER_EXECUTED` enum value.
+
+#### 6. Decision Still Needed
+* Maintainer confirmation on adding explicit enum values (`ORDER_CANCELLED`, `ORDER_REJECTED`, `ORDER_EXPIRED`) via migration vs storing status inside `data: Json`.
 
 ---
 
-### Decision 7: Sentiment Aggregation — Values, Windows & Complete Classification (#134)
+### 47.7 Sentiment Aggregation (#134)
 
-#### Confirmed / Baseline Requirements
-- **Goal**: Aggregate sentiment votes by symbol/asset and supported time windows. Define weighting, time decay, minimum sample thresholds, and response fields from product requirements; distinguish no data from neutral sentiment.
-- **Documented Values (`docs/FEATURES.md` line 334 & `docs/DATABASE.md` line 805)**:
-  `enum Sentiment { BULLISH, BEARISH, NEUTRAL }`.
-- **Missing Models**: `model SentimentVote` and `enum Sentiment` do not exist in `schema.prisma`.
+#### 1. Existing Implementation Evidence
+* `docs/FEATURES.md` lines 331–337: Users can vote `BULLISH`, `BEARISH`, `NEUTRAL` for supported symbols.
+* `docs/DATABASE.md` lines 622–637 & 805–809: Documents prospective `model SentimentVote` and `enum Sentiment { BULLISH, BEARISH, NEUTRAL }`.
+* **CRITICAL GAP**: Neither `SentimentVote` model nor `Sentiment` enum exists in `backend/prisma/schema.prisma` or database migrations. No routes or services exist in `backend/src/`.
 
-#### Proposed Recommendation
-1. **Model & Uniqueness**:
-   ```prisma
-   enum Sentiment {
-     BULLISH
-     BEARISH
-     NEUTRAL
-   }
+#### 2. Exact Remaining Work
+* Prisma schema update and migration adding `Sentiment` enum and `SentimentVote` model.
+* Implement `backend/src/services/sentimentService.js` (voting + window aggregation).
+* Mount routes `POST /api/v1/sentiment/:symbol/vote` and `GET /api/v1/sentiment/:symbol`.
 
-   model SentimentVote {
-     id        String    @id @default(uuid())
-     userId    String
-     symbol    String
-     sentiment Sentiment
-     createdAt DateTime  @default(now())
-     updatedAt DateTime  @updatedAt
+#### 3. Scope & Migration Impact
+* **New Models**:
+  ```prisma
+  enum Sentiment {
+    BULLISH
+    BEARISH
+    NEUTRAL
+  }
 
-     user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  model SentimentVote {
+    id        String    @id @default(uuid())
+    userId    String
+    symbol    String
+    sentiment Sentiment
+    createdAt DateTime  @default(now())
+    updatedAt DateTime  @updatedAt
 
-     @@unique([userId, symbol])
-     @@index([symbol, updatedAt])
-   }
-   ```
-2. **Vote Updates & Time Windows**:
-   - Each user has at most 1 vote per symbol (`@@unique([userId, symbol])`). Subsequent votes update the record and refresh `updatedAt = now()`.
-   - **Supported Windows**: `24h`, `7d`, `30d`, `ALL`.
-   - **Window Filtering**:
-     - For bounded windows (`24h`, `7d`, `30d`), filter by `updatedAt >= windowStart`.
-     - *Semantics*: When a user updates their vote today from Bullish to Bearish, their vote reflects their active sentiment and enters the `24h` window. If a user voted 6 months ago and never updated it, their vote remains in `ALL` but expires out of the `24h` and `7d` windows.
-3. **Mathematically Complete Classification (Distinguishing No Data from Neutral)**:
-   - Let $B = \text{bullish votes}$, $R = \text{bearish votes}$, $N = \text{neutral votes}$ within the window.
-   - Total votes $T = B + R + N$.
-   - Sample Threshold: Minimum sample size $N_{\min} = 5$ (configurable, default 3 in test environment).
-   - **Classification Rules**:
-     1. **`NO_DATA`**: If $T < N_{\min}$ (insufficient votes to draw a statistically meaningful sentiment).
-     2. **`BULLISH`**: If $T \ge N_{\min}$ AND $\frac{B}{T} > 0.50$ AND $B > R$.
-     3. **`BEARISH`**: If $T \ge N_{\min}$ AND $\frac{R}{T} > 0.50$ AND $R > B$.
-     4. **`NEUTRAL`**: If $T \ge N_{\min}$ AND neither Bullish nor Bearish criteria are met (e.g. Neutral votes dominate, or Bullish and Bearish are evenly divided).
-   - *Completeness Guarantee*: These four cases form a disjoint, exhaustive partition of all possible states.
-4. **API Response Contract**:
-   ```json
-   {
-     "symbol": "AAPL",
-     "window": "7d",
-     "totalVotes": 15,
-     "sampleThresholdMet": true,
-     "breakdown": {
-       "bullish": { "count": 9, "percentage": "60.00" },
-       "bearish": { "count": 3, "percentage": "20.00" },
-       "neutral": { "count": 3, "percentage": "20.00" }
-     },
-     "classification": "BULLISH",
-     "userVote": "BULLISH"
-   }
-   ```
+    user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-#### Alternatives Considered
-- **Alternative A: Continuous Normalized Score $[-1.0, +1.0]$**:
-  - Score $= \frac{B - R}{T}$.
-  - *Drawback*: Ignores `NEUTRAL` votes in the numerator, treating neutral voters identically to non-voters.
-- **Alternative B: Binary Bullish/Bearish Only**:
-  - *Drawback*: Directly violates `docs/FEATURES.md` and `docs/DATABASE.md` which explicitly define `NEUTRAL`.
+    @@unique([userId, symbol])
+    @@index([symbol, updatedAt])
+  }
+  ```
+* Adds relation `votes SentimentVote[]` to `User`. No changes or locks on existing tables.
 
-#### Practical Impact
-- Rigorously solves the ambiguity between zero data and neutral sentiment.
-- `@@unique([userId, symbol])` prevents ballot stuffing.
-- Index on `[symbol, updatedAt]` ensures aggregate queries run via index scans in $< 1\text{ms}$.
+#### 4. Proposed Behavior [DECISIONS AWAITING APPROVAL]
+* **[AWAITING APPROVAL] Fixed Minimum Sample Threshold**:
+  * Exactly **$N_{\min} = 5$** across all environments (test, development, production alike).
+* **[AWAITING APPROVAL] Distinguishing Zero Votes from Insufficient Sample**:
+  * **`ZERO_VOTES`**: Total votes in window $T = 0 \implies \text{classification} = \mathbf{NO\_DATA}$, `status: "ZERO_VOTES"`, `sampleThresholdMet: false`.
+  * **`INSUFFICIENT_SAMPLE`**: $0 < T < 5 \implies \text{classification} = \mathbf{NO\_DATA}$, `status: "INSUFFICIENT_SAMPLE"`, `sampleThresholdMet: false`.
+  * **`SAMPLE_MET`**: $T \ge 5 \implies `sampleThresholdMet: true`.
+* **[AWAITING APPROVAL] Treatment of Neutral Votes**:
+  * Total denominator includes neutral votes: $T = B + R + N$.
+  * Percentage shares: $p_B = \frac{B}{T} \times 100, \quad p_R = \frac{R}{T} \times 100, \quad p_N = \frac{N}{T} \times 100$.
+  * Consensus classification when $T \ge 5$:
+    * **`BULLISH`**: $p_B > 50\%$ and $B > R$.
+    * **`BEARISH`**: $p_R > 50\%$ and $R > B$.
+    * **`NEUTRAL`**: Neither Bullish nor Bearish criteria met (e.g. Neutral votes dominate or neither Bullish nor Bearish achieves $> 50\%$).
+* **[AWAITING APPROVAL] Treatment of Vote Updates across Time Windows**:
+  * Supported windows: `24h`, `7d`, `30d`, `ALL`.
+  * Bounded windows filter strictly by `updatedAt >= windowStart`.
+  * When a user changes their vote, `updatedAt = now()`. The updated vote reflects their current opinion and immediately enters the `24h` window. Older, un-updated votes naturally age out of `24h` and `7d` into `ALL`.
+
+#### 5. Alternatives Considered
+* **Alternative A (Continuous Score $[-1.0, +1.0]$)**:
+  * Score $= \frac{B - R}{T}$.
+  * *Drawback*: Ignores `NEUTRAL` votes in numerator, treating neutral voters identically to non-voters.
+* **Alternative B (Binary Bullish/Bearish Only)**:
+  * *Drawback*: Violates `docs/FEATURES.md` and `docs/DATABASE.md`, which explicitly define `NEUTRAL`.
+
+#### 6. Decision Still Needed
+* Maintainer confirmation on:
+  1. Fixed sample threshold ($N_{\min} = 5$).
+  2. Consensus classification rules and neutral vote treatment.
+  3. Window filtering based on `updatedAt`.
 
 ---
 
@@ -493,13 +456,14 @@ Per project instructions, this revised decision sheet explicitly separates confi
 
 1. `docs(task-47): record current behavior and open product decisions` *(Committed: 34fad5a)*
 2. `test(leaderboard): cover snapshot refresh invariants` *(Committed: 6a8381b)*
-3. `feat(workers): schedule leaderboard snapshot refreshes` *(Canonical in-process worker)*
-4. `feat(competitions): implement approved scoring rules` *(Requires Decision 1 approval & migration)*
-5. `feat(achievements): add approved idempotent trigger rules` *(Requires Decision 3 approval & migration)*
-6. `feat(api): expose stored leaderboard history` *(Requires Decision 4 approval)*
-7. `feat(social): rank feed using approved signals` *(Requires Decision 5 approval)*
-8. `feat(notifications): cover approved order lifecycle transitions` *(Requires Decision 6 approval & migration)*
-9. `feat(sentiment): aggregate votes by approved windows` *(Requires Decision 7 approval & migration)*
-10. `test(task-47): cover cross-feature regressions`
-11. `docs(task-47): document approved APIs and operations`
-12. `docs(task-47): record final verification`
+3. `docs(task-47): revise product decision sheet with recommendations and impact analysis` *(Committed: ce5c641)*
+4. `feat(workers): schedule leaderboard snapshot refreshes` *(Canonical in-process worker; pending Decision 2 approval)*
+5. `feat(competitions): implement approved scoring rules` *(Requires Decision 1 approval & migration)*
+6. `feat(achievements): add approved idempotent trigger rules` *(Requires Decision 3 approval & migration)*
+7. `feat(api): expose stored leaderboard history` *(Requires Decision 4 approval)*
+8. `feat(social): rank feed using approved signals` *(Requires Decision 5 approval)*
+9. `feat(notifications): cover approved order lifecycle transitions` *(Requires Decision 6 approval & migration)*
+10. `feat(sentiment): aggregate votes by approved windows` *(Requires Decision 7 approval & migration)*
+11. `test(task-47): cover cross-feature regressions`
+12. `docs(task-47): document approved APIs and operations`
+13. `docs(task-47): record final verification`
