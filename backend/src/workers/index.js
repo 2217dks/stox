@@ -6,12 +6,20 @@ const { configureEventBus } = require("../realtime/eventBus");
 const { createRedisEventBus } = require("../realtime/redisBus");
 const { DEFAULT_INTERVAL_MS, startOrderWorker } = require("./orderWorker");
 const { createOrderQueueWorker } = require("./orderQueueWorker");
+const { createNotificationQueueWorker } = require("./notificationQueueWorker");
+const { createAlertQueueWorker } = require("./alertQueueWorker");
 const { startScanScheduler } = require("./scanScheduler");
 const { ensureOrderScanScheduler } = require("../queues/orderQueue");
+const {
+  ensureNotificationScanScheduler,
+} = require("../queues/notificationQueue");
+const { ensureAlertScanScheduler } = require("../queues/alertQueue");
 const { closeQueues, isQueuesEnabled } = require("../queues");
 const { startPortfolioSnapshotWorker } = require("./portfolioSnapshotWorker");
 
 const SHUTDOWN_TIMEOUT_MS = 5000;
+const DEFAULT_NOTIFICATION_SCAN_INTERVAL_MS = 30000;
+const DEFAULT_ALERT_SCAN_INTERVAL_MS = 15000;
 
 const eventBus = createRedisEventBus({ withSubscriber: false });
 configureEventBus(eventBus);
@@ -28,21 +36,56 @@ configureEventBus(eventBus);
  * Both transports call the same `processOrder` processor, so execution
  * semantics do not change. The two transports are mutually exclusive: running
  * both would create two execution paths for the same pending order.
+ *
+ * Notification and alert delivery only run on BullMQ. Their rows are written
+ * synchronously, so a Redis outage leaves them in the inbox and the periodic
+ * scans pick them up when Redis returns.
  */
 const queuesEnabled = isQueuesEnabled();
 
 const orderWorker = queuesEnabled ? null : startOrderWorker();
 const queueWorker = queuesEnabled ? createOrderQueueWorker() : null;
+const notificationQueueWorker = queuesEnabled
+  ? createNotificationQueueWorker()
+  : null;
+const alertQueueWorker = queuesEnabled ? createAlertQueueWorker() : null;
 
 const SCAN_INTERVAL_MS =
   Number.parseInt(process.env.ORDER_SCAN_INTERVAL_MS, 10) ||
   DEFAULT_INTERVAL_MS;
+
+const NOTIFICATION_SCAN_INTERVAL_MS =
+  Number.parseInt(process.env.NOTIFICATION_SCAN_INTERVAL_MS, 10) ||
+  DEFAULT_NOTIFICATION_SCAN_INTERVAL_MS;
+
+const ALERT_SCAN_INTERVAL_MS =
+  Number.parseInt(process.env.ALERT_SCAN_INTERVAL_MS, 10) ||
+  DEFAULT_ALERT_SCAN_INTERVAL_MS;
 
 const scanScheduler = queuesEnabled
   ? startScanScheduler({
       ensureScheduler: ensureOrderScanScheduler,
       intervalMs: SCAN_INTERVAL_MS,
       log: logger,
+      label: "Order",
+    })
+  : null;
+
+const notificationScanScheduler = queuesEnabled
+  ? startScanScheduler({
+      ensureScheduler: ensureNotificationScanScheduler,
+      intervalMs: NOTIFICATION_SCAN_INTERVAL_MS,
+      log: logger,
+      label: "Notification",
+    })
+  : null;
+
+const alertScanScheduler = queuesEnabled
+  ? startScanScheduler({
+      ensureScheduler: ensureAlertScanScheduler,
+      intervalMs: ALERT_SCAN_INTERVAL_MS,
+      log: logger,
+      label: "Alert",
     })
   : null;
 
@@ -53,9 +96,42 @@ logger.info(
     ? "Order worker started on the BullMQ orders queue"
     : `Order worker started; polling pending orders every ${DEFAULT_INTERVAL_MS}ms`,
 );
+
+if (queuesEnabled) {
+  logger.info(
+    "Notification and alert workers started on their BullMQ queues",
+  );
+}
+
 logger.info("Portfolio snapshot worker started for daily scheduled captures");
 
 let shuttingDown = false;
+
+async function closeQueueWorker(worker, label) {
+  if (!worker) {
+    return;
+  }
+
+  try {
+    await withTimeout(worker.close(), SHUTDOWN_TIMEOUT_MS, {
+      message: `${label} close timed out.`,
+    });
+  } catch (error) {
+    logger.warn(`${label} shutdown failed`, {
+      message: error.message,
+    });
+  }
+
+  const queueConnection = worker.queueConnection;
+
+  if (queueConnection && queueConnection.status !== "end") {
+    try {
+      await queueConnection.quit();
+    } catch (error) {
+      queueConnection.disconnect();
+    }
+  }
+}
 
 async function shutdown(signal) {
   if (shuttingDown) {
@@ -66,30 +142,14 @@ async function shutdown(signal) {
   logger.info(`Workers stopping (${signal})`);
 
   scanScheduler?.stop();
+  notificationScanScheduler?.stop();
+  alertScanScheduler?.stop();
   orderWorker?.stop();
   snapshotWorker.stop();
 
-  if (queueWorker) {
-    try {
-      await withTimeout(queueWorker.close(), SHUTDOWN_TIMEOUT_MS, {
-        message: "Order queue worker close timed out.",
-      });
-    } catch (error) {
-      logger.warn("Order queue worker shutdown failed", {
-        message: error.message,
-      });
-    }
-
-    const queueConnection = queueWorker.queueConnection;
-
-    if (queueConnection && queueConnection.status !== "end") {
-      try {
-        await queueConnection.quit();
-      } catch (error) {
-        queueConnection.disconnect();
-      }
-    }
-  }
+  await closeQueueWorker(queueWorker, "Order queue worker");
+  await closeQueueWorker(notificationQueueWorker, "Notification queue worker");
+  await closeQueueWorker(alertQueueWorker, "Alert queue worker");
 
   try {
     await withTimeout(closeQueues(), SHUTDOWN_TIMEOUT_MS, {
@@ -120,6 +180,10 @@ process.on("SIGTERM", () => shutdown("SIGTERM"));
 module.exports = {
   orderWorker,
   queueWorker,
+  notificationQueueWorker,
+  alertQueueWorker,
   scanScheduler,
+  notificationScanScheduler,
+  alertScanScheduler,
   snapshotWorker,
 };

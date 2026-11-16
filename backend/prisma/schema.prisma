@@ -81,6 +81,17 @@ enum NotificationType {
   SYSTEM
 }
 
+// Delivery lifecycle for the notification worker. The row is the in-app
+// record; `deliveryStatus` tracks the outbound channels (email/push/socket) so
+// a retried BullMQ job cannot send the same notification twice.
+enum NotificationDeliveryStatus {
+  PENDING
+  SENDING
+  DELIVERED
+  SKIPPED
+  FAILED
+}
+
 enum LeaderboardScope {
   GLOBAL
   FRIENDS
@@ -421,6 +432,18 @@ model Notification {
   isRead Boolean   @default(false)
   readAt DateTime?
 
+  deliveryStatus    NotificationDeliveryStatus @default(PENDING)
+  deliveredAt       DateTime?
+  // Total delivery attempts. Bounds the pending-notification scan so a
+  // provider that never recovers cannot be retried forever.
+  deliveryAttempts  Int                        @default(0)
+  // Set when a worker claims the row. A stale value lets the scan reclaim a
+  // row whose worker crashed between the claim and the terminal update.
+  deliveryStartedAt DateTime?
+  // Per-channel result, e.g. { inApp: true, email: true, push: "skipped" }.
+  // Persisted so a retried job resumes without repeating a successful send.
+  deliveryChannels  Json?
+
   createdAt DateTime @default(now())
 
   @@index([userId, isRead])
@@ -470,12 +493,24 @@ model Alert {
   triggeredAt DateTime?
   message     String?
 
+  // Percentage alerts compare the current price against the price at the time
+  // the alert was created. `targetPrice` is the percentage threshold for
+  // PERCENT_CHANGE_* conditions; for PRICE_ABOVE/PRICE_BELOW it remains the
+  // absolute trigger price and these columns stay null.
+  baselinePrice Decimal?  @db.Decimal(18, 8)
+  baselineAt    DateTime?
+
+  // Rotation cursor for the alert scan. Ordering by this (oldest first) keeps
+  // a large alert book fair when one scan cannot cover every symbol.
+  lastEvaluatedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userId, status])
   @@index([status, symbolId])
   @@index([symbolId])
+  @@index([status, lastEvaluatedAt])
 }
 
 // ============================================================

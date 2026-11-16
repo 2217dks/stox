@@ -26,6 +26,9 @@ const EVENT_CONTRACTS = {
     "trade-executed": validateTradeExecuted,
     "portfolio-update": validatePortfolioUpdate,
   },
+  "/notifications": {
+    notification: validateNotification,
+  },
 };
 
 const registeredBridges = new WeakMap();
@@ -55,6 +58,7 @@ function hasOwn(object, key) {
 const ROOM_PREFIXES = {
   "/market": "stock:",
   "/trading": "portfolio:",
+  "/notifications": "user:",
 };
 
 function validatePriceUpdate(payload) {
@@ -123,6 +127,30 @@ function validatePortfolioUpdate(payload) {
   return null;
 }
 
+function validateNotification(payload) {
+  if (!isNonEmptyString(payload.notificationId)) {
+    return "notification requires a notificationId.";
+  }
+
+  if (!isNonEmptyString(payload.userId)) {
+    return "notification requires a userId.";
+  }
+
+  if (!isNonEmptyString(payload.type)) {
+    return "notification requires a type.";
+  }
+
+  if (!isNonEmptyString(payload.title)) {
+    return "notification requires a title.";
+  }
+
+  if (typeof payload.message !== "string") {
+    return "notification requires a message.";
+  }
+
+  return null;
+}
+
 function validateMessage(message) {
   if (!isPlainObject(message)) {
     return { ok: false, reason: "message must be an object." };
@@ -183,6 +211,27 @@ function validateMessage(message) {
       return {
         ok: false,
         reason: "trading room portfolio ID must match payload.portfolioId.",
+      };
+    }
+  }
+
+  // Notification events are personal. The room must be the payload user's own
+  // room, so a bug or a malicious publisher cannot fan one user's notification
+  // into another user's stream.
+  if (namespace === "/notifications") {
+    const roomUserId = room.slice(ROOM_PREFIXES[namespace].length);
+
+    if (!isNonEmptyString(roomUserId)) {
+      return {
+        ok: false,
+        reason: "notification room must contain a user ID.",
+      };
+    }
+
+    if (roomUserId !== payload.userId) {
+      return {
+        ok: false,
+        reason: "notification room user ID must match payload.userId.",
       };
     }
   }

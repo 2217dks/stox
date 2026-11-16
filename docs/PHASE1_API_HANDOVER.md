@@ -233,9 +233,13 @@ Query: `page`/`limit` (1–100, defaults 1/20), optional `status=ACTIVE|TRIGGERE
 
 Body: `symbol`, optional `assetType=STOCK|CRYPTO|FOREX`, `condition=PRICE_ABOVE|PRICE_BELOW|PERCENT_CHANGE_UP|PERCENT_CHANGE_DOWN`, positive `targetPrice` (≤8 decimal places), optional `sendEmail` (default `true`) and `sendPush` (default `false`). Returns `201` as `{ data:{ alert } }`.
 
+The alert object includes `baselinePrice` (decimal string or `null`) and `baselineAt` (ISO-8601 or `null`). For `PERCENT_CHANGE_UP|DOWN`, `targetPrice` is a percentage threshold and the server captures the current quote at creation time as the baseline. If that quote is unavailable the request fails with the corresponding `MARKET_DATA_*` error and no alert is created, so a percentage alert never has an undefined starting point. `PRICE_ABOVE|PRICE_BELOW` alerts keep both baseline fields `null`.
+
 #### `PATCH /alerts/:alertId`
 
 UUID path. Strict body accepts at least one of `condition`, `targetPrice`, `status`, `sendEmail`, `sendPush`. Returns `200` as `{ data:{ alert } }`.
+
+Switching to a `PERCENT_CHANGE_*` condition captures a new baseline; switching away from a percentage condition clears it. Setting `status=ACTIVE` on a non-active percentage alert re-arms it with a fresh baseline.
 
 #### `DELETE /alerts/:alertId`
 

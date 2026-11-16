@@ -16,6 +16,16 @@ const ORDER_JOB_NAMES = Object.freeze({
   SCAN_PENDING: "scan-pending",
 });
 
+const NOTIFICATION_JOB_NAMES = Object.freeze({
+  SEND_NOTIFICATION: "send-notification",
+  SCAN_PENDING: "scan-pending",
+});
+
+const ALERT_JOB_NAMES = Object.freeze({
+  EVALUATE_ALERT: "evaluate-alert",
+  SCAN_ALERTS: "scan-alerts",
+});
+
 const DEFAULT_JOB_OPTIONS = Object.freeze({
   attempts: 5,
   backoff: { type: "exponential", delay: 1000 },
@@ -55,7 +65,21 @@ const QUEUE_POLICIES = Object.freeze({
       removeOnComplete: { count: 1000 },
       removeOnFail: { count: 5000 },
     },
-    jobs: {},
+    jobs: {
+      [NOTIFICATION_JOB_NAMES.SEND_NOTIFICATION]: {
+        attempts: 5,
+        backoff: { type: "exponential", delay: 5000 },
+        // Completed jobs stay in Redis for a bounded window. The job id is the
+        // notification id, so a duplicate enqueue while the delivery job is
+        // retained is deduplicated by BullMQ. The database delivery guard is
+        // the authoritative idempotency check after the job is gone.
+        removeOnComplete: { count: 1000 },
+      },
+      [NOTIFICATION_JOB_NAMES.SCAN_PENDING]: {
+        attempts: 3,
+        backoff: { type: "exponential", delay: 2000 },
+      },
+    },
   },
   [QUEUE_NAMES.ALERTS]: {
     defaultJobOptions: {
@@ -64,7 +88,19 @@ const QUEUE_POLICIES = Object.freeze({
       removeOnComplete: { count: 500 },
       removeOnFail: { count: 2000 },
     },
-    jobs: {},
+    jobs: {
+      [ALERT_JOB_NAMES.EVALUATE_ALERT]: {
+        attempts: 2,
+        backoff: { type: "exponential", delay: 1000 },
+        // An ACTIVE alert is re-evaluated on every scan, so the completed job
+        // must be removed before the same alertId can be enqueued again.
+        removeOnComplete: true,
+      },
+      [ALERT_JOB_NAMES.SCAN_ALERTS]: {
+        attempts: 2,
+        backoff: { type: "exponential", delay: 2000 },
+      },
+    },
   },
 });
 
@@ -84,6 +120,8 @@ function jobOptionsFor(queueName, jobName) {
 module.exports = {
   QUEUE_NAMES,
   ORDER_JOB_NAMES,
+  NOTIFICATION_JOB_NAMES,
+  ALERT_JOB_NAMES,
   DEFAULT_JOB_OPTIONS,
   QUEUE_POLICIES,
   jobOptionsFor,

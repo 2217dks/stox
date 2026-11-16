@@ -349,6 +349,10 @@ registry.describe("queue_enqueue_failures_total", "Job enqueue attempts that fai
 registry.describe("queue_jobs_completed_total", "Jobs completed by a worker.");
 registry.describe("queue_jobs_failed_total", "Job attempts that failed, including retries.");
 registry.describe("queue_jobs_exhausted_total", "Jobs that failed after exhausting every attempt.");
+registry.describe(
+  "notification_deliveries_total",
+  "Notification delivery attempts by channel and outcome.",
+);
 
 module.exports = {
   DEFAULT_BUCKETS,

@@ -1,10 +1,23 @@
 const prisma = require("../config/database");
 const { AppError } = require("../utils/errors");
+const marketDataService = require("./marketData");
 
 const ALERT_SYMBOL_SELECT = {
   symbol: true,
   assetType: true,
 };
+
+// `targetPrice` is a percentage threshold for these conditions and an absolute
+// price for the others. Percentage alerts need a request-time baseline so "up
+// 5%" means "up 5% since I created the alert".
+const PERCENTAGE_CONDITIONS = new Set([
+  "PERCENT_CHANGE_UP",
+  "PERCENT_CHANGE_DOWN",
+]);
+
+function isPercentageCondition(condition) {
+  return PERCENTAGE_CONDITIONS.has(condition);
+}
 
 async function ensureActiveUser(userId) {
   const user = await prisma.user.findUnique({
@@ -34,6 +47,11 @@ function serializeAlert(alert) {
     assetType: alert.symbol?.assetType ?? null,
     condition: alert.condition,
     targetPrice: alert.targetPrice.toString(),
+    baselinePrice:
+      alert.baselinePrice === null || alert.baselinePrice === undefined
+        ? null
+        : alert.baselinePrice.toString(),
+    baselineAt: alert.baselineAt ?? null,
     status: alert.status,
     sendEmail: alert.sendEmail,
     sendPush: alert.sendPush,
@@ -50,6 +68,11 @@ async function getOwnedAlert(userId, alertId) {
       id: alertId,
       userId,
     },
+    include: {
+      symbol: {
+        select: ALERT_SYMBOL_SELECT,
+      },
+    },
   });
 
   if (!alert) {
@@ -57,6 +80,25 @@ async function getOwnedAlert(userId, alertId) {
   }
 
   return alert;
+}
+
+/**
+ * Read the current price and freeze it as the alert's reference point.
+ *
+ * The quote is fetched before the row is written, so a provider outage fails
+ * the request instead of creating an alert whose percentage has no defined
+ * starting point. The market-data error is already an `AppError` with the
+ * right status code and domain code, so it propagates unchanged.
+ */
+async function captureBaseline(symbolRecord) {
+  const quote = await marketDataService.getQuote(symbolRecord.symbol, {
+    assetClass: symbolRecord.assetType,
+  });
+
+  return {
+    baselinePrice: quote.price,
+    baselineAt: new Date(),
+  };
 }
 
 async function listAlerts(
@@ -139,6 +181,10 @@ async function createAlert(userId, payload) {
     );
   }
 
+  const baseline = isPercentageCondition(payload.condition)
+    ? await captureBaseline(symbolRecord)
+    : { baselinePrice: null, baselineAt: null };
+
   const alert = await prisma.alert.create({
     data: {
       userId,
@@ -147,6 +193,7 @@ async function createAlert(userId, payload) {
       targetPrice: payload.targetPrice,
       sendEmail: payload.sendEmail,
       sendPush: payload.sendPush,
+      ...baseline,
     },
     include: {
       symbol: {
@@ -161,7 +208,7 @@ async function createAlert(userId, payload) {
 async function updateAlert(userId, alertId, payload) {
   await ensureActiveUser(userId);
 
-  await getOwnedAlert(userId, alertId);
+  const existing = await getOwnedAlert(userId, alertId);
 
   const data = {};
 
@@ -187,6 +234,31 @@ async function updateAlert(userId, alertId, payload) {
 
   if (payload.sendPush !== undefined) {
     data.sendPush = payload.sendPush;
+  }
+
+  // A percentage alert needs a reference price. Capture one when the alert
+  // first becomes a percentage alert, when an existing alert is re-armed, or
+  // when an older row somehow has no baseline. Switching back to an absolute
+  // price clears the now-meaningless baseline.
+  const effectiveCondition = data.condition ?? existing.condition;
+  const rearming = data.status === "ACTIVE" && existing.status !== "ACTIVE";
+
+  if (isPercentageCondition(effectiveCondition)) {
+    const needsBaseline =
+      !isPercentageCondition(existing.condition) ||
+      rearming ||
+      existing.baselinePrice === null ||
+      existing.baselinePrice === undefined;
+
+    if (needsBaseline) {
+      Object.assign(data, await captureBaseline(existing.symbol));
+    }
+  } else if (
+    existing.baselinePrice !== null &&
+    existing.baselinePrice !== undefined
+  ) {
+    data.baselinePrice = null;
+    data.baselineAt = null;
   }
 
   const alert = await prisma.alert.update({
@@ -219,4 +291,6 @@ module.exports = {
   createAlert,
   updateAlert,
   deleteAlert,
+  serializeAlert,
+  isPercentageCondition,
 };

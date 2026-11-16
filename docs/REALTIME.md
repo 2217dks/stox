@@ -20,7 +20,8 @@
 | Polling fallback (`MARKET_STREAM_ENABLED=false`) | Implemented (`src/services/pollingPriceStream.js`) |
 | Redis worker → API event bridge | Implemented (`src/realtime/*`) |
 | Order, trade, and portfolio trading events | Implemented |
-| `/notifications` and `/social` namespaces | **Planned** |
+| `/notifications` namespace + user rooms | Implemented (`src/sockets/notificationsNamespace.js`) |
+| `/social` namespace | **Planned** |
 | Order book and trade-tape streams | **Planned** |
 | Socket.IO Redis adapter / horizontal room coordination | **Planned** |
 
@@ -32,14 +33,14 @@
 | --- | --- | --- |
 | `/market` | Public | Price updates for watched symbols |
 | `/trading` | Required access token | Order, trade, and portfolio events |
-| `/notifications` | **Planned** | Personal alerts and notifications |
+| `/notifications` | Required access token | Personal alerts and notifications |
 | `/social` | **Planned** | Social feed updates |
 
 | Room | Pattern | Purpose |
 | --- | --- | --- |
 | Stock room | `stock:{SYMBOL}` | Sockets watching one market symbol |
 | Portfolio room | `portfolio:{portfolioId}` | Sockets allowed to receive that portfolio's trading events |
-| User room | `user:{userId}` | **Planned** (notifications) |
+| User room | `user:{userId}` | Sockets receiving that user's notifications (server-derived) |
 
 Rooms are transport-level grouping only. A predictable room name is **never**
 treated as authorisation: `/trading` verifies portfolio ownership before
@@ -62,6 +63,11 @@ const trading = io(`${process.env.NEXT_PUBLIC_SOCKET_URL}/trading`, {
   transports: ["websocket", "polling"],
   auth: { token: accessToken },
 });
+
+const notifications = io(`${process.env.NEXT_PUBLIC_SOCKET_URL}/notifications`, {
+  transports: ["websocket", "polling"],
+  auth: { token: accessToken },
+});
 ```
 
 `NEXT_PUBLIC_SOCKET_URL` is the backend origin (for example
@@ -73,6 +79,9 @@ const trading = io(`${process.env.NEXT_PUBLIC_SOCKET_URL}/trading`, {
 - `/trading` requires a valid access token, sent as
   `io("/trading", { auth: { token } })` or as
   `Authorization: Bearer <token>` in the handshake headers.
+- `/notifications` uses the same authenticated handshake. On connect the server
+  joins the socket to its own `user:{userId}` room; the client never supplies
+  the room or user id.
 - Handshake failures arrive as `connect_error` with `err.data.code`:
   - `UNAUTHORIZED` — no credentials were supplied.
   - `INVALID_AUTH_HEADER` — malformed `Authorization` header.
@@ -245,6 +254,23 @@ All trading events are room-scoped to `portfolio:{portfolioId}`.
 - `portfolio-update` is supplementary. If its valuation query fails, the
   `order-status` and `trade-executed` events are still published.
 
+### `/notifications` namespace
+
+Personal, scoped to the server-derived `user:{userId}` room. There are no
+client events; the server emits `notification` after the notification worker
+delivers a row.
+
+| Event | Direction | Payload |
+| --- | --- | --- |
+| `notification` | Server → Client | `{ notificationId, userId, type, title, message, data, createdAt }` |
+
+- `notificationId` is the `Notification` row id; use it to de-duplicate a
+  reconnect replay.
+- `data` is the same JSON object stored on the row (for example `alertId` or
+  `orderId`).
+- The bridge rejects a message whose room does not match `payload.userId`, so
+  one user's notification can never be routed into another user's room.
+
 ---
 
 ## 🔄 Delivery semantics and resynchronisation
@@ -401,11 +427,14 @@ The bridge only accepts the implemented contract:
 | --- | --- |
 | `/market` | `price-update` |
 | `/trading` | `order-status`, `trade-executed`, `portfolio-update` |
+| `/notifications` | `notification` |
 
 Every implemented event is room-scoped. Validation requires a non-empty room
 with the namespace's prefix (`stock:` for `/market`, `portfolio:` for
-`/trading`). This prevents an accidentally roomless `/trading` message from
-broadcasting portfolio data to every authenticated client.
+`/trading`, `user:` for `/notifications`). This prevents an accidentally
+roomless `/trading` message from broadcasting portfolio data to every
+authenticated client, and an accidentally mismatched `/notifications` message
+from delivering one user's notification to another.
 
 Messages with an unknown namespace/event, a non-object payload, a missing or
 mistyped room, invalid numeric fields, or missing required fields are ignored
@@ -469,6 +498,8 @@ coordination**.
 | `MARKET_MAX_TOTAL_SUBSCRIPTIONS` | `200` | Distinct symbols per API process |
 | `MARKET_SUBSCRIPTION_RATE_LIMIT` | `30` | `subscribe` events per socket per window |
 | `MARKET_SUBSCRIPTION_RATE_WINDOW_MS` | `10000` | Rate-limit window |
+| `SOCKET_PING_INTERVAL_MS` | `25000` | Socket.IO heartbeat ping interval |
+| `SOCKET_PING_TIMEOUT_MS` | `20000` | Socket.IO heartbeat pong timeout |
 
 ### Degraded behaviour
 

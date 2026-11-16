@@ -4,8 +4,8 @@
 
 This document describes what the backend emits today. It covers tasks 49.1
 (structured logging), 49.4 (API performance instrumentation), and 49.6
-(backend observability metrics). Queue metrics are added when the BullMQ
-workers land.
+(backend observability metrics). Queue and notification-delivery metrics are
+emitted by the BullMQ workers.
 
 ---
 
@@ -103,6 +103,7 @@ dependency.
 | `queue_jobs_completed_total` | counter | `queue`, `job` | Worker completions |
 | `queue_jobs_failed_total` | counter | `queue`, `job` | Failed attempts, including retries |
 | `queue_jobs_exhausted_total` | counter | `queue`, `job` | Jobs that failed every attempt |
+| `notification_deliveries_total` | counter | `channel`, `outcome` | Notification worker: in-app/email/push attempts |
 | `process_uptime_seconds` | gauge | — | runtime |
 | `process_resident_memory_bytes` | gauge | — | runtime |
 | `nodejs_heap_used_bytes` | gauge | — | runtime |
