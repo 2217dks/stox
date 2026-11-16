@@ -7,6 +7,22 @@ const DEFAULT_INTERVAL_MS = Number(process.env.LEADERBOARD_SNAPSHOT_INTERVAL_MS)
 const DEFAULT_SCHEDULE_HOUR_UTC = Number(process.env.LEADERBOARD_SNAPSHOT_HOUR_UTC) || 2;
 const LOCK_TTL_MS = 300000; // 5 minutes
 
+const RELEASE_LOCK_LUA = `
+if redis.call("get", KEYS[1]) == ARGV[1] then
+  return redis.call("del", KEYS[1])
+else
+  return 0
+end
+`;
+
+const RENEW_LOCK_LUA = `
+if redis.call("get", KEYS[1]) == ARGV[1] then
+  return redis.call("pexpire", KEYS[1], ARGV[2])
+else
+  return 0
+end
+`;
+
 function getPreviousUtcDateString(dateInput) {
   const ref = dateInput instanceof Date ? dateInput : new Date(dateInput || Date.now());
   const prev = new Date(
@@ -25,7 +41,7 @@ function getPreviousUtcDateString(dateInput) {
 
 /**
  * Acquire a distributed lock for running leaderboard snapshot refresh.
- * Attempts Redis lock if available, falls back to in-process memory lock.
+ * Fails closed if Redis is unavailable or acquisition fails.
  */
 async function acquireLeaderboardLock(lockKey, workerId, ttlMs = LOCK_TTL_MS) {
   try {
@@ -34,27 +50,72 @@ async function acquireLeaderboardLock(lockKey, workerId, ttlMs = LOCK_TTL_MS) {
       const result = await redis.set(lockKey, workerId, "PX", ttlMs, "NX");
       return result === "OK";
     }
+    logger.warn(`Redis unavailable for lock ${lockKey}, failing closed.`);
+    return false;
   } catch (error) {
-    logger.warn(`Redis lock acquisition failed for ${lockKey}, falling back to single-instance execution: ${error.message}`);
+    logger.warn(
+      `Redis lock acquisition failed for ${lockKey}, failing closed: ${error.message}`,
+    );
+    return false;
   }
-  return true;
 }
 
 /**
- * Release distributed lock if held.
+ * Renew distributed lease if still held by this worker using atomic Lua script.
+ */
+async function renewLeaderboardLock(lockKey, workerId, ttlMs = LOCK_TTL_MS) {
+  try {
+    const redis = await redisConfig.getRedis();
+    if (!redis) return false;
+
+    if (typeof redis.eval === "function") {
+      const res = await redis.eval(RENEW_LOCK_LUA, 1, lockKey, workerId, ttlMs);
+      return res === 1;
+    }
+
+    // Mock/fallback path
+    if (typeof redis.get === "function" && typeof redis.pexpire === "function") {
+      const current = await redis.get(lockKey);
+      if (current === workerId) {
+        await redis.pexpire(lockKey, ttlMs);
+        return true;
+      }
+      return false;
+    }
+  } catch (error) {
+    logger.warn(`Failed renewing Redis lock for ${lockKey}: ${error.message}`);
+    return false;
+  }
+  return false;
+}
+
+/**
+ * Release distributed lock if held by this worker using atomic Lua script.
  */
 async function releaseLeaderboardLock(lockKey, workerId) {
   try {
     const redis = await redisConfig.getRedis();
-    if (redis && (redis.status === "ready" || typeof redis.get === "function")) {
+    if (!redis) return false;
+
+    if (typeof redis.eval === "function") {
+      const res = await redis.eval(RELEASE_LOCK_LUA, 1, lockKey, workerId);
+      return res === 1;
+    }
+
+    // Mock/fallback path
+    if (typeof redis.get === "function" && typeof redis.del === "function") {
       const current = await redis.get(lockKey);
       if (current === workerId) {
         await redis.del(lockKey);
+        return true;
       }
+      return false;
     }
   } catch (error) {
     logger.warn(`Failed releasing Redis lock for ${lockKey}: ${error.message}`);
+    return false;
   }
+  return false;
 }
 
 /**
@@ -117,6 +178,19 @@ async function runLeaderboardSnapshotJob({
     };
   }
 
+  // Active heartbeat renewal while job executes
+  const renewalIntervalMs = Math.max(1000, Math.floor(LOCK_TTL_MS / 3));
+  let renewalTimer = setInterval(async () => {
+    try {
+      await renewLeaderboardLock(lockKey, workerId, LOCK_TTL_MS);
+    } catch (err) {
+      logger.warn(`Error during leaderboard lock renewal: ${err.message}`);
+    }
+  }, renewalIntervalMs);
+  if (typeof renewalTimer.unref === "function") {
+    renewalTimer.unref();
+  }
+
   try {
     logger.info(`Starting daily leaderboard snapshot generation for ${targetDateStr}`);
     const result = await leaderboardService.generateLeaderboardSnapshots({ date: targetDateObj });
@@ -134,6 +208,9 @@ async function runLeaderboardSnapshotJob({
     });
     throw error;
   } finally {
+    if (renewalTimer) {
+      clearInterval(renewalTimer);
+    }
     await releaseLeaderboardLock(lockKey, workerId);
   }
 }
@@ -222,8 +299,11 @@ module.exports = {
   DEFAULT_INTERVAL_MS,
   DEFAULT_SCHEDULE_HOUR_UTC,
   LOCK_TTL_MS,
+  RELEASE_LOCK_LUA,
+  RENEW_LOCK_LUA,
   getPreviousUtcDateString,
   acquireLeaderboardLock,
+  renewLeaderboardLock,
   releaseLeaderboardLock,
   runLeaderboardSnapshotJob,
   startLeaderboardSnapshotWorker,

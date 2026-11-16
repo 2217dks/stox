@@ -1,9 +1,12 @@
 const {
   getPreviousUtcDateString,
   acquireLeaderboardLock,
+  renewLeaderboardLock,
   releaseLeaderboardLock,
   runLeaderboardSnapshotJob,
   startLeaderboardSnapshotWorker,
+  RELEASE_LOCK_LUA,
+  RENEW_LOCK_LUA,
 } = require("../../../src/workers/leaderboardSnapshotWorker");
 
 const leaderboardService = require("../../../src/services/leaderboardService");
@@ -26,7 +29,7 @@ describe("leaderboardSnapshotWorker unit tests", () => {
     });
   });
 
-  describe("acquireLeaderboardLock and releaseLeaderboardLock", () => {
+  describe("acquireLeaderboardLock, renewLeaderboardLock, and releaseLeaderboardLock", () => {
     test("acquires lock when Redis returns OK", async () => {
       const mockRedis = {
         status: "ready",
@@ -50,21 +53,70 @@ describe("leaderboardSnapshotWorker unit tests", () => {
       expect(acquired).toBe(false);
     });
 
-    test("releases lock only if current worker matches", async () => {
+    test("fails closed (returns false) when Redis is unavailable", async () => {
+      jest.spyOn(redisConfig, "getRedis").mockResolvedValue(null);
+
+      const acquired = await acquireLeaderboardLock("test-lock", "worker-1", 5000);
+      expect(acquired).toBe(false);
+    });
+
+    test("fails closed (returns false) when Redis throws an error during acquisition", async () => {
       const mockRedis = {
         status: "ready",
-        get: jest.fn().mockResolvedValue("worker-1"),
-        del: jest.fn().mockResolvedValue(1),
+        set: jest.fn().mockRejectedValue(new Error("Connection lost")),
       };
       jest.spyOn(redisConfig, "getRedis").mockResolvedValue(mockRedis);
 
-      await releaseLeaderboardLock("test-lock", "worker-1");
-      expect(mockRedis.del).toHaveBeenCalledWith("test-lock");
+      const acquired = await acquireLeaderboardLock("test-lock", "worker-1", 5000);
+      expect(acquired).toBe(false);
+    });
 
-      mockRedis.get.mockResolvedValue("worker-other");
-      mockRedis.del.mockClear();
-      await releaseLeaderboardLock("test-lock", "worker-1");
-      expect(mockRedis.del).not.toHaveBeenCalled();
+    test("renews lock lease using atomic Lua script when held by worker", async () => {
+      const mockRedis = {
+        eval: jest.fn().mockResolvedValue(1),
+      };
+      jest.spyOn(redisConfig, "getRedis").mockResolvedValue(mockRedis);
+
+      const renewed = await renewLeaderboardLock("test-lock", "worker-1", 10000);
+      expect(renewed).toBe(true);
+      expect(mockRedis.eval).toHaveBeenCalledWith(
+        RENEW_LOCK_LUA,
+        1,
+        "test-lock",
+        "worker-1",
+        10000,
+      );
+    });
+
+    test("fails to renew lock when lease is lost or held by another worker", async () => {
+      const mockRedis = {
+        eval: jest.fn().mockResolvedValue(0),
+      };
+      jest.spyOn(redisConfig, "getRedis").mockResolvedValue(mockRedis);
+
+      const renewed = await renewLeaderboardLock("test-lock", "worker-1", 10000);
+      expect(renewed).toBe(false);
+    });
+
+    test("releases lock using atomic Lua script only if current worker matches", async () => {
+      const mockRedis = {
+        eval: jest.fn().mockResolvedValue(1),
+      };
+      jest.spyOn(redisConfig, "getRedis").mockResolvedValue(mockRedis);
+
+      const released = await releaseLeaderboardLock("test-lock", "worker-1");
+      expect(released).toBe(true);
+      expect(mockRedis.eval).toHaveBeenCalledWith(
+        RELEASE_LOCK_LUA,
+        1,
+        "test-lock",
+        "worker-1",
+      );
+
+      // When another worker holds it, eval returns 0
+      mockRedis.eval.mockResolvedValue(0);
+      const otherReleased = await releaseLeaderboardLock("test-lock", "worker-1");
+      expect(otherReleased).toBe(false);
     });
   });
 
@@ -127,6 +179,26 @@ describe("leaderboardSnapshotWorker unit tests", () => {
       expect(result.reason).toBe("LOCKED_BY_ANOTHER_WORKER");
     });
 
+    test("skips and fails closed if Redis is down/unavailable when job runs", async () => {
+      const now = new Date("2026-11-15T02:15:00.000Z");
+      const mockClient = {
+        leaderboardSnapshot: {
+          findMany: jest.fn().mockResolvedValue([]),
+        },
+      };
+
+      jest.spyOn(redisConfig, "getRedis").mockResolvedValue(null);
+
+      const result = await runLeaderboardSnapshotJob({
+        now,
+        client: mockClient,
+        scheduleHourUtc: 2,
+      });
+
+      expect(result.skipped).toBe(true);
+      expect(result.reason).toBe("LOCKED_BY_ANOTHER_WORKER");
+    });
+
     test("executes generateLeaderboardSnapshots when due and lock acquired", async () => {
       const now = new Date("2026-11-15T02:15:00.000Z");
       const mockClient = {
@@ -140,6 +212,7 @@ describe("leaderboardSnapshotWorker unit tests", () => {
         set: jest.fn().mockResolvedValue("OK"),
         get: jest.fn().mockResolvedValue("worker-test"),
         del: jest.fn().mockResolvedValue(1),
+        eval: jest.fn().mockResolvedValue(1),
       };
       jest.spyOn(redisConfig, "getRedis").mockResolvedValue(mockRedis);
 
@@ -165,7 +238,12 @@ describe("leaderboardSnapshotWorker unit tests", () => {
       expect(snapshotSpy).toHaveBeenCalledWith({
         date: new Date("2026-11-14T00:00:00.000Z"),
       });
-      expect(mockRedis.del).toHaveBeenCalled();
+      expect(mockRedis.eval).toHaveBeenCalledWith(
+        RELEASE_LOCK_LUA,
+        1,
+        "lock:leaderboard-snapshot:2026-11-14",
+        "worker-test",
+      );
     });
   });
 
