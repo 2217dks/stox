@@ -1,6 +1,7 @@
 const { Prisma } = require("@prisma/client");
 const prisma = require("../config/database");
 const defaultMarketData = require("./marketData");
+const { resolveHoldingPrice } = require("./portfolioValuationService");
 const { AppError } = require("../utils/errors");
 
 const ZERO = new Prisma.Decimal(0);
@@ -343,6 +344,9 @@ async function getLeagueLeaderboard({
 
   const isEnded = currentDate >= endDate || league.status === "COMPLETED";
   const valuationDate = isEnded ? endDate : currentDate;
+  const isHistorical =
+    isEnded ||
+    valuationDate.toISOString().slice(0, 10) < new Date().toISOString().slice(0, 10);
 
   const startingBalanceDec = new Prisma.Decimal(league.startingBalance);
 
@@ -365,7 +369,7 @@ async function getLeagueLeaderboard({
       for (const trade of eligibleTrades) {
         const qty = new Prisma.Decimal(trade.quantity);
         const price = new Prisma.Decimal(trade.price);
-        const fee = new Prisma.Decimal(trade.fee || 0);
+        const fee = new Prisma.Decimal(trade.fees ?? trade.fee ?? 0);
         const notional = qty.times(price);
 
         if (!symbolHoldings[trade.symbol]) {
@@ -390,45 +394,51 @@ async function getLeagueLeaderboard({
       }
 
       // Calculate holdings value
+      // Handle both long (quantity > 0) and short (quantity < 0) positions.
+      // For short positions, market valuation acts as a liability deducting from portfolio value.
       let holdingsValue = ZERO;
       for (const sym of Object.keys(symbolHoldings)) {
         const h = symbolHoldings[sym];
-        if (h.quantity.gt(ZERO)) {
-          let price = h.lastPrice;
+        if (!h.quantity.isZero()) {
+          let priceDecimal;
           try {
-            if (priceProvider) {
-              if (isEnded && typeof priceProvider.getHistoricalPrice === "function") {
-                const hist = await priceProvider.getHistoricalPrice(h.symbol, {
-                  asOf: valuationDate,
-                  assetClass: h.assetType,
-                });
-                if (hist && hist.price !== undefined && hist.price !== null) {
-                  price = new Prisma.Decimal(hist.price);
-                }
-              } else if (!isEnded && typeof priceProvider.getQuote === "function") {
-                const q = await priceProvider.getQuote(h.symbol, {
-                  assetClass: h.assetType,
-                });
-                if (q && q.price !== undefined && q.price !== null) {
-                  price = new Prisma.Decimal(q.price);
-                }
-              }
+            const quote = priceProvider
+              ? await resolveHoldingPrice(h, valuationDate, priceProvider, isHistorical)
+              : null;
+
+            if (!quote || quote.price === undefined || quote.price === null) {
+              throw new Error(`Quote price is missing for ${h.symbol}`);
             }
-          } catch {
-            price = h.lastPrice;
+
+            priceDecimal = new Prisma.Decimal(quote.price);
+            if (priceDecimal.lte(ZERO)) {
+              throw new Error(`Non-positive price returned for ${h.symbol}`);
+            }
+          } catch (error) {
+            if (error instanceof AppError) {
+              throw error;
+            }
+            throw new AppError(
+              `Market price unavailable for ${h.symbol}: ${error.message}`,
+              {
+                statusCode: 503,
+                code: "MARKET_DATA_PROVIDER_UNAVAILABLE",
+                details: { symbol: h.symbol, assetType: h.assetType },
+              },
+            );
           }
-          holdingsValue = holdingsValue.plus(h.quantity.times(price));
+
+          holdingsValue = holdingsValue.plus(h.quantity.times(priceDecimal));
         }
       }
 
       const totalValue = effectiveCash.plus(holdingsValue);
       const returnPct = startingBalanceDec.isZero()
-        ? 0
+        ? ZERO
         : totalValue
             .minus(startingBalanceDec)
             .dividedBy(startingBalanceDec)
-            .times(100)
-            .toNumber();
+            .times(100);
 
       return {
         id: member.id,
@@ -445,15 +455,15 @@ async function getLeagueLeaderboard({
   );
 
   // Tie-breaker hierarchy:
-  // 1. returnPct DESC
-  // 2. totalValue DESC
+  // 1. returnPct DESC (Prisma.Decimal)
+  // 2. totalValue DESC (Prisma.Decimal)
   // 3. tradeCount DESC
   // 4. joinedAt ASC
   // 5. userId ASC
   evaluatedMembers.sort((a, b) => {
     // 1. returnPct DESC
-    if (b.returnPct !== a.returnPct) {
-      return b.returnPct - a.returnPct;
+    if (!b.returnPct.equals(a.returnPct)) {
+      return b.returnPct.gt(a.returnPct) ? 1 : -1;
     }
     // 2. totalValue DESC
     if (!b.totalValue.equals(a.totalValue)) {
@@ -489,7 +499,7 @@ async function getLeagueLeaderboard({
           where: { id: m.id },
           data: {
             rank: m.rank,
-            finalReturn: new Prisma.Decimal(m.returnPct.toFixed(4)),
+            finalReturn: m.returnPct,
           },
         }),
       ),
