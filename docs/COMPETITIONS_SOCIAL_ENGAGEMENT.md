@@ -30,7 +30,7 @@ All ambiguous product rules have been formally reviewed and approved by the main
 
 ## Verification Evidence
 
-The test suite was executed locally on `feature/task-47-competition-social-engagement` at `2026-11-16T10:17:15+05:30`:
+The complete test suite was executed locally on `feature/task-47-competition-social-engagement`:
 
 1. **Targeted Invariant Test Suite**:
    * Command: `cd backend && npm test -- tests/unit/services/leaderboardSnapshotService.test.js tests/integration/leaderboard.integration.test.js`
@@ -38,7 +38,11 @@ The test suite was executed locally on `feature/task-47-competition-social-engag
    * Verifies: UTC date normalization across boundaries, leap days, multi-level tie-breaking, negative return rankings, transaction rollback isolation, and suspended user exclusion.
 2. **Full Backend Test Suite**:
    * Command: `cd backend && npm test -- --runInBand`
-   * Result: **104 passed, 104 total** (1,382 tests passed, 0 failures, 0 snapshots in 54.854s).
+   * Result: **108 passed, 108 total** (1,426 tests passed, 0 failures, 0 snapshots in 58.462s).
+3. **Cross-Feature End-to-End Integration Suite**:
+   * Command: `cd backend && npm test -- tests/integration/task47Integration.test.js`
+   * Result: **1 passed, 1 total** (4 tests passed, 0 failures in 2.234s).
+   * Verifies: End-to-end trade execution triggers achievements and notifications, limit order cancellation emits notifications, sentiment aggregation across windows, and league registration, scoring, and tie-breaking.
 
 ---
 
@@ -179,14 +183,14 @@ The test suite was executed locally on `feature/task-47-competition-social-engag
 1. `docs(task-47): record current behavior and open product decisions` *(Committed: 34fad5a)*
 2. `test(leaderboard): cover snapshot refresh invariants` *(Committed: 6a8381b)*
 3. `docs(task-47): revise product decision sheet with recommendations and impact analysis` *(Committed: ce5c641)*
-4. `docs(task-47): update decision sheet with implementation evidence and fallback specifications` *(Committed: 64a45e5)*
-5. `docs(task-47): record maintainer approved product specifications` *(This commit)*
-6. `feat(workers): schedule leaderboard snapshot refreshes with distributed locking` *(#129)*
-7. `feat(api): expose stored global leaderboard history with date range queries` *(#131)*
-8. `feat(social): add trending feed ranking mode with bounded candidate scoring` *(#132)*
-9. `feat(notifications): add notifications for terminal order transitions` *(#133)*
-10. `feat(sentiment): aggregate market sentiment votes across time windows` *(#134)*
-11. `feat(achievements): implement durable achievement trigger and reconciliation rules` *(#130)*
-12. `feat(competitions): implement approved league scoring and membership rules` *(#128)*
-13. `test(task-47): cover cross-feature regressions and end-to-end integration`
-14. `docs(task-47): finalize API and operational documentation`
+4. `docs(task-47): update decision sheet with implementation evidence and fallback specifications` *(Committed: 64a45e5 / 0e25743)*
+5. `docs(task-47): record maintainer approved product specifications` *(Committed: 98ba8ff)*
+6. `feat(workers): schedule leaderboard snapshot refreshes with distributed locking` *(Committed: b5aa21f - #129)*
+7. `feat(api): expose stored global leaderboard history with date range queries` *(Committed: 938e50a - #131)*
+8. `feat(social): add trending feed ranking mode with bounded candidate scoring` *(Committed: 35f5e98 - #132)*
+9. `feat(notifications): add notifications for terminal order transitions` *(Committed: 6d20695 - #133)*
+10. `feat(sentiment): aggregate market sentiment votes across time windows` *(Committed: bbcb9e8 - #134)*
+11. `feat(achievements): implement durable achievement trigger and reconciliation rules` *(Committed: bc08dae - #130)*
+12. `feat(competitions): implement approved league scoring and membership rules` *(Committed: a3a8a4b - #128)*
+13. `test(task-47): cover cross-feature regressions and end-to-end integration` *(Committed: 000a7cc)*
+14. `docs(task-47): finalize API and operational documentation` *(This commit)*
