@@ -414,6 +414,115 @@ describe("createOrder cash reservations", () => {
     expect(tx.order.create).not.toHaveBeenCalled();
   });
 
+  test("returns an existing copied order without reserving cash again", async () => {
+    const existing = {
+      id: ORDER_ID,
+      portfolioId: PORTFOLIO_ID,
+      symbol: "AAPL",
+      assetType: "STOCK",
+      side: "BUY",
+      type: "MARKET",
+      status: "PENDING",
+      quantity: { toString: () => "1" },
+      reservedCash: { toString: () => "100" },
+      limitPrice: null,
+      stopPrice: null,
+      executedPrice: null,
+      executedAt: null,
+      expiresAt: null,
+      notes: null,
+      source: "COPY_TRADE",
+      createdAt: new Date(0),
+      updatedAt: new Date(0),
+    };
+
+    prisma.order.findUnique.mockResolvedValue(existing);
+
+    const result = await orderService.createOrder({
+      userId: USER_ID,
+      portfolioId: PORTFOLIO_ID,
+      symbol: "AAPL",
+      assetType: "STOCK",
+      side: "BUY",
+      type: "MARKET",
+      quantity: "1",
+      source: "COPY_TRADE",
+      copyTradeExecutionId: "44444444-4444-4444-8444-444444444444",
+    });
+
+    expect(result.id).toBe(ORDER_ID);
+    expect(marketDataService.getQuote).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  test("persists expiresAt and source on the order and the CREATED event", async () => {
+    const tx = createTransactionMock();
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+
+    await orderService.createOrder({
+      userId: USER_ID,
+      portfolioId: PORTFOLIO_ID,
+      symbol: "AAPL",
+      assetType: "STOCK",
+      side: "BUY",
+      type: "LIMIT",
+      quantity: "1",
+      limitPrice: "50",
+      expiresAt,
+      source: "COPY_TRADE",
+    });
+
+    expect(tx.order.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        expiresAt,
+        source: "COPY_TRADE",
+      }),
+    });
+
+    expect(tx.orderEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        metadata: expect.objectContaining({
+          expiresAt: expiresAt.toISOString(),
+          source: "COPY_TRADE",
+        }),
+      }),
+    });
+  });
+
+  test("rejects a past expiresAt at the service boundary", async () => {
+    await expect(
+      orderService.createOrder({
+        userId: USER_ID,
+        portfolioId: PORTFOLIO_ID,
+        symbol: "AAPL",
+        assetType: "STOCK",
+        side: "BUY",
+        type: "LIMIT",
+        quantity: "1",
+        limitPrice: "50",
+        expiresAt: new Date(Date.now() - 1000),
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_EXPIRES_AT" });
+
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  test("rejects an unknown order source", async () => {
+    await expect(
+      orderService.createOrder({
+        userId: USER_ID,
+        portfolioId: PORTFOLIO_ID,
+        symbol: "AAPL",
+        assetType: "STOCK",
+        side: "BUY",
+        type: "LIMIT",
+        quantity: "1",
+        limitPrice: "50",
+        source: "NOT_A_SOURCE",
+      }),
+    ).rejects.toMatchObject({ code: "INVALID_ORDER_SOURCE" });
+  });
+
   test("creates the order and reserves cash within the same transaction", async () => {
     const tx = createTransactionMock();
 

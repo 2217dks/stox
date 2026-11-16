@@ -168,6 +168,80 @@ async function rejectPendingOrder(orderId, metadata = null) {
   );
 }
 
+/**
+ * Expire every overdue pending order up to the batch limit.
+ *
+ * This sweep deliberately ignores portfolio activity. The execution batch
+ * excludes inactive portfolios so their old rows cannot starve active orders,
+ * but that exclusion must not strand an expired order's cash reservation
+ * forever. `transitionPendingOrder` locks the portfolio and releases the
+ * reservation, so the sweep is safe against a concurrent cancel or execution.
+ */
+async function expireOverdueOrders({
+  now = new Date(),
+  limit = DEFAULT_BATCH_SIZE,
+} = {}) {
+  const overdue = await prisma.order.findMany({
+    where: {
+      status: "PENDING",
+      expiresAt: {
+        not: null,
+        lte: now,
+      },
+    },
+    select: {
+      id: true,
+      portfolioId: true,
+      symbol: true,
+      side: true,
+      type: true,
+      quantity: true,
+      expiresAt: true,
+    },
+    orderBy: [{ expiresAt: "asc" }, { id: "asc" }],
+    take: limit,
+  });
+
+  let expired = 0;
+
+  for (const order of overdue) {
+    const transitioned = await transitionPendingOrder(
+      order.id,
+      "EXPIRED",
+      {},
+      { reason: "ORDER_EXPIRED", expiresAt: order.expiresAt },
+    );
+
+    if (!transitioned) {
+      continue;
+    }
+
+    expired += 1;
+
+    // The sweep bypasses `processOrder`, so it must publish the same terminal
+    // event that the execution path publishes for an expiry.
+    if (hasEventBus()) {
+      try {
+        await publishOrderStatus({
+          ...order,
+          status: "EXPIRED",
+          executedPrice: null,
+        });
+      } catch (error) {
+        logger.warn("Failed to publish expired order status event", {
+          orderId: order.id,
+          message: error.message,
+        });
+      }
+    }
+  }
+
+  return {
+    scanned: overdue.length,
+    expired,
+  };
+}
+
 // Returns "retry" while the order still has budget, "rejected" when this
 // attempt exhausted it, and "skipped" when another worker already moved the
 // order out of PENDING.
@@ -348,6 +422,20 @@ async function runOrder(order, { quoteProvider, now, retryLimit }) {
     await executeOrder(order, quote.price);
     return "executed";
   } catch (error) {
+    // The quote was fetched before the deadline but the execution transaction
+    // observed it afterwards. Settle the row as EXPIRED instead of filling it
+    // or retrying it.
+    if (error.code === "ORDER_EXPIRED") {
+      const expired = await transitionPendingOrder(
+        order.id,
+        "EXPIRED",
+        {},
+        { reason: "ORDER_EXPIRED", expiresAt: order.expiresAt },
+      );
+
+      return expired ? "expired" : "skipped";
+    }
+
     if (REJECTION_CODES.has(error.code)) {
       return (await rejectPendingOrder(
         order.id,
@@ -462,6 +550,10 @@ async function processPendingOrders({
       ? maxAttempts
       : DEFAULT_MAX_ATTEMPTS;
 
+  // Settle overdue rows first, including rows in inactive portfolios. They are
+  // removed from the PENDING set before the execution batch is fetched.
+  const expiry = await expireOverdueOrders({ now, limit });
+
   const pendingOrders = await prisma.order.findMany({
     where: pendingOrderWhere({ portfolioId }),
     include: {
@@ -477,10 +569,10 @@ async function processPendingOrders({
   });
 
   const summary = {
-    scanned: pendingOrders.length,
+    scanned: expiry.scanned + pendingOrders.length,
     executed: 0,
     skipped: 0,
-    expired: 0,
+    expired: expiry.expired,
     rejected: 0,
     failed: 0,
   };
@@ -551,6 +643,7 @@ module.exports = {
   DEFAULT_INTERVAL_MS,
   DEFAULT_MAX_ATTEMPTS,
   discoverPendingOrders,
+  expireOverdueOrders,
   processOrder,
   processPendingOrders,
   runOrder,

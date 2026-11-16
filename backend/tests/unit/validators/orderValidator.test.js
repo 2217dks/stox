@@ -441,6 +441,77 @@ describe("orderValidator schemas (black-box)", () => {
     });
   });
 
+  describe("createOrderSchema: expiresAt", () => {
+    test("is optional", () => {
+      expectValid(createOrderSchema.safeParse(marketBase()));
+    });
+
+    test("accepts a future instant with a Z offset", () => {
+      const result = createOrderSchema.safeParse({
+        ...marketBase(),
+        expiresAt: "2030-01-01T00:00:00.000Z",
+      });
+
+      expectValid(result);
+      expect(result.data.expiresAt).toBeInstanceOf(Date);
+    });
+
+    test("accepts a future instant with a numeric offset", () => {
+      expectValid(
+        createOrderSchema.safeParse({
+          ...marketBase(),
+          expiresAt: "2030-01-01T05:30:00+05:30",
+        }),
+      );
+    });
+
+    test("treats null and an empty string as no expiry", () => {
+      const withNull = createOrderSchema.safeParse({
+        ...marketBase(),
+        expiresAt: null,
+      });
+      const withEmpty = createOrderSchema.safeParse({
+        ...marketBase(),
+        expiresAt: "",
+      });
+
+      expectValid(withNull);
+      expectValid(withEmpty);
+      expect(withNull.data.expiresAt).toBeUndefined();
+      expect(withEmpty.data.expiresAt).toBeUndefined();
+    });
+
+    test("rejects an instant without an explicit offset", () => {
+      expectIssueAt(
+        createOrderSchema.safeParse({
+          ...marketBase(),
+          expiresAt: "2030-01-01T00:00:00",
+        }),
+        "expiresAt",
+      );
+    });
+
+    test("rejects a past instant", () => {
+      expectIssueAt(
+        createOrderSchema.safeParse({
+          ...marketBase(),
+          expiresAt: "2000-01-01T00:00:00.000Z",
+        }),
+        "expiresAt",
+      );
+    });
+
+    test("rejects an unparseable value", () => {
+      expectIssueAt(
+        createOrderSchema.safeParse({
+          ...marketBase(),
+          expiresAt: "not-a-date",
+        }),
+        "expiresAt",
+      );
+    });
+  });
+
   // ==========================================================
   // Back-compat alias
   // ==========================================================

@@ -48,13 +48,21 @@ Shipped:
 - Precision-safe cost basis: sells remove `totalInvested × sold / quantity`
   (rounded once to the column scale), so a full close lands exactly on zero
   and partial sales add back to the original invested amount.
-- Inactive portfolios are filtered out of the worker's query before the batch
+- Cash reservations for pending BUY orders (`Order.reservedCash` plus the
+  portfolio aggregate `Portfolio.reservedCash`), released on execution,
+  cancellation, expiry, and terminal rejection.
+- An expiry sweep that also settles overdue rows in inactive portfolios, which
+  the execution batch deliberately excludes.
+- Inactive portfolios are filtered out of the execution query before the batch
   limit, so their old orders cannot starve active ones.
 - Unsupported asset classes (`FOREX`) are rejected before entering the queue.
 - Pending-order polling worker (`npm run workers`) with expiry, permanent-error
   rejection, and a bounded retry budget per order.
-- Post-commit in-app `ORDER_EXECUTED` notification.
-- 41 focused tests (10 unit, 31 integration) plus full-suite coverage.
+- Post-commit in-app `ORDER_EXECUTED` notification and copy-trade fan-out.
+- Durable copy-trade execution rows with per-follower isolation and bounded
+  retries.
+- Focused unit and integration suites for advanced orders, expiry, and copy
+  trading, plus full-suite coverage.
 
 Not shipped:
 
@@ -80,7 +88,13 @@ Not shipped:
 | Executable asset-class allowlist | `backend/src/utils/assetSupport.js` |
 | `ORDER_EXECUTED` notification writer | `backend/src/services/notificationEvents.js` |
 | Re-export for API/service consumers | `backend/src/services/notificationService.js` |
+| Copy-trade sizing/fan-out/recovery | `backend/src/services/copyTradeService.js` |
+| Copy-trade queue + scheduler | `backend/src/queues/copyTradeQueue.js` |
+| Copy-trade worker | `backend/src/workers/copyTradeWorker.js` |
 | Integration contract tests | `backend/tests/integration/tradeExecution.integration.test.js` |
+| Advanced-order tests | `backend/tests/integration/advancedOrders.integration.test.js` |
+| Expiry tests | `backend/tests/integration/orderExpiry.integration.test.js` |
+| Copy-trade tests | `backend/tests/integration/copyTradeExecution.integration.test.js` |
 | Worker contract tests | `backend/tests/integration/orderWorker.integration.test.js` |
 | Trigger-condition unit tests | `backend/tests/unit/services/tradeExecution.test.js` |
 | Trade serialization unit tests | `backend/tests/unit/services/tradeService.test.js` |
@@ -96,17 +110,22 @@ worker's next polling pass, so market orders fill within ~5 seconds while
 
 ```text
 POST /orders
+     │  BUY: reserve quote/limit/stop notional on the portfolio
+     ▼
+Order row (status = PENDING, reservedCash)
      │
      ▼
-Order row (status = PENDING)
+expiry sweep (every polling pass / scan)
+     │  status = PENDING AND expiresAt <= now
+     │  includes inactive portfolios; releases the reservation
      │
      ▼
 BullMQ execute-order job (production)   or   processPendingOrders() polling fallback
      │  the execute job loads one order by id; the polling pass queries PENDING rows
      │  query: status = PENDING AND portfolio.isActive = true
-     │  (inactive-portfolio orders never enter the batch or consume `limit`)
+     │  (inactive-portfolio orders never enter the execution batch or consume `limit`)
      │
-     ├── expiresAt <= now ──────────────► status = EXPIRED
+     ├── expiresAt <= now (race guard) ─► status = EXPIRED
      │                                     (provider is never called)
      │
      ├── portfolio deactivated after the query ──► skip (defensive; stays PENDING)
@@ -140,6 +159,7 @@ BullMQ execute-order job (production)   or   processPendingOrders() polling fall
           │
           ▼
      ORDER_EXECUTED notification (post-commit, best effort)
+     copy-trade fan-out job (post-commit, best effort)
 ```
 
 ---
@@ -177,7 +197,10 @@ caller copy cannot drive a second execution.
 Inside `prisma.$transaction`:
 
 1. **Re-read the order** with its portfolio owner (`portfolio.userId` is needed
-   later for the notification).
+   later for the notification and copy-trade fan-out). If `expiresAt <= now`,
+   the transaction aborts with `ORDER_EXPIRED`; the order stays `PENDING` and
+   the worker's next pass records `EXPIRED`. This closes the race between a
+   quote fetched just before the deadline and the execution transaction.
 2. **Conditional status transition**
    `updateMany({ where: { id, status: "PENDING" }, data: { status: "EXECUTED",
    executedPrice, executedAt } })`. Zero rows matched means
@@ -192,10 +215,13 @@ Inside `prisma.$transaction`:
      `totalInvested × sold / quantity`, rounded once to 8 decimal places; a
      full close uses `totalInvested` itself. Zero rows means
      `INSUFFICIENT_POSITION`.
-4. **Cash movement** with the balance condition inside the `UPDATE`:
-   `updateMany({ where: { id, cashBalance: { gte: totalValue } },
-   data: { cashBalance: { decrement: totalValue } } })` for `BUY`.
-   Zero rows matched means `INSUFFICIENT_BALANCE`.
+4. **Cash movement** for `BUY`. The portfolio row was locked in step 1, so the
+   service computes `available = cashBalance − reservedCash` and
+   `additionalRequired = max(totalValue − order.reservedCash, 0)`. If
+   `available < additionalRequired` it throws `INSUFFICIENT_BALANCE`; otherwise
+   the same `portfolio.update` decrements `cashBalance` by `totalValue` and
+   `reservedCash` by this order's reservation. The order's `reservedCash` is
+   then set to zero. A `SELL` credits cash and never touches reservations.
 5. **`trade.create`** with `totalValue = quantity × price`, `fees = 0`, and
    realized P&L for sells.
 6. **`orderEvent.create`** (audit trail) recording `PENDING → EXECUTED` with
@@ -302,7 +328,9 @@ Thrown as `AppError`, so `src/middleware/errorHandler.js` owns the envelope.
 | `INVALID_EXECUTION_PRICE` | 400 | Price is missing, unparseable, zero, or negative |
 | `ORDER_NOT_FOUND` | 404 | Order id does not exist |
 | `ORDER_NOT_EXECUTABLE` | 400 | Order is not `PENDING` (cancelled, expired, already executed, rejected, or lost a race) |
-| `INSUFFICIENT_BALANCE` | 400 | `cashBalance < quantity × price` on a buy |
+| `ORDER_EXPIRED` | 400 | Execution reached the transaction after `expiresAt`; the worker records `EXPIRED` |
+| `INVALID_EXPIRES_AT` | 400 | `expiresAt` is unparseable or not in the future at the service boundary |
+| `INSUFFICIENT_BALANCE` | 400 | Available (unreserved) cash is below the amount this fill needs beyond its own reservation |
 | `INSUFFICIENT_POSITION` | 400 | No holding, or `holding.quantity < quantity` on a sell |
 | `UNSUPPORTED_ASSET_TYPE` | 400 | `POST /orders` asked for an asset class the pipeline cannot price (`FOREX`) |
 | `PORTFOLIO_NOT_FOUND` | 404 | Portfolio row disappeared mid-transaction |
@@ -350,7 +378,8 @@ In BullMQ mode this function is used only by the polling fallback. The queue's
 | Situation | Order status | Counter |
 | --- | --- | --- |
 | `expiresAt <= now` | `EXPIRED` (conditional, so a concurrent cancel wins) | `expired` |
-| Inactive portfolio | excluded from the query, never fetched | not counted |
+| Overdue order in an inactive portfolio | `EXPIRED` by the sweep, reservation released | `expired` |
+| Inactive portfolio, not overdue | excluded from the execution query, never fetched | not counted |
 | Portfolio deactivated between query and loop | unchanged (defensive) | `skipped` |
 | Unsupported `assetType` (e.g. `FOREX`) | `REJECTED`, provider not called | `rejected` |
 | Provider returns a permanent error (400/404/422, unsupported class, not found) | `REJECTED`, no retry | `rejected` |
@@ -397,25 +426,35 @@ queues are registered but their workers are still pending.
 
 ### Behavioural caveats
 
-- Deactivating a portfolio does not cancel its `PENDING` orders or release
-  their reservations. Both the queue worker and the polling processor skip
-  orders whose portfolio is inactive, so those rows stay `PENDING` with
-  `reservedCash` held. This is tracked as a follow-up in
+- Deactivating a portfolio does not cancel its non-expiring `PENDING` orders.
+  The execution batch skips inactive portfolios, so those rows stay `PENDING`
+  with `reservedCash` held until the owner cancels them or gives them an
+  `expiresAt`. Overdue orders are settled by the expiry sweep regardless of
+  portfolio activity, so an expiry is not stranded by deactivation. The
+  remaining lifecycle gap is tracked in
   [`docs/BACKGROUND_JOBS.md`](./BACKGROUND_JOBS.md#known-gaps-and-follow-ups).
-- Orders do not reserve cash or shares at placement time. Two pending buys can
-  both exist against the same cash; the first to fill wins and the second is
-  rejected at execution time.
-- `expiresAt` is compared against the process clock. Expiring an order moves
-  it to `EXPIRED`; nothing is refunded because nothing was reserved.
+- BUY orders reserve cash at placement: the market quote for `MARKET`, the
+  limit price for `LIMIT`, and the stop price for `STOP_LOSS`/`TAKE_PROFIT`.
+  The reservation is held on `Order.reservedCash` and aggregated on
+  `Portfolio.reservedCash`. A fill consumes its own reservation; a fill above
+  the reservation needs additional unreserved cash. SELL orders reserve
+  nothing (positions are checked at execution). Two pending buys therefore
+  cannot spend the same reserved cash, though a buy can still be rejected if
+  the price gaps above its reservation and the remaining cash is insufficient.
+- `expiresAt` is compared against the process clock. The sweep moves overdue
+  orders to `EXPIRED` and releases the reservation; the execution transaction
+  repeats the check so a quote fetched before the deadline cannot fill after
+  it. Orders without `expiresAt` never expire.
 - Only `STOCK` (Finnhub) and `CRYPTO` (Binance) providers are wired. `FOREX`
   orders are rejected at `POST /orders` with `UNSUPPORTED_ASSET_TYPE`, before a
   `PENDING` row exists. The worker also rejects any legacy `FOREX` row without
   calling a provider. Adding FOREX end to end means adding a provider and
   extending `src/utils/assetSupport.js`.
-- Inactive portfolios are excluded from the worker query, so their orders are
-  not automatically expired by the worker. They stay `PENDING` until the
-  portfolio is reactivated or the owner cancels them; this is the deliberate
-  trade-off that prevents inactive rows from occupying the batch.
+- Inactive portfolios are excluded from the execution query, so their
+  non-expiring orders are not automatically executed or expired. Overdue rows
+  are still settled by the separate expiry sweep, which prevents their cash
+  reservations from being stranded. This split preserves the starvation guard
+  while making expiry correct.
 - The worker process is separate from the API process. If it is not running,
   orders never leave `PENDING`.
 
@@ -460,6 +499,50 @@ broadcast as a Socket.IO notification event.
 
 ---
 
+## 🔄 Copy-trade execution
+
+After a source trade commits, `executeOrder` enqueues a `fan-out-copy-trades`
+job on the `copy-trades` queue. The job is post-commit and best-effort: a Redis
+or follower failure never rolls back the source trade.
+
+The fan-out:
+
+1. Loads the source trade with its order and source-portfolio owner.
+2. Refuses to copy a trade whose own order source is `COPY_TRADE`, preventing
+   copy chains and feedback loops.
+3. Pages through active `CopyTrader` rows where `copiedId` is the source user.
+4. For each follower, creates or loads a durable `CopyTradeExecution` row
+   uniquely keyed by `(sourceTradeId, copierId)`.
+5. Sizes the order as
+   `sourceQuantity × allocationPct / 100`, capped by
+   `maxTradeSize / sourcePrice` when a notional cap is configured, rounded down
+   to 8 decimal places.
+6. Places a `MARKET` order through `orderService.createOrder` with
+   `source: "COPY_TRADE"`, the copier as owner, and `copyPortfolioId` (or the
+   copier's default active portfolio) as the destination. Balance, position,
+   reservation, and ownership checks are therefore the normal order checks.
+7. Records `PLACED`, `FAILED`, or `SKIPPED` on the execution row. Permanent
+   failures (insufficient balance/position, inactive portfolio, unsupported
+   asset class) are terminal for that follower; transient failures stay
+   `PENDING` and are retried up to the attempt budget.
+
+The copied order carries a unique `Order.copyTradeExecutionId`. If the order
+commits but the execution update does not, a replay finds the existing order
+instead of placing a second one. `orderService.createOrder` also fast-paths an
+existing `copyTradeExecutionId`, so a retry does not call the quote provider or
+re-reserve cash.
+
+Follower failures are isolated: the loop continues after a failure, and the
+job only fails (for BullMQ retry) when at least one follower has a retryable
+failure. A completed pass sets `Trade.copyFanOutAt`; the periodic
+`copy-trades:scan-pending` job re-enqueues trades whose marker is still null,
+recovering an enqueue lost during a Redis outage. A trade with no followers is
+still marked, so the scan is finite.
+
+Integration coverage lives in
+`tests/integration/copyTradeExecution.integration.test.js`; the configuration
+API is covered by `tests/integration/copyTradingConfig.integration.test.js`.
+
 ## 🧾 Order endpoints and lifecycle
 
 `PENDING` is the only non-terminal order status. `EXECUTED`, `CANCELLED`,
@@ -468,7 +551,7 @@ never execute afterwards.
 
 | Method | Path | Controller | Status |
 | --- | --- | --- | --- |
-| `POST` | `/api/v1/orders` | `createOrder` | Implemented — validates and stores `PENDING`; the worker executes |
+| `POST` | `/api/v1/orders` | `createOrder` | Implemented — validates, reserves cash, and stores `PENDING` with optional `expiresAt`; the worker executes |
 | `GET` | `/api/v1/orders` | `listOrders` | Implemented — order history and open orders |
 | `GET` | `/api/v1/orders/:id` | `getOrder` | Implemented |
 | `GET` | `/api/v1/orders/:id/events` | `getOrderEvents` | Implemented — chronological order-event audit trail |
@@ -568,37 +651,41 @@ npx jest --runInBand tests/integration/orderWorker.integration.test.js
 npm test -- --runInBand          # full suite
 ```
 
-Coverage (41 new tests):
+Coverage:
 
-- **Unit (10)** — trigger truth table for every order type and side, inclusive
+- **Trigger/unit** — truth table for every order type and side, inclusive
   boundaries, missing trigger prices, `MARKET` at any positive price, Decimal
   precision; trade serialization keeps zero realized P&L as `"0"` and buys as
   `null`.
-- **Execution integration (19)** — buy debit + trade + holding; weighted
-  average add-on; overdraw rollback (order stays `PENDING`, cash untouched);
-  partial sell with realized P&L; oversell rollback; full close leaves
-  quantity 0; non-pending rejection; missing order; invalid price;
-  notification payload; two concurrent executions of one order; concurrent
-  buys (existing holding and first-time create); concurrent sells; concurrent
-  buy + sell; a buy that loses the cash race; FOREX rejected at placement;
-  full close with a repeating weighted average; partial sale followed by a
-  full close; seven successive partial sells whose removed bases telescope
-  back to the original invested amount.
-- **Worker integration (12)** — market fill at the provider quote; unmet limit
-  stays pending then fills at the limit; expiry without a provider call;
-  unfundable order becomes `REJECTED`; provider failure leaves `PENDING`;
-  inactive portfolio is excluded from the batch; an older inactive order
-  cannot block a newer active order with `limit: 1`; pending FOREX rejected
-  without a provider call; permanent provider error rejected without retry;
-  transient failure increments attempts; retry cap rejects; a poisoned oldest
-  order cannot starve a newer valid order.
+- **Execution integration** — buy debit + trade + holding; weighted average
+  add-on; overdraw rollback; partial sell with realized P&L; oversell
+  rollback; full close; non-pending rejection; missing order; invalid price;
+  notification payload; concurrent executions; concurrent buys/sells; a buy
+  that loses the cash race; FOREX rejected at placement; telescoping cost
+  basis.
+- **Worker integration** — market fill; unmet limit; expiry; unfundable
+  rejection; provider failure; inactive-portfolio exclusion and expiry sweep;
+  FOREX rejection; permanent vs transient provider errors; retry cap;
+  starvation guard.
+- **Advanced orders** (`advancedOrders.integration.test.js`) — take-profit,
+  stop-loss, and limit boundaries; price gaps through the trigger; duplicate
+  processing; unfundable trigger rejection; cancellation for every advanced
+  type; reservation release; lifecycle events.
+- **Expiry** (`orderExpiry.integration.test.js`) — `expiresAt` API validation
+  and persistence; exact-boundary expiry; inactive-portfolio sweep;
+  idempotent sweep; concurrent cancel/expiry and execute/expiry races.
+- **Copy trading** (`copyTradingConfig.integration.test.js`,
+  `copyTradeExecution.integration.test.js`) — configuration CRUD, ownership,
+  duplicate/self/unknown-user/bounds validation; sizing, notional cap,
+  rounding, destination fallback; per-follower isolation; retry budget;
+  duplicate replay; chain prevention; recovery-scan marker.
 
 The worker suites inject a fake quote provider, so no test calls Finnhub or
 Binance. Integration tests use the local PostgreSQL database from
 `backend/.env`, create their own user/portfolio rows, and clean up through the
 user cascade in `afterAll`.
 
-Last verified: `42 suites, 799 tests passed` on the full backend suite.
+Last verified: `131 suites, 1612 tests passed` on the full backend suite.
 
 ---
 
@@ -606,19 +693,19 @@ Last verified: `42 suites, 799 tests passed` on the full backend suite.
 
 | Area | Gap | Impact |
 | --- | --- | --- |
-| Queues | Notification and alert queues are registered but their workers are not implemented yet | Orders use BullMQ; other async work still runs inline |
+| Queues | Order, notification, alert, and copy-trade queues are implemented | Async work is retried through BullMQ; polling remains the local fallback for orders |
 | Asset classes | `FOREX` exists in the enum but has no market-data provider | FOREX orders are rejected at placement; only `STOCK` and `CRYPTO` execute |
 | Transport | BullMQ is the default; the in-process `setInterval` loop is a `QUEUES_ENABLED=false` fallback | Execution continues in the worker process; a stopped worker means no fills |
 | Analytics | No analytics event publication on execution | Analytics consumers see trades through database reads |
 | Realtime delivery | Redis Pub/Sub is best-effort and has no durable replay | Events can be missed during disconnection; clients must resynchronise from the API/database |
-| Analytics | No analytics event on execution | Analytics consumers see trades only via database reads |
-| Notifications | In-app row only; no email/push, no preference checks | Users get no external alert on a fill |
+| Notifications | In-app row plus Resend email and FCM push, gated by preferences | Providers are no-ops until their credentials are configured |
 | Modify order | `PATCH /orders/:id` is documented but not routed (see [Order endpoints and lifecycle](#-order-endpoints-and-lifecycle)) | Pending orders can only be created or cancelled |
 | Short selling | `isShort` is always written `false`; sells require a long position | No short positions despite `docs/FEATURES.md` |
 | Fees | `Trade.fees` is always `0` | No fee/commission modelling |
 | Open orders | No `GET /orders/open` route | Intentional: `GET /orders?status=PENDING` is the documented equivalent (see [Order endpoints and lifecycle](#-order-endpoints-and-lifecycle)) |
 | Manual execution | No API/admin endpoint calls `executeOrder` | Execution only happens through the worker poll |
-| Reservation | Placing orders does not hold cash or shares | Later fills can be rejected despite an earlier accepted order |
+| Reservation | Pending BUY orders reserve cash; SELL orders reserve no shares | A fill above its reservation can still be rejected if unreserved cash is insufficient |
+| Copy trading | Copied orders are always `MARKET`; partial fills are not modelled | Limit/stop mirroring and partial fills would need a larger execution model |
 
 ---
 

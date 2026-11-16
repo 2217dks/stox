@@ -5,6 +5,7 @@ jest.mock("../../../src/config/database", () => ({
 jest.mock("../../../src/workers/orderWorker", () => ({
   processOrder: jest.fn(),
   discoverPendingOrders: jest.fn(),
+  expireOverdueOrders: jest.fn(),
   DEFAULT_MAX_ATTEMPTS: 5,
   DEFAULT_BATCH_SIZE: 100,
 }));
@@ -17,6 +18,7 @@ const prisma = require("../../../src/config/database");
 const {
   processOrder,
   discoverPendingOrders,
+  expireOverdueOrders,
 } = require("../../../src/workers/orderWorker");
 const {
   enqueueOrderExecution,
@@ -52,6 +54,7 @@ function makeOptions(overrides = {}) {
 describe("order queue job handler", () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    expireOverdueOrders.mockResolvedValue({ scanned: 0, expired: 0 });
   });
 
   test("rejects an unknown job name as unrecoverable", async () => {
@@ -130,17 +133,24 @@ describe("order queue job handler", () => {
       expect(result).toEqual({ outcome: "rejected" });
     });
 
-    test("skips an order whose portfolio was deactivated", async () => {
-      prisma.order.findUnique.mockResolvedValue({
+    test("still routes an inactive-portfolio order through the processor so expiry can settle it", async () => {
+      const order = {
         id: ORDER_ID,
         status: "PENDING",
+        expiresAt: new Date("2025-01-01T00:00:00.000Z"),
         portfolio: { id: "p1", isActive: false },
-      });
+      };
+      prisma.order.findUnique.mockResolvedValue(order);
+      processOrder.mockResolvedValue("expired");
 
       const result = await handleOrderJob(makeJob(), makeOptions());
 
-      expect(result).toEqual({ outcome: "skipped", status: "PENDING" });
-      expect(processOrder).not.toHaveBeenCalled();
+      expect(result).toEqual({ outcome: "expired" });
+      expect(processOrder).toHaveBeenCalledWith(order, {
+        quoteProvider: expect.any(Object),
+        now: expect.any(Date),
+        retryLimit: 5,
+      });
     });
   });
 
@@ -175,7 +185,37 @@ describe("order queue job handler", () => {
         portfolioId: PORTFOLIO_ID,
       });
 
-      expect(result).toEqual({ scanned: 2, enqueued: 2, failed: 0 });
+      expect(result).toEqual({
+        scanned: 2,
+        enqueued: 2,
+        expired: 0,
+        failed: 0,
+      });
+    });
+
+    test("expires overdue rows before discovering the execution batch", async () => {
+      expireOverdueOrders.mockResolvedValue({ scanned: 2, expired: 2 });
+      discoverPendingOrders.mockResolvedValue([
+        { id: ORDER_ID, portfolioId: PORTFOLIO_ID },
+      ]);
+      enqueueOrderExecution.mockResolvedValue({ enqueued: true });
+
+      const options = makeOptions();
+      const result = await handleOrderJob(
+        makeJob({ name: ORDER_JOB_NAMES.SCAN_PENDING, data: {} }),
+        options,
+      );
+
+      expect(expireOverdueOrders).toHaveBeenCalledWith({
+        now: options.now(),
+        limit: 100,
+      });
+      expect(result).toEqual({
+        scanned: 3,
+        enqueued: 1,
+        expired: 2,
+        failed: 0,
+      });
     });
 
     test("does not execute orders directly", async () => {
@@ -206,7 +246,12 @@ describe("order queue job handler", () => {
         makeOptions(),
       );
 
-      expect(result).toEqual({ scanned: 1, enqueued: 0, failed: 1 });
+      expect(result).toEqual({
+        scanned: 1,
+        enqueued: 0,
+        expired: 0,
+        failed: 1,
+      });
     });
 
     test("falls back to the default batch size", async () => {

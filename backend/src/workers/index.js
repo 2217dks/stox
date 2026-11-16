@@ -8,18 +8,21 @@ const { DEFAULT_INTERVAL_MS, startOrderWorker } = require("./orderWorker");
 const { createOrderQueueWorker } = require("./orderQueueWorker");
 const { createNotificationQueueWorker } = require("./notificationQueueWorker");
 const { createAlertQueueWorker } = require("./alertQueueWorker");
+const { createCopyTradeWorker } = require("./copyTradeWorker");
 const { startScanScheduler } = require("./scanScheduler");
 const { ensureOrderScanScheduler } = require("../queues/orderQueue");
 const {
   ensureNotificationScanScheduler,
 } = require("../queues/notificationQueue");
 const { ensureAlertScanScheduler } = require("../queues/alertQueue");
+const { ensureCopyTradeScanScheduler } = require("../queues/copyTradeQueue");
 const { closeQueues, isQueuesEnabled } = require("../queues");
 const { startPortfolioSnapshotWorker } = require("./portfolioSnapshotWorker");
 
 const SHUTDOWN_TIMEOUT_MS = 5000;
 const DEFAULT_NOTIFICATION_SCAN_INTERVAL_MS = 30000;
 const DEFAULT_ALERT_SCAN_INTERVAL_MS = 15000;
+const DEFAULT_COPY_TRADE_SCAN_INTERVAL_MS = 60000;
 
 const eventBus = createRedisEventBus({ withSubscriber: false });
 configureEventBus(eventBus);
@@ -37,9 +40,9 @@ configureEventBus(eventBus);
  * semantics do not change. The two transports are mutually exclusive: running
  * both would create two execution paths for the same pending order.
  *
- * Notification and alert delivery only run on BullMQ. Their rows are written
- * synchronously, so a Redis outage leaves them in the inbox and the periodic
- * scans pick them up when Redis returns.
+ * Notification, alert, and copy-trade delivery only run on BullMQ. Their
+ * durable rows are written synchronously, so a Redis outage leaves them
+ * recoverable and the periodic scans pick them up when Redis returns.
  */
 const queuesEnabled = isQueuesEnabled();
 
@@ -49,6 +52,7 @@ const notificationQueueWorker = queuesEnabled
   ? createNotificationQueueWorker()
   : null;
 const alertQueueWorker = queuesEnabled ? createAlertQueueWorker() : null;
+const copyTradeQueueWorker = queuesEnabled ? createCopyTradeWorker() : null;
 
 const SCAN_INTERVAL_MS =
   Number.parseInt(process.env.ORDER_SCAN_INTERVAL_MS, 10) ||
@@ -61,6 +65,10 @@ const NOTIFICATION_SCAN_INTERVAL_MS =
 const ALERT_SCAN_INTERVAL_MS =
   Number.parseInt(process.env.ALERT_SCAN_INTERVAL_MS, 10) ||
   DEFAULT_ALERT_SCAN_INTERVAL_MS;
+
+const COPY_TRADE_SCAN_INTERVAL_MS =
+  Number.parseInt(process.env.COPY_TRADE_SCAN_INTERVAL_MS, 10) ||
+  DEFAULT_COPY_TRADE_SCAN_INTERVAL_MS;
 
 const scanScheduler = queuesEnabled
   ? startScanScheduler({
@@ -89,6 +97,15 @@ const alertScanScheduler = queuesEnabled
     })
   : null;
 
+const copyTradeScanScheduler = queuesEnabled
+  ? startScanScheduler({
+      ensureScheduler: ensureCopyTradeScanScheduler,
+      intervalMs: COPY_TRADE_SCAN_INTERVAL_MS,
+      log: logger,
+      label: "Copy trade",
+    })
+  : null;
+
 const snapshotWorker = startPortfolioSnapshotWorker();
 
 logger.info(
@@ -99,7 +116,7 @@ logger.info(
 
 if (queuesEnabled) {
   logger.info(
-    "Notification and alert workers started on their BullMQ queues",
+    "Notification, alert, and copy-trade workers started on their BullMQ queues",
   );
 }
 
@@ -144,12 +161,14 @@ async function shutdown(signal) {
   scanScheduler?.stop();
   notificationScanScheduler?.stop();
   alertScanScheduler?.stop();
+  copyTradeScanScheduler?.stop();
   orderWorker?.stop();
   snapshotWorker.stop();
 
   await closeQueueWorker(queueWorker, "Order queue worker");
   await closeQueueWorker(notificationQueueWorker, "Notification queue worker");
   await closeQueueWorker(alertQueueWorker, "Alert queue worker");
+  await closeQueueWorker(copyTradeQueueWorker, "Copy-trade queue worker");
 
   try {
     await withTimeout(closeQueues(), SHUTDOWN_TIMEOUT_MS, {
@@ -182,8 +201,10 @@ module.exports = {
   queueWorker,
   notificationQueueWorker,
   alertQueueWorker,
+  copyTradeQueueWorker,
   scanScheduler,
   notificationScanScheduler,
   alertScanScheduler,
+  copyTradeScanScheduler,
   snapshotWorker,
 };
