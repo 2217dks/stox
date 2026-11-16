@@ -96,6 +96,13 @@ enum LeaderboardPeriod {
   ALL_TIME
 }
 
+enum LeagueStatus {
+  UPCOMING
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
 // ============================================================
 // USER
 // ============================================================
@@ -135,6 +142,7 @@ model User {
   leaderboardEntries LeaderboardEntry[]
   sentimentVotes     SentimentVote[]
   userAchievements   UserAchievement[]
+  leagueMembers      LeagueMember[]
 
   // Preferences
   preference UserPreference?
@@ -196,6 +204,7 @@ model Portfolio {
   orders               Order[]
   trades               Trade[]
   performanceSnapshots PerformanceSnapshot[]
+  leagueMember         LeagueMember?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -652,3 +661,47 @@ model UserAchievement {
   @@index([userId])
   @@index([achievementId])
 }
+
+// ============================================================
+// LEAGUES & COMPETITIONS
+// ============================================================
+
+model League {
+  id              String       @id @default(uuid())
+  name            String
+  description     String?
+  startingBalance Decimal      @default(10000) @db.Decimal(18, 8)
+  maxParticipants Int?
+  startDate       DateTime
+  endDate         DateTime
+  status          LeagueStatus @default(UPCOMING)
+
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  members         LeagueMember[]
+
+  @@index([status])
+  @@index([startDate, endDate])
+}
+
+model LeagueMember {
+  id          String    @id @default(uuid())
+  leagueId    String
+  userId      String
+  portfolioId String    @unique
+
+  league      League    @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  portfolio   Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  rank        Int?
+  finalReturn Decimal?  @db.Decimal(18, 8)
+
+  joinedAt    DateTime  @default(now())
+
+  @@unique([leagueId, userId])
+  @@index([leagueId])
+  @@index([userId])
+}
+

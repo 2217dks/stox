@@ -14,6 +14,7 @@ const adminRoutes = require("./adminRoutes");
 const marketRoutes = require("./marketRoutes");
 const sentimentRoutes = require("./sentimentRoutes");
 const achievementRoutes = require("./achievementRoutes");
+const leagueRoutes = require("./leagueRoutes");
 
 const { check: healthCheck } = require("../controllers/healthController");
 
@@ -34,5 +35,6 @@ router.use("/admin", adminRoutes);
 router.use("/market", marketRoutes);
 router.use("/sentiment", sentimentRoutes);
 router.use("/achievements", achievementRoutes);
+router.use("/leagues", leagueRoutes);
 
 module.exports = router;
