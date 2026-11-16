@@ -163,13 +163,125 @@ async function listFollowing(userId) {
   }));
 }
 
-async function getFeed({ page = 1, limit = 20 } = {}) {
-  const where = { isHidden: false };
+async function getFeed(query = {}, viewerIdArg = null) {
+  const {
+    page = 1,
+    limit = 20,
+    sort = "latest",
+    asOf,
+    viewerId: viewerIdInQuery,
+  } = query;
+
+  const viewerId = viewerIdArg || viewerIdInQuery || null;
+
+  const baseWhere = {
+    isHidden: false,
+    author: {
+      isSuspended: false,
+    },
+  };
+
+  if (sort === "trending") {
+    const referenceTime = asOf ? new Date(asOf) : new Date();
+    const sevenDaysAgo = new Date(
+      referenceTime.getTime() - 7 * 24 * 60 * 60 * 1000,
+    );
+
+    const candidates = await prisma.post.findMany({
+      where: {
+        ...baseWhere,
+        createdAt: {
+          gte: sevenDaysAgo,
+          lte: referenceTime,
+        },
+      },
+      select: {
+        ...POST_SELECT,
+        _count: {
+          select: {
+            likes: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+      take: 200,
+    });
+
+    let followingSet = new Set();
+
+    if (viewerId && candidates.length > 0) {
+      const authorIds = [...new Set(candidates.map((post) => post.authorId))];
+
+      const follows = await prisma.follow.findMany({
+        where: {
+          followerId: viewerId,
+          followingId: {
+            in: authorIds,
+          },
+        },
+        select: {
+          followingId: true,
+        },
+      });
+
+      followingSet = new Set(follows.map((follow) => follow.followingId));
+    }
+
+    const scored = candidates.map((post) => {
+      const likes = post._count?.likes ?? 0;
+      const isFollowing = viewerId ? followingSet.has(post.authorId) : false;
+      const postTime = new Date(post.createdAt).getTime();
+      const ageMs = Math.max(0, referenceTime.getTime() - postTime);
+      const ageHours = ageMs / (1000 * 60 * 60);
+
+      const numerator = likes + 1 + (isFollowing ? 2 : 0);
+      const denominator = Math.pow(ageHours + 2, 1.2);
+      const score = numerator / denominator;
+
+      return {
+        post,
+        score,
+      };
+    });
+
+    scored.sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+
+      const timeDiff =
+        new Date(right.post.createdAt).getTime() -
+        new Date(left.post.createdAt).getTime();
+
+      if (timeDiff !== 0) {
+        return timeDiff;
+      }
+
+      return left.post.id.localeCompare(right.post.id);
+    });
+
+    const total = scored.length;
+    const start = (page - 1) * limit;
+    const paged = scored.slice(start, start + limit);
+
+    return {
+      posts: paged.map((item) => serializePost(item.post)),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
+  }
+
   const skip = (page - 1) * limit;
 
   const [posts, total] = await Promise.all([
     prisma.post.findMany({
-      where,
+      where: baseWhere,
       select: POST_SELECT,
       orderBy: {
         createdAt: "desc",
@@ -179,7 +291,7 @@ async function getFeed({ page = 1, limit = 20 } = {}) {
     }),
 
     prisma.post.count({
-      where,
+      where: baseWhere,
     }),
   ]);
 

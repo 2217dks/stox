@@ -76,7 +76,7 @@ async function getFollowing(req, res, next) {
 
 async function listFeed(req, res, next) {
   try {
-    const result = await getFeed(req.validatedQuery);
+    const result = await getFeed(req.validatedQuery, req.user?.userId);
 
     return res.status(200).json({
       success: true,
