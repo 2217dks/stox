@@ -10,6 +10,7 @@ const { startScanScheduler } = require("./scanScheduler");
 const { ensureOrderScanScheduler } = require("../queues/orderQueue");
 const { closeQueues, isQueuesEnabled } = require("../queues");
 const { startPortfolioSnapshotWorker } = require("./portfolioSnapshotWorker");
+const { startLeaderboardSnapshotWorker } = require("./leaderboardSnapshotWorker");
 
 const SHUTDOWN_TIMEOUT_MS = 5000;
 
@@ -47,6 +48,7 @@ const scanScheduler = queuesEnabled
   : null;
 
 const snapshotWorker = startPortfolioSnapshotWorker();
+const leaderboardWorker = startLeaderboardSnapshotWorker();
 
 logger.info(
   queuesEnabled
@@ -54,6 +56,7 @@ logger.info(
     : `Order worker started; polling pending orders every ${DEFAULT_INTERVAL_MS}ms`,
 );
 logger.info("Portfolio snapshot worker started for daily scheduled captures");
+logger.info("Leaderboard snapshot worker started for daily scheduled refreshes");
 
 let shuttingDown = false;
 
@@ -68,6 +71,7 @@ async function shutdown(signal) {
   scanScheduler?.stop();
   orderWorker?.stop();
   snapshotWorker.stop();
+  leaderboardWorker.stop();
 
   if (queueWorker) {
     try {
@@ -122,4 +126,5 @@ module.exports = {
   queueWorker,
   scanScheduler,
   snapshotWorker,
+  leaderboardWorker,
 };
