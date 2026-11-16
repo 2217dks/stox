@@ -120,9 +120,13 @@ alert does not trigger on the capture scan itself.
 A single scan covers at most `limit` alerts and `ALERT_SCAN_MAX_SYMBOLS`
 (default 50) distinct symbols. Alerts are ordered by `lastEvaluatedAt` (nulls
 first) and the scan advances that cursor after each pass, so a large alert book
-rotates instead of starving the newest alerts. A permanent provider error
-(`MARKET_DATA_NOT_FOUND`, an unsupported asset class, or a 400/404/422
-response) moves the alert to `EXPIRED` instead of retrying it forever.
+rotates instead of starving the newest alerts. The cursor records the last
+**attempt**, not the last success: a symbol group whose quote request fails
+transiently still advances, so the failed alerts remain `ACTIVE` and eligible
+for a later retry without repeatedly occupying the scan and blocking the
+deferred symbols. A permanent provider error (`MARKET_DATA_NOT_FOUND`, an
+unsupported asset class, or a 400/404/422 response) moves the alert to
+`EXPIRED` instead of retrying it forever.
 
 ### Idempotency keys
 

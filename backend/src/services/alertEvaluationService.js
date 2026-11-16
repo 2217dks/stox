@@ -363,8 +363,8 @@ async function scanActiveAlerts(
   }
 
   const groups = [...bySymbol.entries()].slice(0, maxSymbols);
-  const evaluatedAt = now();
-  const evaluatedIds = [];
+  const attemptedAt = now();
+  const attemptedIds = [];
   const results = [];
 
   for (const [symbolKey, group] of groups) {
@@ -405,6 +405,12 @@ async function scanActiveAlerts(
         continue;
       }
 
+      // A transient provider failure must still count as an attempt. If the
+      // cursor were left untouched, the next scan would select the same
+      // symbols again (they are the oldest) and the deferred symbols would
+      // never get a turn. The alert stays ACTIVE so a later scan retries it.
+      attemptedIds.push(...group.map((alert) => alert.id));
+
       for (const alert of group) {
         results.push({
           outcome: "error",
@@ -434,16 +440,18 @@ async function scanActiveAlerts(
       }
     }
 
-    evaluatedIds.push(...group.map((alert) => alert.id));
+    attemptedIds.push(...group.map((alert) => alert.id));
   }
 
-  // Advance the rotation cursor for the alerts this scan actually covered.
-  // Alerts in deferred symbol groups keep their older timestamp, so they are
-  // picked first on the next scan.
-  if (evaluatedIds.length > 0) {
+  // Advance the rotation cursor for every symbol group this scan attempted,
+  // including groups whose quote fetch failed transiently. The cursor records
+  // the last attempt, not the last success, so a failing symbol cannot starve
+  // the deferred symbols. Alerts in groups beyond `maxSymbols` keep their
+  // older timestamp and are picked first on the next scan.
+  if (attemptedIds.length > 0) {
     await prisma.alert.updateMany({
-      where: { id: { in: evaluatedIds } },
-      data: { lastEvaluatedAt: evaluatedAt },
+      where: { id: { in: attemptedIds } },
+      data: { lastEvaluatedAt: attemptedAt },
     });
   }
 

@@ -397,7 +397,9 @@ model Alert {
   baselinePrice   Decimal? @db.Decimal(18, 8)
   baselineAt      DateTime?
 
-  // Rotation cursor for the alert scan (oldest evaluated first).
+  // Rotation cursor for the alert scan (oldest attempt first). Advanced even
+  // when a quote fetch fails transiently, so failing symbols cannot starve
+  // deferred ones.
   lastEvaluatedAt DateTime?
 
   createdAt       DateTime @default(now())

@@ -278,6 +278,17 @@ describe("alert evaluation service", () => {
         }),
       ]),
     );
+
+    // The successful groups and the transiently failing group all advance the
+    // rotation cursor, so a partial provider outage cannot starve either side.
+    expect(prisma.alert.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: {
+          in: ["alert-apple", "alert-tesla", "alert-broken"],
+        },
+      },
+      data: { lastEvaluatedAt: expect.any(Date) },
+    });
   });
 
   test("builds alert notification data with the request-time baseline", () => {
@@ -297,6 +308,37 @@ describe("alert evaluation service", () => {
       currentPrice: "200",
       baselinePrice: "190.25",
       channels: { email: true, push: false },
+    });
+  });
+
+  test("advances the rotation cursor for a transiently failing symbol group", async () => {
+    const alert = makeAlert({
+      id: "alert-transient",
+      symbol: { symbol: "FLAKY", assetType: "STOCK" },
+    });
+    prisma.alert.findMany.mockResolvedValue([alert]);
+
+    const attemptedAt = new Date("2026-01-01T00:00:00.000Z");
+    const quoteProvider = {
+      getQuote: jest.fn(async () => {
+        throw Object.assign(new Error("provider unavailable"), {
+          code: "MARKET_DATA_PROVIDER_UNAVAILABLE",
+        });
+      }),
+    };
+
+    const result = await scanActiveAlerts(
+      {},
+      { quoteProvider, now: () => attemptedAt },
+    );
+
+    expect(result).toMatchObject({
+      scanned: 1,
+      errors: 1,
+    });
+    expect(prisma.alert.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ["alert-transient"] } },
+      data: { lastEvaluatedAt: attemptedAt },
     });
   });
 
