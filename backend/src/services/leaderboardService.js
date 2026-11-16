@@ -337,6 +337,14 @@ function rankLeaderboard(totalsByUser, periodPnlByUser = new Map()) {
   }));
 }
 
+function assertNotAborted(signal) {
+  if (signal && signal.aborted) {
+    const err = new Error("Leaderboard snapshot generation aborted: lock lease lost.");
+    err.code = "LOCK_RENEWAL_FAILED";
+    throw err;
+  }
+}
+
 /**
  * Calculate and persist one GLOBAL leaderboard snapshot per supported period.
  * Portfolio value is cash plus the recorded invested basis of open holdings.
@@ -348,18 +356,10 @@ async function generateLeaderboardSnapshots({ date = new Date(), signal = null }
   const nextDay = new Date(snapshotDate);
   nextDay.setUTCDate(nextDay.getUTCDate() + 1);
 
-  if (signal && signal.aborted) {
-    const err = new Error("Leaderboard snapshot generation aborted: lock lease lost.");
-    err.code = "LOCK_RENEWAL_FAILED";
-    throw err;
-  }
+  assertNotAborted(signal);
 
   return prisma.$transaction(async (transaction) => {
-    if (signal && signal.aborted) {
-      const err = new Error("Leaderboard snapshot generation aborted: lock lease lost.");
-      err.code = "LOCK_RENEWAL_FAILED";
-      throw err;
-    }
+    assertNotAborted(signal);
 
     const portfolios = await transaction.portfolio.findMany({
       where: {
@@ -380,6 +380,8 @@ async function generateLeaderboardSnapshots({ date = new Date(), signal = null }
       },
     });
 
+    assertNotAborted(signal);
+
     const totalsByUser = new Map();
     const userIdByPortfolioId = new Map();
 
@@ -391,11 +393,7 @@ async function generateLeaderboardSnapshots({ date = new Date(), signal = null }
     const results = [];
 
     for (const period of SNAPSHOT_PERIODS) {
-      if (signal && signal.aborted) {
-        const err = new Error("Leaderboard snapshot generation aborted: lock lease lost.");
-        err.code = "LOCK_RENEWAL_FAILED";
-        throw err;
-      }
+      assertNotAborted(signal);
 
       const periodStart = getPeriodStart(period, snapshotDate);
       const periodPnlByUser = new Map();
@@ -416,6 +414,8 @@ async function generateLeaderboardSnapshots({ date = new Date(), signal = null }
             realizedPnl: true,
           },
         });
+
+        assertNotAborted(signal);
 
         for (const row of portfolioPnl) {
           const userId = userIdByPortfolioId.get(row.portfolioId);
@@ -465,6 +465,8 @@ async function generateLeaderboardSnapshots({ date = new Date(), signal = null }
         update: {},
       });
 
+      assertNotAborted(signal);
+
       await transaction.leaderboardEntry.deleteMany({
         where: {
           scope: "GLOBAL",
@@ -473,6 +475,8 @@ async function generateLeaderboardSnapshots({ date = new Date(), signal = null }
         },
       });
 
+      assertNotAborted(signal);
+
       if (data.length > 0) {
         await transaction.leaderboardEntry.createMany({
           data: data.map((entry) => ({
@@ -480,10 +484,15 @@ async function generateLeaderboardSnapshots({ date = new Date(), signal = null }
             snapshotId: snapshot.id,
           })),
         });
+
+        assertNotAborted(signal);
       }
 
       results.push({ period, entries: data.length });
+      assertNotAborted(signal);
     }
+
+    assertNotAborted(signal);
 
     return {
       snapshotDate,

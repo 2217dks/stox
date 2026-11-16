@@ -474,6 +474,77 @@ describe("Leaderboard integration API", () => {
     }
   });
 
+  test("rolls back transaction and persists no snapshots or entries when lock lease is lost during final period DB work", async () => {
+    const rollbackDate = new Date("2099-06-25T00:00:00.000Z");
+
+    await prisma.leaderboardEntry.deleteMany({
+      where: { snapshotDate: rollbackDate },
+    });
+    await prisma.leaderboardSnapshot.deleteMany({
+      where: { snapshotDate: rollbackDate },
+    });
+
+    const abortController = new AbortController();
+
+    // Intercept Prisma's interactive transaction client to simulate lease loss during final period (ALL_TIME) DB work
+    const origTransaction = prisma.$transaction.bind(prisma);
+    const transactionSpy = jest.spyOn(prisma, "$transaction").mockImplementation(async (cb, ...args) => {
+      if (typeof cb === "function") {
+        return origTransaction(async (tx) => {
+          const origUpsert = tx.leaderboardSnapshot.upsert.bind(tx.leaderboardSnapshot);
+          tx.leaderboardSnapshot.upsert = async (params) => {
+            const res = await origUpsert(params);
+            // In the final period (ALL_TIME), trigger the lost lease abort signal
+            if (params?.where?.scope_period_snapshotDate?.period === "ALL_TIME") {
+              abortController.abort();
+            }
+            return res;
+          };
+          return cb(tx);
+        }, ...args);
+      }
+      return origTransaction(cb, ...args);
+    });
+
+    try {
+      await expect(
+        generateLeaderboardSnapshots({
+          date: rollbackDate,
+          signal: abortController.signal,
+        }),
+      ).rejects.toMatchObject({
+        code: "LOCK_RENEWAL_FAILED",
+      });
+
+      // Verify database effects: the transaction must have rolled back completely.
+      // Even though DAILY, WEEKLY, and MONTHLY snapshots were already written during the loop,
+      // zero snapshots and zero entries must be persisted in the database.
+      const persistedSnapshots = await prisma.leaderboardSnapshot.findMany({
+        where: {
+          scope: "GLOBAL",
+          snapshotDate: rollbackDate,
+        },
+      });
+      expect(persistedSnapshots).toHaveLength(0);
+
+      const persistedEntries = await prisma.leaderboardEntry.findMany({
+        where: {
+          scope: "GLOBAL",
+          snapshotDate: rollbackDate,
+        },
+      });
+      expect(persistedEntries).toHaveLength(0);
+    } finally {
+      transactionSpy.mockRestore();
+      await prisma.leaderboardEntry.deleteMany({
+        where: { snapshotDate: rollbackDate },
+      });
+      await prisma.leaderboardSnapshot.deleteMany({
+        where: { snapshotDate: rollbackDate },
+      });
+    }
+  });
+
   describe("GET /api/v1/leaderboard/history", () => {
     test("rejects unauthenticated requests", async () => {
       const response = await request(app).get("/api/v1/leaderboard/history");

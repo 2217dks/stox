@@ -225,20 +225,35 @@ async function runLeaderboardSnapshotJob({
 
   try {
     logger.info(`Starting daily leaderboard snapshot generation for ${targetDateStr}`);
-    const workPromise = leaderboardService
-      .generateLeaderboardSnapshots({
-        date: targetDateObj,
-        signal: abortController.signal,
-      })
-      .catch((err) => {
-        if (lockLost) {
-          logger.warn(`Background snapshot work rolled back after lock loss: ${err.message}`);
-          return null;
-        }
-        throw err;
-      });
+    const workPromise = leaderboardService.generateLeaderboardSnapshots({
+      date: targetDateObj,
+      signal: abortController.signal,
+    });
+
+    workPromise.catch((err) => {
+      if (lockLost || abortController.signal.aborted) {
+        logger.warn(`Background snapshot work rolled back after lock loss: ${err.message}`);
+      }
+    });
 
     const result = await Promise.race([workPromise, lockLostPromise]);
+
+    if (lockLost || abortController.signal.aborted) {
+      const err = new Error(
+        `Leaderboard lock lease renewal failed for ${lockKey}; lease lost or expired.`,
+      );
+      err.code = "LOCK_RENEWAL_FAILED";
+      throw err;
+    }
+
+    if (!result || !result.leaderboards) {
+      const err = new Error(
+        `Leaderboard snapshot generation aborted or produced no result for ${targetDateStr}.`,
+      );
+      err.code = "LOCK_RENEWAL_FAILED";
+      throw err;
+    }
+
     logger.info(`Completed daily leaderboard snapshot generation for ${targetDateStr}`, {
       leaderboards: result.leaderboards,
     });
@@ -256,7 +271,7 @@ async function runLeaderboardSnapshotJob({
     if (renewalTimer) {
       clearInterval(renewalTimer);
     }
-    if (!lockLost) {
+    if (!lockLost && !abortController.signal.aborted) {
       await releaseLeaderboardLock(lockKey, workerId);
     }
   }
