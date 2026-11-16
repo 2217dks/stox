@@ -304,4 +304,72 @@ describe("Task 47 Competition Scoring and Lifecycle Regressions (#128, PR #149)"
     expect(rankedMembers[1].rank).toBe(2);
     expect(Number(rankedMembers[1].finalReturn)).toBe(0);
   });
+
+  test("allows order placement after startDate when stored status is still UPCOMING without prior league fetch", async () => {
+    // 1. Create upcoming league starting in 1 hour
+    const now = Date.now();
+    const futureStart = new Date(now + 3600000);
+    const futureEnd = new Date(now + 86400000);
+
+    const createRes = await request(app)
+      .post("/api/v1/leagues")
+      .set("Authorization", `Bearer ${user1Token}`)
+      .send({
+        name: "No-Fetch Direct Order League",
+        description: "Regression test for placing an order after startDate without prior GET",
+        startingBalance: 10000,
+        startDate: futureStart.toISOString(),
+        endDate: futureEnd.toISOString(),
+        maxParticipants: 5,
+      });
+
+    expect(createRes.status).toBe(201);
+    const leagueId = createRes.body.data.league.id;
+    createdLeagueIds.push(leagueId);
+
+    // 2. User joins league while still upcoming
+    const joinRes = await request(app)
+      .post(`/api/v1/leagues/${leagueId}/join`)
+      .set("Authorization", `Bearer ${user1Token}`)
+      .send({});
+    expect(joinRes.status).toBe(200);
+    const portfolioId = joinRes.body.data.member.portfolioId;
+
+    // 3. Advance startDate in DB to 5 minutes ago, while explicitly leaving status: "UPCOMING"
+    const pastStart = new Date(Date.now() - 300000);
+    await prisma.league.update({
+      where: { id: leagueId },
+      data: {
+        startDate: pastStart,
+        status: "UPCOMING",
+      },
+    });
+
+    // Verify stored DB status is indeed still "UPCOMING"
+    const storedLeague = await prisma.league.findUnique({
+      where: { id: leagueId },
+      select: { status: true },
+    });
+    expect(storedLeague.status).toBe("UPCOMING");
+
+    // 4. Directly place an order on the league portfolio WITHOUT fetching list or detail first
+    const orderRes = await request(app)
+      .post("/api/v1/orders")
+      .set("Authorization", `Bearer ${user1Token}`)
+      .send({
+        portfolioId,
+        symbol: "AAPL",
+        assetType: "STOCK",
+        side: "BUY",
+        type: "MARKET",
+        quantity: "2",
+      });
+
+    expect(orderRes.status).toBe(201);
+    expect(orderRes.body.success).toBe(true);
+    expect(orderRes.body.data.order.portfolioId).toBe(portfolioId);
+    expect(orderRes.body.data.order.symbol).toBe("AAPL");
+    expect(orderRes.body.data.order.status).toBe("PENDING");
+  });
 });
+

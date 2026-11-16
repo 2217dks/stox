@@ -343,12 +343,24 @@ function rankLeaderboard(totalsByUser, periodPnlByUser = new Map()) {
  * Period returns use realized P&L during that UTC period; ALL_TIME return uses
  * current portfolio value against total starting balance.
  */
-async function generateLeaderboardSnapshots({ date = new Date() } = {}) {
+async function generateLeaderboardSnapshots({ date = new Date(), signal = null } = {}) {
   const snapshotDate = normalizeSnapshotDate(date);
   const nextDay = new Date(snapshotDate);
   nextDay.setUTCDate(nextDay.getUTCDate() + 1);
 
+  if (signal && signal.aborted) {
+    const err = new Error("Leaderboard snapshot generation aborted: lock lease lost.");
+    err.code = "LOCK_RENEWAL_FAILED";
+    throw err;
+  }
+
   return prisma.$transaction(async (transaction) => {
+    if (signal && signal.aborted) {
+      const err = new Error("Leaderboard snapshot generation aborted: lock lease lost.");
+      err.code = "LOCK_RENEWAL_FAILED";
+      throw err;
+    }
+
     const portfolios = await transaction.portfolio.findMany({
       where: {
         user: {
@@ -379,6 +391,12 @@ async function generateLeaderboardSnapshots({ date = new Date() } = {}) {
     const results = [];
 
     for (const period of SNAPSHOT_PERIODS) {
+      if (signal && signal.aborted) {
+        const err = new Error("Leaderboard snapshot generation aborted: lock lease lost.");
+        err.code = "LOCK_RENEWAL_FAILED";
+        throw err;
+      }
+
       const periodStart = getPeriodStart(period, snapshotDate);
       const periodPnlByUser = new Map();
 

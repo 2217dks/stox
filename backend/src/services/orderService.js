@@ -501,7 +501,14 @@ async function createOrder({
     const startDate = new Date(league.startDate);
     const endDate = new Date(league.endDate);
 
-    if (now < startDate || league.status === "UPCOMING") {
+    if (league.status === "CANCELLED") {
+      throw AppError.badRequest(
+        "Trading is not permitted for a cancelled league.",
+        "LEAGUE_NOT_ACTIVE",
+      );
+    }
+
+    if (now < startDate) {
       throw AppError.badRequest(
         "Trading is not permitted before the league has started.",
         "LEAGUE_NOT_ACTIVE",
@@ -513,6 +520,15 @@ async function createOrder({
         "Trading is not permitted after the league has ended.",
         "LEAGUE_ENDED",
       );
+    }
+
+    if (league.status === "UPCOMING" && prisma.league && typeof prisma.league.update === "function") {
+      prisma.league
+        .update({
+          where: { id: league.id },
+          data: { status: "ACTIVE" },
+        })
+        .catch(() => {});
     }
 
     if (side === "SELL") {

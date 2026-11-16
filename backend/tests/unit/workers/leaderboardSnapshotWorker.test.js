@@ -235,15 +235,106 @@ describe("leaderboardSnapshotWorker unit tests", () => {
 
       expect(result.success).toBe(true);
       expect(result.targetDate).toBe("2026-11-14");
-      expect(snapshotSpy).toHaveBeenCalledWith({
-        date: new Date("2026-11-14T00:00:00.000Z"),
-      });
+      expect(snapshotSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          date: new Date("2026-11-14T00:00:00.000Z"),
+        }),
+      );
       expect(mockRedis.eval).toHaveBeenCalledWith(
         RELEASE_LOCK_LUA,
         1,
         "lock:leaderboard-snapshot:2026-11-14",
         "worker-test",
       );
+    });
+
+    test("aborts and throws LOCK_RENEWAL_FAILED when lease renewal fails during execution", async () => {
+      const now = new Date("2026-11-15T02:15:00.000Z");
+      const mockClient = {
+        leaderboardSnapshot: {
+          findMany: jest.fn().mockResolvedValue([]),
+        },
+      };
+
+      const mockRedis = {
+        status: "ready",
+        set: jest.fn().mockResolvedValue("OK"),
+        get: jest.fn().mockResolvedValue("worker-test"),
+        eval: jest.fn((script) => {
+          if (script === RENEW_LOCK_LUA) {
+            // Simulate lease renewal failure (lost lock / expired)
+            return Promise.resolve(0);
+          }
+          if (script === RELEASE_LOCK_LUA) {
+            return Promise.resolve(1);
+          }
+          return Promise.resolve(0);
+        }),
+      };
+      jest.spyOn(redisConfig, "getRedis").mockResolvedValue(mockRedis);
+
+      // Simulate a snapshot job that takes longer than renewalIntervalMs
+      jest.spyOn(leaderboardService, "generateLeaderboardSnapshots").mockImplementation(
+        () => new Promise((resolve) => setTimeout(resolve, 200)),
+      );
+
+      await expect(
+        runLeaderboardSnapshotJob({
+          now,
+          client: mockClient,
+          scheduleHourUtc: 2,
+          workerId: "worker-test",
+          renewalIntervalMs: 20,
+        }),
+      ).rejects.toMatchObject({
+        code: "LOCK_RENEWAL_FAILED",
+      });
+
+      // Crucial safe behavior: worker must NOT call RELEASE_LOCK_LUA if lock lease was lost
+      expect(mockRedis.eval).not.toHaveBeenCalledWith(
+        RELEASE_LOCK_LUA,
+        1,
+        "lock:leaderboard-snapshot:2026-11-14",
+        "worker-test",
+      );
+    });
+
+    test("aborts and throws LOCK_RENEWAL_FAILED when renewal throws a Redis network error during execution", async () => {
+      const now = new Date("2026-11-15T02:15:00.000Z");
+      const mockClient = {
+        leaderboardSnapshot: {
+          findMany: jest.fn().mockResolvedValue([]),
+        },
+      };
+
+      const mockRedis = {
+        status: "ready",
+        set: jest.fn().mockResolvedValue("OK"),
+        get: jest.fn().mockResolvedValue("worker-test"),
+        eval: jest.fn((script) => {
+          if (script === RENEW_LOCK_LUA) {
+            return Promise.reject(new Error("Redis connection dropped"));
+          }
+          return Promise.resolve(1);
+        }),
+      };
+      jest.spyOn(redisConfig, "getRedis").mockResolvedValue(mockRedis);
+
+      jest.spyOn(leaderboardService, "generateLeaderboardSnapshots").mockImplementation(
+        () => new Promise((resolve) => setTimeout(resolve, 200)),
+      );
+
+      await expect(
+        runLeaderboardSnapshotJob({
+          now,
+          client: mockClient,
+          scheduleHourUtc: 2,
+          workerId: "worker-test",
+          renewalIntervalMs: 20,
+        }),
+      ).rejects.toMatchObject({
+        code: "LOCK_RENEWAL_FAILED",
+      });
     });
   });
 
@@ -252,6 +343,44 @@ describe("leaderboardSnapshotWorker unit tests", () => {
       const worker = startLeaderboardSnapshotWorker({ autoStart: false });
       expect(typeof worker.stop).toBe("function");
       expect(typeof worker.run).toBe("function");
+      worker.stop();
+    });
+
+    test("does not update lastCapturedDate when job fails due to lost lock lease renewal", async () => {
+      const now = new Date("2026-11-15T02:15:00.000Z");
+      const mockClient = {
+        leaderboardSnapshot: {
+          findMany: jest.fn().mockResolvedValue([]),
+        },
+      };
+
+      const mockRedis = {
+        status: "ready",
+        set: jest.fn().mockResolvedValue("OK"),
+        eval: jest.fn((script) => {
+          if (script === RENEW_LOCK_LUA) {
+            return Promise.resolve(0); // renewal failed
+          }
+          return Promise.resolve(1);
+        }),
+      };
+      jest.spyOn(redisConfig, "getRedis").mockResolvedValue(mockRedis);
+
+      jest.spyOn(leaderboardService, "generateLeaderboardSnapshots").mockImplementation(
+        () => new Promise((resolve) => setTimeout(() => resolve({ leaderboards: [] }), 200)),
+      );
+
+      const worker = startLeaderboardSnapshotWorker({
+        autoStart: false,
+        client: mockClient,
+        scheduleHourUtc: 2,
+        renewalIntervalMs: 20,
+      });
+
+      const outcome = await worker.run(now);
+      expect(outcome.success).toBe(false);
+      expect(outcome.code).toBe("LOCK_RENEWAL_FAILED");
+      expect(worker.getLastCapturedDate()).toBeNull();
       worker.stop();
     });
   });

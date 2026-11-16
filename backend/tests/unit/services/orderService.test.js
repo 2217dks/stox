@@ -440,4 +440,127 @@ describe("createOrder cash reservations", () => {
     expect(tx.portfolio.update).toHaveBeenCalledTimes(1);
     expect(tx.order.create).toHaveBeenCalledTimes(1);
   });
+
+  describe("league portfolio trading restrictions", () => {
+    test("allows order placement when stored status is UPCOMING but startDate has passed", async () => {
+      const tx = createTransactionMock();
+
+      prisma.leagueMember.findUnique.mockResolvedValueOnce({
+        portfolioId: PORTFOLIO_ID,
+        league: {
+          id: "league-1",
+          status: "UPCOMING",
+          startDate: new Date(Date.now() - 3600000), // started 1 hour ago
+          endDate: new Date(Date.now() + 86400000), // ends in 24 hours
+        },
+      });
+
+      const result = await orderService.createOrder({
+        userId: USER_ID,
+        portfolioId: PORTFOLIO_ID,
+        symbol: "AAPL",
+        assetType: "STOCK",
+        side: "BUY",
+        type: "LIMIT",
+        quantity: "2",
+        limitPrice: "50",
+      });
+
+      expect(result).toBeDefined();
+      expect(tx.order.create).toHaveBeenCalled();
+    });
+
+    test("rejects order when startDate is in the future with LEAGUE_NOT_ACTIVE", async () => {
+      createTransactionMock();
+
+      prisma.leagueMember.findUnique.mockResolvedValueOnce({
+        portfolioId: PORTFOLIO_ID,
+        league: {
+          id: "league-1",
+          status: "UPCOMING",
+          startDate: new Date(Date.now() + 3600000), // starts in 1 hour
+          endDate: new Date(Date.now() + 86400000),
+        },
+      });
+
+      await expect(
+        orderService.createOrder({
+          userId: USER_ID,
+          portfolioId: PORTFOLIO_ID,
+          symbol: "AAPL",
+          assetType: "STOCK",
+          side: "BUY",
+          type: "LIMIT",
+          quantity: "2",
+          limitPrice: "50",
+        }),
+      ).rejects.toMatchObject({
+        code: "LEAGUE_NOT_ACTIVE",
+      });
+    });
+
+    test("rejects order when endDate has passed with LEAGUE_ENDED", async () => {
+      createTransactionMock();
+
+      prisma.leagueMember.findUnique.mockResolvedValueOnce({
+        portfolioId: PORTFOLIO_ID,
+        league: {
+          id: "league-1",
+          status: "ACTIVE",
+          startDate: new Date(Date.now() - 7200000),
+          endDate: new Date(Date.now() - 3600000), // ended 1 hour ago
+        },
+      });
+
+      await expect(
+        orderService.createOrder({
+          userId: USER_ID,
+          portfolioId: PORTFOLIO_ID,
+          symbol: "AAPL",
+          assetType: "STOCK",
+          side: "BUY",
+          type: "LIMIT",
+          quantity: "2",
+          limitPrice: "50",
+        }),
+      ).rejects.toMatchObject({
+        code: "LEAGUE_ENDED",
+      });
+    });
+
+    test("rejects short selling on league portfolio when heldQty < quantity", async () => {
+      createTransactionMock();
+
+      prisma.leagueMember.findUnique.mockResolvedValueOnce({
+        portfolioId: PORTFOLIO_ID,
+        league: {
+          id: "league-1",
+          status: "ACTIVE",
+          startDate: new Date(Date.now() - 3600000),
+          endDate: new Date(Date.now() + 86400000),
+        },
+      });
+
+      prisma.holding.findFirst.mockResolvedValueOnce({
+        portfolioId: PORTFOLIO_ID,
+        symbol: "AAPL",
+        quantity: 1, // only holds 1 share
+      });
+
+      await expect(
+        orderService.createOrder({
+          userId: USER_ID,
+          portfolioId: PORTFOLIO_ID,
+          symbol: "AAPL",
+          assetType: "STOCK",
+          side: "SELL",
+          type: "LIMIT",
+          quantity: "5", // attempting to sell 5 shares
+          limitPrice: "50",
+        }),
+      ).rejects.toMatchObject({
+        code: "SHORT_SELLING_DISALLOWED",
+      });
+    });
+  });
 });

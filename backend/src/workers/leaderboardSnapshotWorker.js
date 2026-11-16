@@ -128,6 +128,8 @@ async function runLeaderboardSnapshotJob({
   client = prisma,
   scheduleHourUtc = DEFAULT_SCHEDULE_HOUR_UTC,
   workerId = `worker-${process.pid}-${Date.now()}`,
+  lockTTLMs = LOCK_TTL_MS,
+  renewalIntervalMs = null,
 } = {}) {
   const targetDateStr = targetDate
     ? (targetDate instanceof Date ? targetDate.toISOString().slice(0, 10) : String(targetDate).slice(0, 10))
@@ -167,7 +169,7 @@ async function runLeaderboardSnapshotJob({
   }
 
   const lockKey = `lock:leaderboard-snapshot:${targetDateStr}`;
-  const acquired = await acquireLeaderboardLock(lockKey, workerId);
+  const acquired = await acquireLeaderboardLock(lockKey, workerId, lockTTLMs);
 
   if (!acquired) {
     logger.info(`Leaderboard snapshot generation for ${targetDateStr} locked by another replica.`);
@@ -178,22 +180,65 @@ async function runLeaderboardSnapshotJob({
     };
   }
 
+  const abortController = new AbortController();
+  let lockLost = false;
+  let rejectLockLost;
+  const lockLostPromise = new Promise((_, reject) => {
+    rejectLockLost = reject;
+  });
+
   // Active heartbeat renewal while job executes
-  const renewalIntervalMs = Math.max(1000, Math.floor(LOCK_TTL_MS / 3));
-  let renewalTimer = setInterval(async () => {
+  const renewalInterval = renewalIntervalMs || Math.max(1000, Math.floor(lockTTLMs / 3));
+  const renewalTimer = setInterval(async () => {
     try {
-      await renewLeaderboardLock(lockKey, workerId, LOCK_TTL_MS);
+      const renewed = await renewLeaderboardLock(lockKey, workerId, lockTTLMs);
+      if (!renewed) {
+        lockLost = true;
+        clearInterval(renewalTimer);
+        abortController.abort();
+        const err = new Error(
+          `Leaderboard lock lease renewal failed for ${lockKey}; lease lost or expired.`,
+        );
+        err.code = "LOCK_RENEWAL_FAILED";
+        logger.error(err.message);
+        if (rejectLockLost) {
+          rejectLockLost(err);
+        }
+      }
     } catch (err) {
-      logger.warn(`Error during leaderboard lock renewal: ${err.message}`);
+      lockLost = true;
+      clearInterval(renewalTimer);
+      abortController.abort();
+      const renewalErr = new Error(
+        `Leaderboard lock lease renewal error for ${lockKey}: ${err.message}`,
+      );
+      renewalErr.code = "LOCK_RENEWAL_FAILED";
+      logger.error(renewalErr.message);
+      if (rejectLockLost) {
+        rejectLockLost(renewalErr);
+      }
     }
-  }, renewalIntervalMs);
+  }, renewalInterval);
   if (typeof renewalTimer.unref === "function") {
     renewalTimer.unref();
   }
 
   try {
     logger.info(`Starting daily leaderboard snapshot generation for ${targetDateStr}`);
-    const result = await leaderboardService.generateLeaderboardSnapshots({ date: targetDateObj });
+    const workPromise = leaderboardService
+      .generateLeaderboardSnapshots({
+        date: targetDateObj,
+        signal: abortController.signal,
+      })
+      .catch((err) => {
+        if (lockLost) {
+          logger.warn(`Background snapshot work rolled back after lock loss: ${err.message}`);
+          return null;
+        }
+        throw err;
+      });
+
+    const result = await Promise.race([workPromise, lockLostPromise]);
     logger.info(`Completed daily leaderboard snapshot generation for ${targetDateStr}`, {
       leaderboards: result.leaderboards,
     });
@@ -211,7 +256,9 @@ async function runLeaderboardSnapshotJob({
     if (renewalTimer) {
       clearInterval(renewalTimer);
     }
-    await releaseLeaderboardLock(lockKey, workerId);
+    if (!lockLost) {
+      await releaseLeaderboardLock(lockKey, workerId);
+    }
   }
 }
 
@@ -223,6 +270,8 @@ function startLeaderboardSnapshotWorker({
   scheduleHourUtc = DEFAULT_SCHEDULE_HOUR_UTC,
   autoStart = true,
   client = prisma,
+  lockTTLMs = LOCK_TTL_MS,
+  renewalIntervalMs = null,
 } = {}) {
   let stopped = false;
   let running = false;
@@ -259,6 +308,8 @@ function startLeaderboardSnapshotWorker({
         now,
         client,
         scheduleHourUtc,
+        lockTTLMs,
+        renewalIntervalMs,
       });
 
       if (outcome && outcome.success) {
@@ -268,6 +319,11 @@ function startLeaderboardSnapshotWorker({
       return outcome;
     } catch (err) {
       logger.error(`Leaderboard worker tick failed: ${err.message}`);
+      return {
+        success: false,
+        error: err.message,
+        code: err.code,
+      };
     } finally {
       running = false;
     }
