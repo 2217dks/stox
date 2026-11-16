@@ -7,6 +7,61 @@ const { AppError } = require("../utils/errors");
 const ZERO = new Prisma.Decimal(0);
 
 /**
+ * Determine effective league status dynamically based on current UTC time and configured bounds.
+ */
+function getEffectiveLeagueStatus(league, now = new Date()) {
+  if (league.status === "CANCELLED") {
+    return "CANCELLED";
+  }
+  const currentDate = now instanceof Date ? now : new Date(now);
+  const start = new Date(league.startDate);
+  const end = new Date(league.endDate);
+
+  if (currentDate < start) {
+    return "UPCOMING";
+  }
+  if (currentDate >= end) {
+    return "COMPLETED";
+  }
+  return "ACTIVE";
+}
+
+/**
+ * Synchronize league statuses in database based on current UTC time.
+ */
+async function syncLeagueStatuses(now = new Date(), client = prisma) {
+  const currentDate = now instanceof Date ? now : new Date(now);
+
+  // Transition UPCOMING -> ACTIVE once startDate arrives
+  await client.league.updateMany({
+    where: {
+      status: "UPCOMING",
+      startDate: { lte: currentDate },
+      endDate: { gt: currentDate },
+    },
+    data: { status: "ACTIVE" },
+  });
+
+  // Transition UPCOMING -> COMPLETED if startDate and endDate have passed
+  await client.league.updateMany({
+    where: {
+      status: "UPCOMING",
+      endDate: { lte: currentDate },
+    },
+    data: { status: "COMPLETED" },
+  });
+
+  // Transition ACTIVE -> COMPLETED once endDate arrives
+  await client.league.updateMany({
+    where: {
+      status: "ACTIVE",
+      endDate: { lte: currentDate },
+    },
+    data: { status: "COMPLETED" },
+  });
+}
+
+/**
  * Create a new trading competition/league.
  */
 async function createLeague({
@@ -28,12 +83,7 @@ async function createLeague({
   }
 
   const now = new Date();
-  let status = "UPCOMING";
-  if (now >= start && now < end) {
-    status = "ACTIVE";
-  } else if (now >= end) {
-    status = "COMPLETED";
-  }
+  const status = getEffectiveLeagueStatus({ startDate: start, endDate: end, status: "UPCOMING" }, now);
 
   const league = await prisma.league.create({
     data: {
@@ -53,7 +103,9 @@ async function createLeague({
 /**
  * List leagues with pagination and optional status filter.
  */
-async function listLeagues({ status, page = 1, limit = 20 } = {}) {
+async function listLeagues({ status, page = 1, limit = 20, now = new Date() } = {}) {
+  await syncLeagueStatuses(now);
+
   const where = {};
   if (status) {
     where.status = status;
@@ -87,7 +139,7 @@ async function listLeagues({ status, page = 1, limit = 20 } = {}) {
       maxParticipants: l.maxParticipants,
       startDate: l.startDate,
       endDate: l.endDate,
-      status: l.status,
+      status: getEffectiveLeagueStatus(l, now),
       memberCount: l._count.members,
       createdAt: l.createdAt,
       updatedAt: l.updatedAt,
@@ -104,7 +156,7 @@ async function listLeagues({ status, page = 1, limit = 20 } = {}) {
 /**
  * Get single league by ID.
  */
-async function getLeagueById(id) {
+async function getLeagueById(id, now = new Date()) {
   const league = await prisma.league.findUnique({
     where: { id },
     include: {
@@ -119,6 +171,15 @@ async function getLeagueById(id) {
       statusCode: 404,
       code: "LEAGUE_NOT_FOUND",
     });
+  }
+
+  const effectiveStatus = getEffectiveLeagueStatus(league, now);
+  if (league.status !== effectiveStatus) {
+    await prisma.league.update({
+      where: { id: league.id },
+      data: { status: effectiveStatus },
+    });
+    league.status = effectiveStatus;
   }
 
   return {
@@ -177,9 +238,18 @@ async function joinLeague({ leagueId, userId, portfolioId, now = new Date() }) {
       });
     }
 
+    const effectiveStatus = getEffectiveLeagueStatus(league, currentDate);
+    if (league.status !== effectiveStatus) {
+      await tx.league.update({
+        where: { id: league.id },
+        data: { status: effectiveStatus },
+      });
+      league.status = effectiveStatus;
+    }
+
     // 2. Late joining disallowed: joinedAt <= startDate required; joining requires status UPCOMING and now < startDate
     const startDate = new Date(league.startDate);
-    if (currentDate >= startDate || league.status !== "UPCOMING") {
+    if (currentDate >= startDate || effectiveStatus !== "UPCOMING") {
       throw new AppError("Cannot join league after it has started.", {
         statusCode: 400,
         code: "LEAGUE_ALREADY_STARTED",
@@ -308,12 +378,21 @@ async function getLeagueLeaderboard({
   const currentDate = now instanceof Date ? now : new Date(now);
   const startDate = new Date(league.startDate);
   const endDate = new Date(league.endDate);
+  const effectiveStatus = getEffectiveLeagueStatus(league, currentDate);
+
+  if (league.status !== effectiveStatus && effectiveStatus === "ACTIVE") {
+    await prisma.league.update({
+      where: { id: league.id },
+      data: { status: "ACTIVE" },
+    });
+    league.status = "ACTIVE";
+  }
 
   // If already completed and members have finalReturn & rank, return stored results
   if (
     league.status === "COMPLETED" &&
     league.members.length > 0 &&
-    league.members.every((m) => m.rank !== null && m.finalReturn !== null)
+    league.members.every((m) => m.rank != null && m.finalReturn != null)
   ) {
     const activeMembers = league.members
       .filter((m) => !m.user.isSuspended)
@@ -323,7 +402,7 @@ async function getLeagueLeaderboard({
       league: {
         id: league.id,
         name: league.name,
-        status: league.status,
+        status: "COMPLETED",
         startDate: league.startDate,
         endDate: league.endDate,
       },
@@ -343,7 +422,7 @@ async function getLeagueLeaderboard({
     };
   }
 
-  const isEnded = currentDate >= endDate || league.status === "COMPLETED";
+  const isEnded = currentDate >= endDate || effectiveStatus === "COMPLETED" || league.status === "COMPLETED";
   const valuationDate = isEnded ? endDate : currentDate;
   const isHistorical =
     isEnded ||
@@ -488,23 +567,42 @@ async function getLeagueLeaderboard({
     m.rank = idx + 1;
   });
 
-  // If ended and finalizeIfEnded is true, persist finalReturn and rank
+  // If ended and finalizeIfEnded is true, persist finalReturn and rank atomically and idempotently
   if (isEnded && finalizeIfEnded && evaluatedMembers.length > 0) {
-    await prisma.$transaction([
-      prisma.league.update({
+    await prisma.$transaction(async (tx) => {
+      const leagues = await tx.$queryRaw`
+        SELECT id, status FROM "League" WHERE id = ${league.id} FOR UPDATE
+      `;
+      if (!leagues || leagues.length === 0) return;
+      const lockedLeague = leagues[0];
+
+      const existingRankedCount = await tx.leagueMember.count({
+        where: {
+          leagueId: league.id,
+          rank: { not: null },
+          finalReturn: { not: null },
+        },
+      });
+
+      if (lockedLeague.status === "COMPLETED" && existingRankedCount >= evaluatedMembers.length) {
+        return;
+      }
+
+      await tx.league.update({
         where: { id: league.id },
         data: { status: "COMPLETED" },
-      }),
-      ...evaluatedMembers.map((m) =>
-        prisma.leagueMember.update({
+      });
+
+      for (const m of evaluatedMembers) {
+        await tx.leagueMember.update({
           where: { id: m.id },
           data: {
             rank: m.rank,
             finalReturn: m.returnPct,
           },
-        }),
-      ),
-    ]);
+        });
+      }
+    });
   }
 
   return {
@@ -535,5 +633,7 @@ module.exports = {
   getLeagueById,
   joinLeague,
   getLeagueLeaderboard,
+  getEffectiveLeagueStatus,
+  syncLeagueStatuses,
 };
 

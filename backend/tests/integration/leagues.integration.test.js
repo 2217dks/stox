@@ -780,4 +780,104 @@ describe("Leagues & Competitions Integration (#128)", () => {
     expect(updatedMember.rank).toBe(1);
     expect(Number(updatedMember.finalReturn)).toBe(20);
   });
+
+  test("Status transitions from UPCOMING to ACTIVE and agrees across list, detail, join, and leaderboard", async () => {
+    // Create league with startDate 1 hour in the past, endDate in 5 days, but status stored as UPCOMING
+    const pastStart = new Date(Date.now() - 3600000);
+    const futureEnd = new Date(Date.now() + 5 * 86400000);
+
+    const league = await prisma.league.create({
+      data: {
+        name: "Transitioning League",
+        startingBalance: 10000,
+        startDate: pastStart,
+        endDate: futureEnd,
+        status: "UPCOMING",
+      },
+    });
+    createdLeagueIds.push(league.id);
+
+    // 1. GET /api/v1/leagues lists it as ACTIVE
+    const listRes = await request(app).get("/api/v1/leagues?status=ACTIVE");
+    expect(listRes.status).toBe(200);
+    const foundInList = listRes.body.data.find((l) => l.id === league.id);
+    expect(foundInList).toBeDefined();
+    expect(foundInList.status).toBe("ACTIVE");
+
+    // 2. GET /api/v1/leagues/:id returns ACTIVE
+    const detailRes = await request(app).get(`/api/v1/leagues/${league.id}`);
+    expect(detailRes.status).toBe(200);
+    expect(detailRes.body.data.league.status).toBe("ACTIVE");
+
+    // 3. POST /api/v1/leagues/:id/join rejects as already started
+    const joinRes = await request(app)
+      .post(`/api/v1/leagues/${league.id}/join`)
+      .set("Authorization", `Bearer ${user1Token}`)
+      .send({});
+    expect(joinRes.status).toBe(400);
+    expect(joinRes.body.error.code).toBe("LEAGUE_ALREADY_STARTED");
+
+    // 4. GET /api/v1/leagues/:id/leaderboard returns ACTIVE
+    const lbRes = await request(app).get(`/api/v1/leagues/${league.id}/leaderboard`);
+    expect(lbRes.status).toBe(200);
+    expect(lbRes.body.data.league.status).toBe("ACTIVE");
+  });
+
+  test("Concurrent leaderboard completion calls finalize safely and idempotently", async () => {
+    const startDate = new Date(Date.now() - 10 * 86400000);
+    const endDate = new Date(Date.now() - 86400000);
+
+    const league = await prisma.league.create({
+      data: {
+        name: "Concurrent Completion League",
+        startingBalance: 10000,
+        startDate,
+        endDate,
+        status: "ACTIVE",
+      },
+    });
+    createdLeagueIds.push(league.id);
+
+    const p = await prisma.portfolio.create({
+      data: {
+        userId: user1Id,
+        name: "Concurrent-Comp-P",
+        startingBalance: 10000,
+        cashBalance: 10000,
+        reservedCash: 0,
+      },
+    });
+
+    const member = await prisma.leagueMember.create({
+      data: {
+        leagueId: league.id,
+        userId: user1Id,
+        portfolioId: p.id,
+        joinedAt: new Date(startDate.getTime() - 100000),
+      },
+    });
+
+    // Execute concurrent requests to leaderboard endpoint for ended league
+    const [res1, res2] = await Promise.all([
+      request(app).get(`/api/v1/leagues/${league.id}/leaderboard`),
+      request(app).get(`/api/v1/leagues/${league.id}/leaderboard`),
+    ]);
+
+    expect(res1.status).toBe(200);
+    expect(res2.status).toBe(200);
+    expect(res1.body.data.league.status).toBe("COMPLETED");
+    expect(res2.body.data.league.status).toBe("COMPLETED");
+
+    // Verify DB state
+    const dbLeague = await prisma.league.findUnique({
+      where: { id: league.id },
+    });
+    expect(dbLeague.status).toBe("COMPLETED");
+
+    const dbMember = await prisma.leagueMember.findUnique({
+      where: { id: member.id },
+    });
+    expect(dbMember.rank).toBe(1);
+    expect(dbMember.finalReturn).not.toBeNull();
+  });
 });

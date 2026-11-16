@@ -1,5 +1,9 @@
 const { Prisma } = require("@prisma/client");
-const { getLeagueLeaderboard } = require("../../../src/services/competitionService");
+const {
+  getLeagueLeaderboard,
+  getEffectiveLeagueStatus,
+  syncLeagueStatuses,
+} = require("../../../src/services/competitionService");
 const prisma = require("../../../src/config/database");
 
 jest.mock("../../../src/config/database", () => ({
@@ -449,5 +453,49 @@ describe("competitionService - Scoring and Valuation Rules (#128)", () => {
       { rank: 4, userId: "user-b2", returnPct: 0, tradeCount: 0 },
       { rank: 5, userId: "user-b3", returnPct: 0, tradeCount: 0 },
     ]);
+  });
+});
+
+describe("competitionService - UTC Boundary Status Transitions (#128)", () => {
+  const startDate = new Date("2026-05-01T12:00:00.000Z");
+  const endDate = new Date("2026-05-10T12:00:00.000Z");
+  const baseLeague = {
+    startDate,
+    endDate,
+    status: "UPCOMING",
+  };
+
+  test("just before start date (< startDate): status is UPCOMING", () => {
+    const justBefore = new Date(startDate.getTime() - 1);
+    expect(getEffectiveLeagueStatus(baseLeague, justBefore)).toBe("UPCOMING");
+  });
+
+  test("exactly at start date (=== startDate): status transitions to ACTIVE", () => {
+    expect(getEffectiveLeagueStatus(baseLeague, startDate)).toBe("ACTIVE");
+  });
+
+  test("just after start date (> startDate, < endDate): status is ACTIVE", () => {
+    const justAfter = new Date(startDate.getTime() + 1);
+    expect(getEffectiveLeagueStatus(baseLeague, justAfter)).toBe("ACTIVE");
+  });
+
+  test("just before end date (< endDate): status is ACTIVE", () => {
+    const justBefore = new Date(endDate.getTime() - 1);
+    expect(getEffectiveLeagueStatus(baseLeague, justBefore)).toBe("ACTIVE");
+  });
+
+  test("exactly at end date (=== endDate): status transitions to COMPLETED", () => {
+    expect(getEffectiveLeagueStatus(baseLeague, endDate)).toBe("COMPLETED");
+  });
+
+  test("just after end date (> endDate): status is COMPLETED", () => {
+    const justAfter = new Date(endDate.getTime() + 1);
+    expect(getEffectiveLeagueStatus(baseLeague, justAfter)).toBe("COMPLETED");
+  });
+
+  test("preserves CANCELLED status regardless of timestamps", () => {
+    const cancelled = { ...baseLeague, status: "CANCELLED" };
+    expect(getEffectiveLeagueStatus(cancelled, startDate)).toBe("CANCELLED");
+    expect(getEffectiveLeagueStatus(cancelled, endDate)).toBe("CANCELLED");
   });
 });
