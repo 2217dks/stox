@@ -10,3 +10,4 @@ router.get("/", optionalAuth, achievementController.list);
 router.get("/mine", authMiddleware, achievementController.mine);
 
 module.exports = router;
+

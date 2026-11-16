@@ -240,3 +240,4 @@ describe("Achievements Integration", () => {
     expect(secondSummary.newlyGranted).toBe(0);
   });
 });
+

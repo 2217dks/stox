@@ -303,3 +303,4 @@ describe("Sentiment API integration", () => {
     }
   });
 });
+
