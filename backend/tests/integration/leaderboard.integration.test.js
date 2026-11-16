@@ -428,4 +428,49 @@ describe("Leaderboard integration API", () => {
       });
     }
   });
+
+  test("excludes suspended users from generated leaderboard snapshots", async () => {
+    const testDate = new Date("2099-06-18T00:00:00.000Z");
+
+    try {
+      await prisma.user.update({
+        where: { id: user3Id },
+        data: { isSuspended: true },
+      });
+
+      await generateLeaderboardSnapshots({ date: testDate });
+
+      const user3Entries = await prisma.leaderboardEntry.findMany({
+        where: {
+          userId: user3Id,
+          scope: "GLOBAL",
+          snapshotDate: testDate,
+        },
+      });
+
+      expect(user3Entries).toHaveLength(0);
+
+      const activeUserEntries = await prisma.leaderboardEntry.findMany({
+        where: {
+          userId: user1Id,
+          scope: "GLOBAL",
+          snapshotDate: testDate,
+        },
+      });
+
+      expect(activeUserEntries.length).toBeGreaterThan(0);
+    } finally {
+      await prisma.user.update({
+        where: { id: user3Id },
+        data: { isSuspended: false },
+      });
+
+      await prisma.leaderboardSnapshot.deleteMany({
+        where: {
+          scope: "GLOBAL",
+          snapshotDate: testDate,
+        },
+      });
+    }
+  });
 });
