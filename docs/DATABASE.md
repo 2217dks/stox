@@ -392,12 +392,23 @@ model Alert {
   triggeredAt     DateTime?
   message         String?
 
+  // Request-time reference for PERCENT_CHANGE_UP/DOWN. `targetPrice` is a
+  // percentage for those conditions and an absolute price otherwise.
+  baselinePrice   Decimal? @db.Decimal(18, 8)
+  baselineAt      DateTime?
+
+  // Rotation cursor for the alert scan (oldest attempt first). Advanced even
+  // when a quote fetch fails transiently, so failing symbols cannot starve
+  // deferred ones.
+  lastEvaluatedAt DateTime?
+
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   @@index([userId, status])
   @@index([status, symbolId])
   @@index([symbolId])
+  @@index([status, lastEvaluatedAt])
 }
 ```
 
@@ -419,6 +430,13 @@ model Notification {
 
   isRead          Boolean  @default(false)
   readAt          DateTime?
+
+  // Outbound delivery lifecycle. The row itself is the in-app record.
+  deliveryStatus   NotificationDeliveryStatus @default(PENDING)
+  deliveredAt      DateTime?
+  deliveryAttempts Int @default(0)
+  deliveryStartedAt DateTime?
+  deliveryChannels Json?
 
   createdAt       DateTime @default(now())
 
@@ -500,6 +518,10 @@ model CopyTrader {
   @@index([copiedId])
 }
 ```
+
+PostgreSQL CHECK constraints require `allocationPct` to be greater than `0` and
+at most `100`, reject self-copy relationships where `copierId = copiedId`, and
+require a provided `maxTradeSize` to be greater than `0`.
 
 ---
 
@@ -781,6 +803,14 @@ enum NotificationType {
   LEAGUE_UPDATE
   NEW_FOLLOWER
   SYSTEM
+}
+
+enum NotificationDeliveryStatus {
+  PENDING
+  SENDING
+  DELIVERED
+  SKIPPED
+  FAILED
 }
 
 enum LeaderboardScope {

@@ -18,6 +18,7 @@ function startScanScheduler({
   ensureScheduler,
   intervalMs,
   log = logger,
+  label = "Order",
   maxRetryDelayMs = DEFAULT_MAX_RETRY_DELAY_MS,
   setTimer = setTimeout,
   clearTimer = clearTimeout,
@@ -56,7 +57,7 @@ function startScanScheduler({
     }
 
     if (result?.scheduled) {
-      log.info("Order scan scheduler registered", {
+      log.info(`${label} scan scheduler registered`, {
         everyMs: intervalMs,
       });
       return;
@@ -67,7 +68,7 @@ function startScanScheduler({
       1000 * 2 ** Math.min(attempt, 5),
     );
 
-    log.warn("Order scan scheduler not registered; retrying", {
+    log.warn(`${label} scan scheduler not registered; retrying`, {
       reason: result?.reason,
       retryInMs: delayMs,
     });

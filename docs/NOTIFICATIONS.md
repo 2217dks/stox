@@ -30,6 +30,23 @@ The pipeline decouples events from delivery, ensuring notifications never block 
 
 ---
 
+## ✅ Implementation status
+
+| Piece | Status |
+| --- | --- |
+| `Notification` row (in-app inbox) | Implemented. The row is written synchronously after the business transaction commits and is the source of truth. |
+| `notifications` BullMQ queue | Implemented (`src/queues/notificationQueue.js`). Job: `send-notification`; scheduler: `notifications:scan-pending`. |
+| Notification worker | Implemented (`src/workers/notificationQueueWorker.js`). Claims delivery in the database, then delivers through the enabled channels. |
+| In-app live delivery | Implemented. Socket.IO `/notifications` namespace; the worker emits to the server-derived `user:{userId}` room. |
+| Email delivery | Implemented behind Resend (`src/services/emailService.js`). It is an explicit no-op until `RESEND_API_KEY` and `EMAIL_FROM` are set. |
+| Push delivery | Implemented behind FCM HTTP v1 (`src/services/pushService.js`). It is an explicit no-op until the FCM service-account variables are set. |
+| Webhook delivery | **Planned**. |
+| Achievement/copy-trade/league/digest sources | **Planned**. Only order-execution and price-alert notifications are produced today. |
+
+Email and push are attempted only when both the user's `UserPreference` switches and the legacy `User` flags/destinations allow them. A `PRICE_ALERT` can additionally carry the alert's own `sendEmail`/`sendPush` flags, which can only narrow delivery.
+
+---
+
 ## 🏗️ Event-Driven Architecture
 
 ```
@@ -110,6 +127,14 @@ The pipeline decouples events from delivery, ensuring notifications never block 
 ---
 
 ## 👷 Worker Implementation
+
+> **Actual implementation:** `src/workers/notificationQueueWorker.js` and
+> `src/services/notificationDeliveryService.js`. The job payload is
+> `{ notificationId }`; the notification row is created by the event source
+> before enqueue. Delivery is claimed with a conditional `PENDING -> SENDING`
+> update, and the per-channel result is persisted in
+> `Notification.deliveryChannels`. The illustrative block below describes the
+> original target design, not the current code.
 
 ```javascript
 // workers/notificationWorker.js
@@ -268,7 +293,25 @@ export function renderTemplate(type, data) {
 
 ## ⚙️ User Preferences
 
-Stored on the `User` model:
+The settings API stores two switches on `UserPreference`:
+
+```prisma
+model UserPreference {
+  id                 String  @id @default(cuid())
+  userId             String  @unique
+  emailNotifications Boolean @default(true)
+  pushNotifications  Boolean @default(true)
+}
+```
+
+Delivery requires both the `UserPreference` switch and the matching legacy
+`User` flag/destination to allow it:
+
+- email: `emailNotifications` AND `user.emailAlerts` AND `user.email`
+- push: `pushNotifications` AND `user.pushEnabled` AND `user.pushToken`
+
+The legacy `User` fields remain for accounts that predate the preferences
+table:
 
 ```prisma
 model User {
