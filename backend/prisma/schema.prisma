@@ -73,6 +73,9 @@ enum AlertStatus {
 
 enum NotificationType {
   ORDER_EXECUTED
+  ORDER_CANCELLED
+  ORDER_REJECTED
+  ORDER_EXPIRED
   PRICE_ALERT
   ACHIEVEMENT_UNLOCKED
   COPY_TRADE_EXECUTED
@@ -102,6 +105,13 @@ enum LeaderboardPeriod {
   WEEKLY
   MONTHLY
   ALL_TIME
+}
+
+enum LeagueStatus {
+  UPCOMING
+  ACTIVE
+  COMPLETED
+  CANCELLED
 }
 
 // ============================================================
@@ -143,6 +153,9 @@ model User {
   alerts             Alert[]
   notifications      Notification[]
   leaderboardEntries LeaderboardEntry[]
+  sentimentVotes     SentimentVote[]
+  userAchievements   UserAchievement[]
+  leagueMembers      LeagueMember[]
 
   // Copy-trade execution audit rows where this user is the copier.
   copyExecutions CopyTradeExecution[] @relation("CopyExecutions")
@@ -207,6 +220,7 @@ model Portfolio {
   orders               Order[]
   trades               Trade[]
   performanceSnapshots PerformanceSnapshot[]
+  leagueMember         LeagueMember?
 
   // Copy relationships whose copied orders are placed in this portfolio.
   copyTraders CopyTrader[] @relation("CopyDestination")
@@ -734,3 +748,106 @@ model UserPreference {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
+
+// ============================================================
+// SENTIMENT
+// ============================================================
+
+enum Sentiment {
+  BULLISH
+  BEARISH
+  NEUTRAL
+}
+
+model SentimentVote {
+  id String @id @default(uuid())
+
+  userId String
+  symbol String
+  sentiment Sentiment
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, symbol])
+  @@index([symbol, updatedAt])
+}
+
+// ============================================================
+// ACHIEVEMENTS
+// ============================================================
+
+model Achievement {
+  id          String   @id @default(uuid())
+  code        String   @unique
+  name        String
+  description String
+  iconUrl     String?
+  category    String
+  criteria    Json?
+
+  createdAt   DateTime @default(now())
+
+  userAchievements UserAchievement[]
+}
+
+model UserAchievement {
+  id            String   @id @default(uuid())
+  userId        String
+  achievementId String
+
+  user        User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievement Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  unlockedAt DateTime @default(now())
+
+  @@unique([userId, achievementId])
+  @@index([userId])
+  @@index([achievementId])
+}
+
+// ============================================================
+// LEAGUES & COMPETITIONS
+// ============================================================
+
+model League {
+  id              String       @id @default(uuid())
+  name            String
+  description     String?
+  startingBalance Decimal      @default(10000) @db.Decimal(18, 8)
+  maxParticipants Int?
+  startDate       DateTime
+  endDate         DateTime
+  status          LeagueStatus @default(UPCOMING)
+
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  members         LeagueMember[]
+
+  @@index([status])
+  @@index([startDate, endDate])
+}
+
+model LeagueMember {
+  id          String    @id @default(uuid())
+  leagueId    String
+  userId      String
+  portfolioId String    @unique
+
+  league      League    @relation(fields: [leagueId], references: [id], onDelete: Cascade)
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  portfolio   Portfolio @relation(fields: [portfolioId], references: [id], onDelete: Cascade)
+
+  rank        Int?
+  finalReturn Decimal?  @db.Decimal(18, 8)
+
+  joinedAt    DateTime  @default(now())
+
+  @@unique([leagueId, userId])
+  @@index([leagueId])
+  @@index([userId])
+}
+

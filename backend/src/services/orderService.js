@@ -7,6 +7,9 @@ const marketDataService = require("./marketData");
 const { enqueueOrderExecution } = require("../queues/orderQueue");
 const logger = require("../utils/logger");
 const { recordOrderEvent, getOrderEvents } = require("./orderEventService");
+const {
+  createOrderCancelledNotification,
+} = require("./notificationEvents");
 
 const ZERO = new Prisma.Decimal(0);
 const MAX_MONEY = new Prisma.Decimal("9999999999.99999999");
@@ -463,6 +466,19 @@ async function cancelOrder({ userId, orderId }) {
   const serialized = serializeOrder(updated);
   triggerOrderStatus(serialized);
 
+  try {
+    await createOrderCancelledNotification({
+      userId,
+      order: serialized,
+      reason: "USER_CANCELLED",
+    });
+  } catch (notificationError) {
+    logger.warn("Failed to create order-cancelled notification", {
+      orderId,
+      error: notificationError.message,
+    });
+  }
+
   return serialized;
 }
 
@@ -520,6 +536,77 @@ async function createOrder({
 
     if (existing) {
       return serializeOrder(existing);
+    }
+  }
+
+  // League portfolio restrictions:
+  // 1. Pre-start trading disallowed (LEAGUE_NOT_ACTIVE).
+  // 2. Post-end trading disallowed (LEAGUE_ENDED).
+  // 3. Short selling disallowed (SHORT_SELLING_DISALLOWED).
+  const leagueMember = prisma.leagueMember
+    ? await prisma.leagueMember.findUnique({
+        where: { portfolioId },
+        include: { league: true },
+      })
+    : null;
+
+  if (leagueMember && leagueMember.league) {
+    const league = leagueMember.league;
+    const now = new Date();
+    const startDate = new Date(league.startDate);
+    const endDate = new Date(league.endDate);
+
+    if (league.status === "CANCELLED") {
+      throw AppError.badRequest(
+        "Trading is not permitted for a cancelled league.",
+        "LEAGUE_NOT_ACTIVE",
+      );
+    }
+
+    if (now < startDate) {
+      throw AppError.badRequest(
+        "Trading is not permitted before the league has started.",
+        "LEAGUE_NOT_ACTIVE",
+      );
+    }
+
+    if (now >= endDate || league.status === "COMPLETED") {
+      throw AppError.badRequest(
+        "Trading is not permitted after the league has ended.",
+        "LEAGUE_ENDED",
+      );
+    }
+
+    if (
+      league.status === "UPCOMING" &&
+      prisma.league &&
+      typeof prisma.league.update === "function"
+    ) {
+      prisma.league
+        .update({
+          where: { id: league.id },
+          data: { status: "ACTIVE" },
+        })
+        .catch(() => {});
+    }
+
+    if (side === "SELL") {
+      const holding = prisma.holding
+        ? await prisma.holding.findFirst({
+            where: {
+              portfolioId,
+              symbol: normalizedSymbol,
+            },
+          })
+        : null;
+      const heldQty = holding ? new Prisma.Decimal(holding.quantity) : ZERO;
+
+      if (heldQty.lt(new Prisma.Decimal(quantity))) {
+        throw AppError.badRequest(
+          "Short selling is not permitted in league portfolios. Insufficient shares held.",
+          "SHORT_SELLING_DISALLOWED",
+        );
+      }
     }
   }
 

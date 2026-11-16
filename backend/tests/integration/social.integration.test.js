@@ -335,4 +335,193 @@ describe("Social integration API", () => {
     expect(response.status).toBe(404);
     expect(response.body.error.code).toBe("NOT_FOLLOWING");
   });
+
+  describe("Social feed ranking and trending mode", () => {
+    let user3Id;
+    let user3AccessToken;
+
+    beforeAll(async () => {
+      const user3 = {
+        name: "Social Trending User 3",
+        email: `social-trending-3-${timestamp}@example.com`,
+        password: "IntegrationTest#2026",
+      };
+
+      const registration = await request(app)
+        .post("/api/v1/auth/register")
+        .send(user3);
+
+      expect([200, 201]).toContain(registration.status);
+      user3Id = registration.body.data.user.id;
+      user3AccessToken = registration.body.data.accessToken;
+    });
+
+    afterAll(async () => {
+      if (user3Id) {
+        await prisma.user.deleteMany({
+          where: { id: user3Id },
+        });
+      }
+    });
+
+    test("rejects invalid feed query parameters", async () => {
+      const invalidSort = await request(app)
+        .get("/api/v1/social/feed?sort=viral")
+        .set("Authorization", `Bearer ${user1AccessToken}`);
+      expect(invalidSort.status).toBe(400);
+
+      const invalidAsOf = await request(app)
+        .get("/api/v1/social/feed?asOf=not-a-valid-date")
+        .set("Authorization", `Bearer ${user1AccessToken}`);
+      expect(invalidAsOf.status).toBe(400);
+    });
+
+    test("ranks posts by trending formula accounting for likes, age decay, and following boost", async () => {
+      const asOf = "2026-11-15T12:00:00.000Z";
+
+      // Post A: author = user2, 1 hour old at asOf, 0 likes
+      const postA = await prisma.post.create({
+        data: {
+          authorId: user2Id,
+          content: "Post A: Recent without likes",
+          createdAt: new Date("2026-11-15T11:00:00.000Z"),
+        },
+      });
+
+      // Post B: author = user3, 2 hours old at asOf, 2 likes
+      const postB = await prisma.post.create({
+        data: {
+          authorId: user3Id,
+          content: "Post B: Older with likes",
+          createdAt: new Date("2026-11-15T10:00:00.000Z"),
+        },
+      });
+
+      // Add 2 likes to Post B (from user2 and user3)
+      await prisma.postLike.createMany({
+        data: [
+          { postId: postB.id, userId: user2Id },
+          { postId: postB.id, userId: user3Id },
+        ],
+      });
+
+      try {
+        // Ensure user1 does NOT follow user2 or user3 initially
+        await prisma.follow.deleteMany({
+          where: {
+            followerId: user1Id,
+            followingId: { in: [user2Id, user3Id] },
+          },
+        });
+
+        // 1. Unfollowed: Post B score (3 / 4^1.2 ≈ 0.568) > Post A score (1 / 3^1.2 ≈ 0.268)
+        const unfollowedRes = await request(app)
+          .get(`/api/v1/social/feed?sort=trending&asOf=${asOf}`)
+          .set("Authorization", `Bearer ${user1AccessToken}`);
+
+        expect(unfollowedRes.status).toBe(200);
+        const posts = unfollowedRes.body.data.posts;
+        const indexA = posts.findIndex((p) => p.id === postA.id);
+        const indexB = posts.findIndex((p) => p.id === postB.id);
+
+        expect(indexB).toBeGreaterThanOrEqual(0);
+        expect(indexA).toBeGreaterThanOrEqual(0);
+        expect(indexB).toBeLessThan(indexA);
+
+        // 2. Follow user2: Post A gains following boost (+2 in numerator)
+        // Post A score becomes 3 / 3^1.2 ≈ 0.803 > Post B score 0.568
+        await prisma.follow.create({
+          data: {
+            followerId: user1Id,
+            followingId: user2Id,
+          },
+        });
+
+        const followedRes = await request(app)
+          .get(`/api/v1/social/feed?sort=trending&asOf=${asOf}`)
+          .set("Authorization", `Bearer ${user1AccessToken}`);
+
+        expect(followedRes.status).toBe(200);
+        const followedPosts = followedRes.body.data.posts;
+        const newIndexA = followedPosts.findIndex((p) => p.id === postA.id);
+        const newIndexB = followedPosts.findIndex((p) => p.id === postB.id);
+
+        expect(newIndexA).toBeLessThan(newIndexB);
+      } finally {
+        await prisma.post.deleteMany({
+          where: { id: { in: [postA.id, postB.id] } },
+        });
+        await prisma.follow.deleteMany({
+          where: {
+            followerId: user1Id,
+            followingId: { in: [user2Id, user3Id] },
+          },
+        });
+      }
+    });
+
+    test("excludes posts older than 7 days from trending candidate window", async () => {
+      const asOf = "2026-11-15T12:00:00.000Z";
+
+      // Post 8 days old (beyond 7 days)
+      const oldPost = await prisma.post.create({
+        data: {
+          authorId: user2Id,
+          content: "Post beyond 7 days window",
+          createdAt: new Date("2026-11-07T11:00:00.000Z"),
+        },
+      });
+
+      try {
+        const res = await request(app)
+          .get(`/api/v1/social/feed?sort=trending&asOf=${asOf}`)
+          .set("Authorization", `Bearer ${user1AccessToken}`);
+
+        expect(res.status).toBe(200);
+        expect(res.body.data.posts.some((p) => p.id === oldPost.id)).toBe(false);
+      } finally {
+        await prisma.post.deleteMany({
+          where: { id: oldPost.id },
+        });
+      }
+    });
+
+    test("strictly excludes suspended authors from feed", async () => {
+      const testPost = await prisma.post.create({
+        data: {
+          authorId: user3Id,
+          content: "Post by suspended author",
+        },
+      });
+
+      try {
+        await prisma.user.update({
+          where: { id: user3Id },
+          data: { isSuspended: true },
+        });
+
+        const latestRes = await request(app)
+          .get("/api/v1/social/feed?sort=latest")
+          .set("Authorization", `Bearer ${user1AccessToken}`);
+
+        expect(latestRes.status).toBe(200);
+        expect(latestRes.body.data.posts.some((p) => p.id === testPost.id)).toBe(false);
+
+        const trendingRes = await request(app)
+          .get("/api/v1/social/feed?sort=trending")
+          .set("Authorization", `Bearer ${user1AccessToken}`);
+
+        expect(trendingRes.status).toBe(200);
+        expect(trendingRes.body.data.posts.some((p) => p.id === testPost.id)).toBe(false);
+      } finally {
+        await prisma.user.update({
+          where: { id: user3Id },
+          data: { isSuspended: false },
+        });
+        await prisma.post.deleteMany({
+          where: { id: testPost.id },
+        });
+      }
+    });
+  });
 });

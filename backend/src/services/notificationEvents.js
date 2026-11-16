@@ -50,6 +50,137 @@ async function createOrderExecutedNotification({ userId, order, trade }) {
   return notification;
 }
 
+async function createOrderCancelledNotification({
+  userId,
+  order,
+  reason = "USER_CANCELLED",
+}) {
+  const price =
+    order.price != null
+      ? order.price.toString()
+      : order.limitPrice != null
+        ? order.limitPrice.toString()
+        : null;
+
+  const notification = await prisma.notification.create({
+    data: {
+      userId,
+      type: "ORDER_CANCELLED",
+      title: "Order cancelled",
+      message: `${order.side} ${order.quantity.toString()} ${order.symbol} order was cancelled.`,
+      data: {
+        orderId: order.id,
+        symbol: order.symbol,
+        side: order.side,
+        quantity: order.quantity.toString(),
+        price,
+        reason,
+      },
+    },
+  });
+
+  void enqueueNotificationDelivery({ notificationId: notification.id }).catch(
+    (error) => {
+      logger.warn("Notification delivery enqueue failed", {
+        notificationId: notification.id,
+        message: error.message,
+      });
+    },
+  );
+
+  return notification;
+}
+
+async function createOrderRejectedNotification({
+  userId,
+  order,
+  reason = "EXECUTION_REJECTED",
+}) {
+  const reasonText =
+    typeof reason === "object" && reason !== null
+      ? reason.reason || "EXECUTION_REJECTED"
+      : reason;
+
+  const price =
+    order.price != null
+      ? order.price.toString()
+      : order.limitPrice != null
+        ? order.limitPrice.toString()
+        : null;
+
+  const notification = await prisma.notification.create({
+    data: {
+      userId,
+      type: "ORDER_REJECTED",
+      title: "Order rejected",
+      message: `${order.side} ${order.quantity.toString()} ${order.symbol} order was rejected: ${reasonText}.`,
+      data: {
+        orderId: order.id,
+        symbol: order.symbol,
+        side: order.side,
+        quantity: order.quantity.toString(),
+        price,
+        reason: reasonText,
+      },
+    },
+  });
+
+  void enqueueNotificationDelivery({ notificationId: notification.id }).catch(
+    (error) => {
+      logger.warn("Notification delivery enqueue failed", {
+        notificationId: notification.id,
+        message: error.message,
+      });
+    },
+  );
+
+  return notification;
+}
+
+async function createOrderExpiredNotification({
+  userId,
+  order,
+  reason = "ORDER_EXPIRED",
+}) {
+  const price =
+    order.price != null
+      ? order.price.toString()
+      : order.limitPrice != null
+        ? order.limitPrice.toString()
+        : null;
+
+  const notification = await prisma.notification.create({
+    data: {
+      userId,
+      type: "ORDER_EXPIRED",
+      title: "Order expired",
+      message: `${order.side} ${order.quantity.toString()} ${order.symbol} order expired.`,
+      data: {
+        orderId: order.id,
+        symbol: order.symbol,
+        side: order.side,
+        quantity: order.quantity.toString(),
+        price,
+        reason,
+      },
+    },
+  });
+
+  void enqueueNotificationDelivery({ notificationId: notification.id }).catch(
+    (error) => {
+      logger.warn("Notification delivery enqueue failed", {
+        notificationId: notification.id,
+        message: error.message,
+      });
+    },
+  );
+
+  return notification;
+}
+
 module.exports = {
   createOrderExecutedNotification,
+  createOrderCancelledNotification,
+  createOrderRejectedNotification,
+  createOrderExpiredNotification,
 };

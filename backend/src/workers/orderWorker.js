@@ -4,6 +4,10 @@ const { evaluateOrder, executeOrder } = require("../services/tradeService");
 const { isExecutableAssetType } = require("../utils/assetSupport");
 const { hasEventBus, publishOrderStatus } = require("../realtime/orderEvents");
 const { recordOrderEvent } = require("../services/orderEventService");
+const {
+  createOrderRejectedNotification,
+  createOrderExpiredNotification,
+} = require("../services/notificationEvents");
 const logger = require("../utils/logger");
 
 const DEFAULT_INTERVAL_MS = 5000;
@@ -196,7 +200,13 @@ async function expireOverdueOrders({
       side: true,
       type: true,
       quantity: true,
+      limitPrice: true,
       expiresAt: true,
+      portfolio: {
+        select: {
+          userId: true,
+        },
+      },
     },
     orderBy: [{ expiresAt: "asc" }, { id: "asc" }],
     take: limit,
@@ -233,6 +243,25 @@ async function expireOverdueOrders({
           message: error.message,
         });
       }
+    }
+
+    // `processOrder` creates this notification for expiries it handles. The
+    // sweep bypasses `processOrder`, so it must create the same row itself.
+    try {
+      const userId = order.portfolio?.userId;
+
+      if (userId) {
+        await createOrderExpiredNotification({
+          userId,
+          order,
+          reason: "ORDER_EXPIRED",
+        });
+      }
+    } catch (error) {
+      logger.warn("Failed to create order-expired notification", {
+        orderId: order.id,
+        error: error.message,
+      });
     }
   }
 
@@ -479,6 +508,40 @@ async function processOrder(order, options) {
     });
   }
 
+  if (outcome === "expired" || outcome === "rejected") {
+    try {
+      const userId =
+        order.portfolio?.userId ||
+        (
+          await prisma.portfolio.findUnique({
+            where: { id: order.portfolioId },
+            select: { userId: true },
+          })
+        )?.userId;
+
+      if (userId) {
+        if (outcome === "expired") {
+          await createOrderExpiredNotification({
+            userId,
+            order,
+            reason: "ORDER_EXPIRED",
+          });
+        } else {
+          await createOrderRejectedNotification({
+            userId,
+            order,
+            reason: "EXECUTION_REJECTED",
+          });
+        }
+      }
+    } catch (error) {
+      logger.warn(`Failed to create order-${outcome} notification`, {
+        orderId: order.id,
+        error: error.message,
+      });
+    }
+  }
+
   return outcome;
 }
 
@@ -561,6 +624,7 @@ async function processPendingOrders({
         select: {
           id: true,
           isActive: true,
+          userId: true,
         },
       },
     },

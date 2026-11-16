@@ -99,6 +99,78 @@ async function getGlobalLeaderboard({
   };
 }
 
+async function getLeaderboardHistory({
+  period = DEFAULT_PERIOD,
+  date,
+  from,
+  to,
+  page = 1,
+  limit = 20,
+} = {}) {
+  const where = {
+    scope: "GLOBAL",
+    period,
+    user: {
+      isSuspended: false,
+    },
+  };
+
+  let orderBy;
+
+  if (date) {
+    where.snapshotDate = normalizeSnapshotDate(date);
+    orderBy = [{ rank: "asc" }, { userId: "asc" }];
+  } else if (from || to) {
+    where.snapshotDate = {};
+    if (from) {
+      where.snapshotDate.gte = normalizeSnapshotDate(from);
+    }
+    if (to) {
+      where.snapshotDate.lte = normalizeSnapshotDate(to);
+    }
+    orderBy = [{ snapshotDate: "desc" }, { rank: "asc" }, { userId: "asc" }];
+  } else {
+    const latestSnapshotDate = await resolveSnapshotDate("GLOBAL", period);
+
+    if (!latestSnapshotDate) {
+      return emptyPage(page, limit);
+    }
+
+    where.snapshotDate = latestSnapshotDate;
+    orderBy = [{ rank: "asc" }, { userId: "asc" }];
+  }
+
+  const skip = (page - 1) * limit;
+
+  const [entries, total] = await Promise.all([
+    prisma.leaderboardEntry.findMany({
+      where,
+      include: {
+        user: {
+          select: ENTRY_USER_SELECT,
+        },
+      },
+      orderBy,
+      skip,
+      take: limit,
+    }),
+
+    prisma.leaderboardEntry.count({
+      where,
+    }),
+  ]);
+
+  return {
+    leaderboard: entries.map((entry) => serializeEntry(entry)),
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+    },
+  };
+}
+
 async function getFriendsLeaderboard(
   userId,
   { period = DEFAULT_PERIOD, page = 1, limit = 20 } = {},
@@ -265,18 +337,30 @@ function rankLeaderboard(totalsByUser, periodPnlByUser = new Map()) {
   }));
 }
 
+function assertNotAborted(signal) {
+  if (signal && signal.aborted) {
+    const err = new Error("Leaderboard snapshot generation aborted: lock lease lost.");
+    err.code = "LOCK_RENEWAL_FAILED";
+    throw err;
+  }
+}
+
 /**
  * Calculate and persist one GLOBAL leaderboard snapshot per supported period.
  * Portfolio value is cash plus the recorded invested basis of open holdings.
  * Period returns use realized P&L during that UTC period; ALL_TIME return uses
  * current portfolio value against total starting balance.
  */
-async function generateLeaderboardSnapshots({ date = new Date() } = {}) {
+async function generateLeaderboardSnapshots({ date = new Date(), signal = null } = {}) {
   const snapshotDate = normalizeSnapshotDate(date);
   const nextDay = new Date(snapshotDate);
   nextDay.setUTCDate(nextDay.getUTCDate() + 1);
 
+  assertNotAborted(signal);
+
   return prisma.$transaction(async (transaction) => {
+    assertNotAborted(signal);
+
     const portfolios = await transaction.portfolio.findMany({
       where: {
         user: {
@@ -296,6 +380,8 @@ async function generateLeaderboardSnapshots({ date = new Date() } = {}) {
       },
     });
 
+    assertNotAborted(signal);
+
     const totalsByUser = new Map();
     const userIdByPortfolioId = new Map();
 
@@ -307,6 +393,8 @@ async function generateLeaderboardSnapshots({ date = new Date() } = {}) {
     const results = [];
 
     for (const period of SNAPSHOT_PERIODS) {
+      assertNotAborted(signal);
+
       const periodStart = getPeriodStart(period, snapshotDate);
       const periodPnlByUser = new Map();
 
@@ -326,6 +414,8 @@ async function generateLeaderboardSnapshots({ date = new Date() } = {}) {
             realizedPnl: true,
           },
         });
+
+        assertNotAborted(signal);
 
         for (const row of portfolioPnl) {
           const userId = userIdByPortfolioId.get(row.portfolioId);
@@ -375,6 +465,8 @@ async function generateLeaderboardSnapshots({ date = new Date() } = {}) {
         update: {},
       });
 
+      assertNotAborted(signal);
+
       await transaction.leaderboardEntry.deleteMany({
         where: {
           scope: "GLOBAL",
@@ -383,6 +475,8 @@ async function generateLeaderboardSnapshots({ date = new Date() } = {}) {
         },
       });
 
+      assertNotAborted(signal);
+
       if (data.length > 0) {
         await transaction.leaderboardEntry.createMany({
           data: data.map((entry) => ({
@@ -390,10 +484,15 @@ async function generateLeaderboardSnapshots({ date = new Date() } = {}) {
             snapshotId: snapshot.id,
           })),
         });
+
+        assertNotAborted(signal);
       }
 
       results.push({ period, entries: data.length });
+      assertNotAborted(signal);
     }
+
+    assertNotAborted(signal);
 
     return {
       snapshotDate,
@@ -405,6 +504,7 @@ async function generateLeaderboardSnapshots({ date = new Date() } = {}) {
 module.exports = {
   getGlobalLeaderboard,
   getFriendsLeaderboard,
+  getLeaderboardHistory,
   generateLeaderboardSnapshots,
 
   // Exported for isolated unit testing

@@ -428,4 +428,333 @@ describe("Leaderboard integration API", () => {
       });
     }
   });
+
+  test("excludes suspended users from generated leaderboard snapshots", async () => {
+    const testDate = new Date("2099-06-18T00:00:00.000Z");
+
+    try {
+      await prisma.user.update({
+        where: { id: user3Id },
+        data: { isSuspended: true },
+      });
+
+      await generateLeaderboardSnapshots({ date: testDate });
+
+      const user3Entries = await prisma.leaderboardEntry.findMany({
+        where: {
+          userId: user3Id,
+          scope: "GLOBAL",
+          snapshotDate: testDate,
+        },
+      });
+
+      expect(user3Entries).toHaveLength(0);
+
+      const activeUserEntries = await prisma.leaderboardEntry.findMany({
+        where: {
+          userId: user1Id,
+          scope: "GLOBAL",
+          snapshotDate: testDate,
+        },
+      });
+
+      expect(activeUserEntries.length).toBeGreaterThan(0);
+    } finally {
+      await prisma.user.update({
+        where: { id: user3Id },
+        data: { isSuspended: false },
+      });
+
+      await prisma.leaderboardSnapshot.deleteMany({
+        where: {
+          scope: "GLOBAL",
+          snapshotDate: testDate,
+        },
+      });
+    }
+  });
+
+  test("rolls back transaction and persists no snapshots or entries when lock lease is lost during final period DB work", async () => {
+    const rollbackDate = new Date("2099-06-25T00:00:00.000Z");
+
+    await prisma.leaderboardEntry.deleteMany({
+      where: { snapshotDate: rollbackDate },
+    });
+    await prisma.leaderboardSnapshot.deleteMany({
+      where: { snapshotDate: rollbackDate },
+    });
+
+    const abortController = new AbortController();
+
+    // Intercept Prisma's interactive transaction client to simulate lease loss during final period (ALL_TIME) DB work
+    const origTransaction = prisma.$transaction.bind(prisma);
+    const transactionSpy = jest.spyOn(prisma, "$transaction").mockImplementation(async (cb, ...args) => {
+      if (typeof cb === "function") {
+        return origTransaction(async (tx) => {
+          const origUpsert = tx.leaderboardSnapshot.upsert.bind(tx.leaderboardSnapshot);
+          tx.leaderboardSnapshot.upsert = async (params) => {
+            const res = await origUpsert(params);
+            // In the final period (ALL_TIME), trigger the lost lease abort signal
+            if (params?.where?.scope_period_snapshotDate?.period === "ALL_TIME") {
+              abortController.abort();
+            }
+            return res;
+          };
+          return cb(tx);
+        }, ...args);
+      }
+      return origTransaction(cb, ...args);
+    });
+
+    try {
+      await expect(
+        generateLeaderboardSnapshots({
+          date: rollbackDate,
+          signal: abortController.signal,
+        }),
+      ).rejects.toMatchObject({
+        code: "LOCK_RENEWAL_FAILED",
+      });
+
+      // Verify database effects: the transaction must have rolled back completely.
+      // Even though DAILY, WEEKLY, and MONTHLY snapshots were already written during the loop,
+      // zero snapshots and zero entries must be persisted in the database.
+      const persistedSnapshots = await prisma.leaderboardSnapshot.findMany({
+        where: {
+          scope: "GLOBAL",
+          snapshotDate: rollbackDate,
+        },
+      });
+      expect(persistedSnapshots).toHaveLength(0);
+
+      const persistedEntries = await prisma.leaderboardEntry.findMany({
+        where: {
+          scope: "GLOBAL",
+          snapshotDate: rollbackDate,
+        },
+      });
+      expect(persistedEntries).toHaveLength(0);
+    } finally {
+      transactionSpy.mockRestore();
+      await prisma.leaderboardEntry.deleteMany({
+        where: { snapshotDate: rollbackDate },
+      });
+      await prisma.leaderboardSnapshot.deleteMany({
+        where: { snapshotDate: rollbackDate },
+      });
+    }
+  });
+
+  describe("GET /api/v1/leaderboard/history", () => {
+    test("rejects unauthenticated requests", async () => {
+      const response = await request(app).get("/api/v1/leaderboard/history");
+
+      expect(response.status).toBe(401);
+      expect(response.body.success).toBe(false);
+      expect(response.body.error.code).toBe("UNAUTHORIZED");
+    });
+
+    test("validates period, date formats, and conflicting parameters", async () => {
+      const invalidPeriod = await request(app)
+        .get("/api/v1/leaderboard/history?period=INVALID")
+        .set("Authorization", `Bearer ${user1AccessToken}`);
+      expect(invalidPeriod.status).toBe(400);
+
+      const invalidDate = await request(app)
+        .get("/api/v1/leaderboard/history?date=2026-13-45")
+        .set("Authorization", `Bearer ${user1AccessToken}`);
+      expect(invalidDate.status).toBe(400);
+
+      const conflicting = await request(app)
+        .get("/api/v1/leaderboard/history?date=2026-11-14&from=2026-11-01")
+        .set("Authorization", `Bearer ${user1AccessToken}`);
+      expect(conflicting.status).toBe(400);
+
+      const invalidRange = await request(app)
+        .get("/api/v1/leaderboard/history?from=2026-11-15&to=2026-11-10")
+        .set("Authorization", `Bearer ${user1AccessToken}`);
+      expect(invalidRange.status).toBe(400);
+    });
+
+    test("returns historical entries for an exact snapshot date ordered by rank", async () => {
+      const dateString = snapshotDate.toISOString().slice(0, 10);
+      const response = await request(app)
+        .get(`/api/v1/leaderboard/history?period=MONTHLY&date=${dateString}`)
+        .set("Authorization", `Bearer ${user1AccessToken}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      const { leaderboard, pagination } = response.body.data;
+      expect(pagination.total).toBe(3);
+      expect(leaderboard).toHaveLength(3);
+      expect(leaderboard.map((e) => e.rank)).toEqual([1, 2, 3]);
+      expect(leaderboard[0].userId).toBe(user1Id);
+    });
+
+    test("returns entries across date range ordered by snapshotDate desc, rank asc with pagination", async () => {
+      const olderDate = new Date(Date.UTC(2025, 0, 1));
+      const newerDate = new Date(Date.UTC(2025, 0, 2));
+
+      const olderSnapshot = await prisma.leaderboardSnapshot.create({
+        data: {
+          scope: "GLOBAL",
+          period: "DAILY",
+          snapshotDate: olderDate,
+        },
+      });
+      const newerSnapshot = await prisma.leaderboardSnapshot.create({
+        data: {
+          scope: "GLOBAL",
+          period: "DAILY",
+          snapshotDate: newerDate,
+        },
+      });
+
+      await prisma.leaderboardEntry.createMany({
+        data: [
+          {
+            userId: user1Id,
+            snapshotId: olderSnapshot.id,
+            scope: "GLOBAL",
+            period: "DAILY",
+            rank: 1,
+            totalValue: "10000",
+            returnPct: "5.0",
+            snapshotDate: olderDate,
+          },
+          {
+            userId: user2Id,
+            snapshotId: olderSnapshot.id,
+            scope: "GLOBAL",
+            period: "DAILY",
+            rank: 2,
+            totalValue: "9000",
+            returnPct: "2.0",
+            snapshotDate: olderDate,
+          },
+          {
+            userId: user1Id,
+            snapshotId: newerSnapshot.id,
+            scope: "GLOBAL",
+            period: "DAILY",
+            rank: 1,
+            totalValue: "12000",
+            returnPct: "8.0",
+            snapshotDate: newerDate,
+          },
+          {
+            userId: user2Id,
+            snapshotId: newerSnapshot.id,
+            scope: "GLOBAL",
+            period: "DAILY",
+            rank: 2,
+            totalValue: "11000",
+            returnPct: "6.0",
+            snapshotDate: newerDate,
+          },
+        ],
+      });
+
+      try {
+        const page1 = await request(app)
+          .get("/api/v1/leaderboard/history?period=DAILY&from=2025-01-01&to=2025-01-02&page=1&limit=2")
+          .set("Authorization", `Bearer ${user1AccessToken}`);
+
+        expect(page1.status).toBe(200);
+        expect(page1.body.data.pagination.total).toBe(4);
+        expect(page1.body.data.pagination.totalPages).toBe(2);
+        expect(page1.body.data.leaderboard).toHaveLength(2);
+        // newer date comes first (snapshotDate desc)
+        expect(page1.body.data.leaderboard[0].snapshotDate.slice(0, 10)).toBe("2025-01-02");
+        expect(page1.body.data.leaderboard[0].rank).toBe(1);
+        expect(page1.body.data.leaderboard[1].snapshotDate.slice(0, 10)).toBe("2025-01-02");
+        expect(page1.body.data.leaderboard[1].rank).toBe(2);
+
+        const page2 = await request(app)
+          .get("/api/v1/leaderboard/history?period=DAILY&from=2025-01-01&to=2025-01-02&page=2&limit=2")
+          .set("Authorization", `Bearer ${user1AccessToken}`);
+
+        expect(page2.status).toBe(200);
+        expect(page2.body.data.leaderboard).toHaveLength(2);
+        expect(page2.body.data.leaderboard[0].snapshotDate.slice(0, 10)).toBe("2025-01-01");
+        expect(page2.body.data.leaderboard[0].rank).toBe(1);
+        expect(page2.body.data.leaderboard[1].snapshotDate.slice(0, 10)).toBe("2025-01-01");
+        expect(page2.body.data.leaderboard[1].rank).toBe(2);
+      } finally {
+        await prisma.leaderboardSnapshot.deleteMany({
+          where: {
+            id: { in: [olderSnapshot.id, newerSnapshot.id] },
+          },
+        });
+      }
+    });
+
+    test("preserves stored ranks verbatim with gaps when suspended users are filtered", async () => {
+      const dateString = snapshotDate.toISOString().slice(0, 10);
+
+      try {
+        await prisma.user.update({
+          where: { id: user2Id },
+          data: { isSuspended: true },
+        });
+
+        const response = await request(app)
+          .get(`/api/v1/leaderboard/history?period=MONTHLY&date=${dateString}`)
+          .set("Authorization", `Bearer ${user1AccessToken}`);
+
+        expect(response.status).toBe(200);
+        const { leaderboard, pagination } = response.body.data;
+        expect(pagination.total).toBe(2);
+        expect(leaderboard).toHaveLength(2);
+
+        // User 2 (rank 2) is omitted; ranks 1 and 3 are preserved verbatim with a gap!
+        expect(leaderboard.map((e) => e.userId)).toEqual([user1Id, user3Id]);
+        expect(leaderboard.map((e) => e.rank)).toEqual([1, 3]);
+      } finally {
+        await prisma.user.update({
+          where: { id: user2Id },
+          data: { isSuspended: false },
+        });
+      }
+    });
+
+    test("defaults to latest snapshot date when no date or range is provided", async () => {
+      const defaultDate = new Date("2099-01-01T00:00:00.000Z");
+      const testSnapshot = await prisma.leaderboardSnapshot.create({
+        data: {
+          scope: "GLOBAL",
+          period: "ALL_TIME",
+          snapshotDate: defaultDate,
+        },
+      });
+
+      await prisma.leaderboardEntry.create({
+        data: {
+          userId: user1Id,
+          snapshotId: testSnapshot.id,
+          scope: "GLOBAL",
+          period: "ALL_TIME",
+          rank: 1,
+          totalValue: "15000",
+          returnPct: "15.0",
+          snapshotDate: defaultDate,
+        },
+      });
+
+      try {
+        const response = await request(app)
+          .get("/api/v1/leaderboard/history")
+          .set("Authorization", `Bearer ${user1AccessToken}`);
+
+        expect(response.status).toBe(200);
+        expect(response.body.data.leaderboard.length).toBeGreaterThan(0);
+        expect(response.body.data.leaderboard[0].rank).toBe(1);
+        expect(response.body.data.leaderboard[0].period).toBe("ALL_TIME");
+      } finally {
+        await prisma.leaderboardSnapshot.deleteMany({
+          where: { id: testSnapshot.id },
+        });
+      }
+    });
+  });
 });

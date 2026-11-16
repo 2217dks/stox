@@ -16,6 +16,14 @@ const feedQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
 
   limit: z.coerce.number().int().min(1).max(100).default(20),
+
+  sort: z.enum(["latest", "trending"]).default("latest"),
+
+  asOf: z
+    .string()
+    .trim()
+    .refine((val) => !val || !isNaN(Date.parse(val)), "Invalid asOf date.")
+    .optional(),
 });
 
 const createPostSchema = z.object({
