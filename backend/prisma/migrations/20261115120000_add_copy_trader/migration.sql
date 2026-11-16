@@ -9,7 +9,10 @@ CREATE TABLE "CopyTrader" (
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMP(3) NOT NULL,
 
-    CONSTRAINT "CopyTrader_pkey" PRIMARY KEY ("id")
+    CONSTRAINT "CopyTrader_pkey" PRIMARY KEY ("id"),
+    CONSTRAINT "CopyTrader_allocationPct_check" CHECK ("allocationPct" > 0 AND "allocationPct" <= 100),
+    CONSTRAINT "CopyTrader_copierId_copiedId_check" CHECK ("copierId" <> "copiedId"),
+    CONSTRAINT "CopyTrader_maxTradeSize_check" CHECK ("maxTradeSize" IS NULL OR "maxTradeSize" > 0)
 );
 
 -- CreateIndex

@@ -453,6 +453,9 @@ model Follow {
 // COPY TRADER
 // ============================================================
 
+// PostgreSQL CHECK constraints for allocationPct, maxTradeSize, and distinct
+// copier/copied users are defined in the CopyTrader migration. Prisma Schema
+// Language does not represent these constraints, so keep the migration in sync.
 model CopyTrader {
   id String @id @default(uuid())
 
