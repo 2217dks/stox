@@ -529,6 +529,12 @@ Place an order.
 }
 ```
 
+#### Competition / League Portfolio Constraints
+- **Active Competition Window Only**: If `portfolioId` belongs to a competition league (`isLeague: true`), orders can only be placed while the league is active ($startDate \le now \le endDate$).
+  - Pre-start attempts return `400 LEAGUE_NOT_ACTIVE`.
+  - Post-end attempts return `400 LEAGUE_ENDED`.
+- **Short Selling Prohibited**: Naked short selling is disallowed on competition portfolios. Sell orders that exceed current held long shares return `400 SHORT_SELLING_DISALLOWED`.
+
 ## `GET /orders/:id`
 
 Get order details.
@@ -1132,19 +1138,12 @@ Get single league details including participant member count.
 
 Join an upcoming league.
 
-### Late-Join Restriction & Portfolios
+### League Portfolio Isolation & Restrictions
 
+- **Dedicated competition portfolios**: Every participant is provisioned an isolated competition portfolio initialized with `league.startingBalance`. Reusing or linking pre-existing personal portfolios is strictly disallowed (`portfolioId` in request is rejected with `400 PORTFOLIO_ASSIGNMENT_NOT_SUPPORTED`).
+- **Atomic capacity check**: Capacity is enforced atomically with a row lock (`SELECT ... FOR UPDATE` on `League`); if `currentParticipants >= maxParticipants`, returns `400 LEAGUE_FULL`.
 - **Strict registration deadline**: Late joining is disallowed once the competition starts (`joinedAt <= startDate` required; requires status `UPCOMING` and `now < startDate`). Attempting to join after start returns `400 LEAGUE_ALREADY_STARTED`.
 - **Duplicate joins**: A user can join each league once; duplicate join returns `409 ALREADY_JOINED`.
-- **Portfolio assignment**: Users may optionally pass a `portfolioId` belonging to them. If omitted, the system automatically creates a dedicated competition portfolio initialized with `league.startingBalance`.
-
-### Request Body (Optional)
-
-```json
-{
-  "portfolioId": "uuid"
-}
-```
 
 ## `GET /leagues/:id/leaderboard`
 
@@ -1154,7 +1153,9 @@ Get live or finalized rankings for a league.
 
 $$\text{Return \%} = \frac{\text{Current Valuation} - \text{startingBalance}}{\text{startingBalance}} \times 100$$
 
-- **Trade filtering**: Trades outside the competition window ($[startDate, endDate]$) are strictly excluded from score and trade count calculations. Out-of-range trades are never rejected at order execution.
+- **Fee accounting**: Net cash strictly deducts all trade transaction fees via the `Trade.fees` column.
+- **Position valuation & short liabilities**: Long holdings add `quantity * marketPrice`; short position liabilities are deducted (`quantity * marketPrice` where `quantity < 0`).
+- **Strict market data enforcement**: Live and historical market quotes are strictly enforced. If market data is unavailable or fails, returns `503 MARKET_DATA_PROVIDER_UNAVAILABLE` (substituting trade execution prices is strictly prohibited).
 - **Tie-breaker hierarchy**:
   1. `returnPct DESC`
   2. `totalValue DESC`
@@ -1162,7 +1163,7 @@ $$\text{Return \%} = \frac{\text{Current Valuation} - \text{startingBalance}}{\t
   4. `joinedAt ASC`
   5. `userId ASC`
 - **Zero-trade participants**: Ranked strictly alongside all other participants using score and tie-breakers without artificial demotion.
-- **Finalization & immutability**: Upon completion ($now \ge endDate$ or status `COMPLETED`), final rankings and returns are persisted to `LeagueMember.rank` and `LeagueMember.finalReturn`, making outcomes permanent and immutable.
+- **Finalization & immutability**: Upon completion ($now \ge endDate$ or status `COMPLETED`), final rankings and returns are persisted to `LeagueMember.rank` and `LeagueMember.finalReturn` inside an atomic transaction, making outcomes permanent and immutable.
 
 ---
 
