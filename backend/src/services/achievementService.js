@@ -1,6 +1,7 @@
 const prisma = require("../config/database");
 const { Prisma } = require("@prisma/client");
 const { enqueueNotificationDelivery } = require("../queues/notificationQueue");
+const { calculatePortfolioValuation } = require("./portfolioValuationService");
 const logger = require("../utils/logger");
 
 const CATALOG = [
@@ -196,34 +197,40 @@ async function evaluateAndGrantAchievements(userId, context = {}) {
   }
 
   // 3. PORTFOLIO_MILESTONE (evaluated per portfolio: totalValue >= startingBalance * 2)
+  // Calculates valuation at real-time market prices; does not award or fall back to cost basis when prices are unavailable.
   if (!unlockedCodes.has("PORTFOLIO_MILESTONE")) {
     const portfolios = await prisma.portfolio.findMany({
-      where: { userId },
+      where: { userId, isActive: true },
       select: {
         id: true,
-        cashBalance: true,
         startingBalance: true,
-        holdings: {
-          select: {
-            totalInvested: true,
-          },
-        },
       },
     });
 
     for (const portfolio of portfolios) {
-      if (portfolio.startingBalance.gt(0)) {
-        const holdingsValue = portfolio.holdings.reduce(
-          (sum, h) => sum.plus(h.totalInvested),
-          new Prisma.Decimal(0),
-        );
-        const totalValue = portfolio.cashBalance.plus(holdingsValue);
+      if (portfolio.startingBalance && new Prisma.Decimal(portfolio.startingBalance).gt(0)) {
+        try {
+          const valuation = await calculatePortfolioValuation(portfolio.id, {
+            priceProvider: context.priceProvider,
+          });
 
-        if (totalValue.gte(portfolio.startingBalance.mul(2))) {
-          const grant = await grantAchievement(userId, "PORTFOLIO_MILESTONE");
-          if (grant) granted.push(grant);
-          unlockedCodes.add("PORTFOLIO_MILESTONE");
-          break;
+          const startingBalance = new Prisma.Decimal(portfolio.startingBalance);
+          const targetBalance = startingBalance.mul(2);
+
+          if (valuation.totalValue.gte(targetBalance)) {
+            const grant = await grantAchievement(userId, "PORTFOLIO_MILESTONE");
+            if (grant) granted.push(grant);
+            unlockedCodes.add("PORTFOLIO_MILESTONE");
+            break;
+          }
+        } catch (error) {
+          // If market data is unavailable or valuation fails, do NOT fall back to cost basis.
+          // Log a warning and skip evaluating this portfolio for now.
+          logger.warn("Portfolio valuation unavailable during milestone evaluation", {
+            userId,
+            portfolioId: portfolio.id,
+            error: error.message,
+          });
         }
       }
     }
