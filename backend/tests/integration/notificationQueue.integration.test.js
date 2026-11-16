@@ -74,8 +74,13 @@ async function makeNotification(userId, overrides = {}) {
 }
 
 describe("Notification queue integration", () => {
-  beforeAll(() => {
+  beforeAll(async () => {
     jest.setTimeout(20000);
+    await prisma.notification.deleteMany({
+      where: {
+        deliveryStatus: { in: ["PENDING", "SENDING"] },
+      },
+    });
   });
 
   afterEach(async () => {

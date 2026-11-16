@@ -33,16 +33,25 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  if (userId) {
-    await prisma.userAchievement.deleteMany({ where: { userId } });
-    await prisma.notification.deleteMany({ where: { userId } });
-    await prisma.trade.deleteMany({ where: { portfolioId } });
-    await prisma.order.deleteMany({ where: { portfolioId } });
-    await prisma.portfolio.deleteMany({ where: { userId } });
-    await prisma.user.deleteMany({ where: { id: userId } });
+  try {
+    if (userId) {
+      await prisma.userAchievement.deleteMany({ where: { userId } });
+      await prisma.notification.deleteMany({ where: { userId } });
+      await prisma.trade.deleteMany({ where: { portfolioId } });
+      await prisma.order.deleteMany({ where: { portfolioId } });
+      await prisma.portfolio.deleteMany({ where: { userId } });
+      await prisma.user.deleteMany({ where: { id: userId } });
+    }
+    // Clean up notifications and achievements created across users during reconcile tests
+    await prisma.notification.deleteMany({
+      where: { type: "ACHIEVEMENT_UNLOCKED" },
+    });
+    await prisma.userAchievement.deleteMany({});
+  } catch (err) {
+    // best-effort cleanup
+  } finally {
+    await prisma.$disconnect();
   }
-
-  await prisma.$disconnect();
 });
 
 describe("Achievements Integration", () => {

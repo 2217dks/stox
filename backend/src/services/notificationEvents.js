@@ -62,7 +62,7 @@ async function createOrderCancelledNotification({
         ? order.limitPrice.toString()
         : null;
 
-  return prisma.notification.create({
+  const notification = await prisma.notification.create({
     data: {
       userId,
       type: "ORDER_CANCELLED",
@@ -78,6 +78,17 @@ async function createOrderCancelledNotification({
       },
     },
   });
+
+  void enqueueNotificationDelivery({ notificationId: notification.id }).catch(
+    (error) => {
+      logger.warn("Notification delivery enqueue failed", {
+        notificationId: notification.id,
+        message: error.message,
+      });
+    },
+  );
+
+  return notification;
 }
 
 async function createOrderRejectedNotification({
@@ -97,7 +108,7 @@ async function createOrderRejectedNotification({
         ? order.limitPrice.toString()
         : null;
 
-  return prisma.notification.create({
+  const notification = await prisma.notification.create({
     data: {
       userId,
       type: "ORDER_REJECTED",
@@ -113,6 +124,17 @@ async function createOrderRejectedNotification({
       },
     },
   });
+
+  void enqueueNotificationDelivery({ notificationId: notification.id }).catch(
+    (error) => {
+      logger.warn("Notification delivery enqueue failed", {
+        notificationId: notification.id,
+        message: error.message,
+      });
+    },
+  );
+
+  return notification;
 }
 
 async function createOrderExpiredNotification({
@@ -127,7 +149,7 @@ async function createOrderExpiredNotification({
         ? order.limitPrice.toString()
         : null;
 
-  return prisma.notification.create({
+  const notification = await prisma.notification.create({
     data: {
       userId,
       type: "ORDER_EXPIRED",
@@ -143,6 +165,17 @@ async function createOrderExpiredNotification({
       },
     },
   });
+
+  void enqueueNotificationDelivery({ notificationId: notification.id }).catch(
+    (error) => {
+      logger.warn("Notification delivery enqueue failed", {
+        notificationId: notification.id,
+        message: error.message,
+      });
+    },
+  );
+
+  return notification;
 }
 
 module.exports = {

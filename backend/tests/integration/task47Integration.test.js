@@ -3,14 +3,23 @@ const { Prisma } = require("@prisma/client");
 
 const app = require("../../src/app");
 const prisma = require("../../src/config/database");
+const marketDataService = require("../../src/services/marketData");
 
 const timestamp = Date.now();
 
 let userId, userToken, portfolioId;
 let createdLeagueIds = [];
+let quoteSpy;
 
 beforeAll(async () => {
   jest.setTimeout(30000);
+
+  quoteSpy = jest.spyOn(marketDataService, "getQuote").mockResolvedValue({
+    symbol: "AAPL",
+    price: "150",
+    bid: "149.95",
+    ask: "150.05",
+  });
 
   const regRes = await request(app).post("/api/v1/auth/register").send({
     name: "Task47 E2E User",
@@ -28,6 +37,10 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (quoteSpy) {
+    quoteSpy.mockRestore();
+  }
+
   try {
     for (const leagueId of createdLeagueIds) {
       await prisma.leagueMember.deleteMany({ where: { leagueId } });
@@ -46,6 +59,11 @@ afterAll(async () => {
       await prisma.portfolio.deleteMany({ where: { userId } });
       await prisma.user.deleteMany({ where: { id: userId } });
     }
+
+    await prisma.notification.deleteMany({
+      where: { type: "ACHIEVEMENT_UNLOCKED" },
+    });
+    await prisma.userAchievement.deleteMany({});
   } catch (err) {
     // best-effort cleanup
   } finally {

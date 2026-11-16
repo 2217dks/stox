@@ -222,6 +222,12 @@ describe("Notification integration API", () => {
       expect(notification.data.side).toBe("BUY");
       expect(notification.data.reason).toBe("USER_CANCELLED");
     } finally {
+      await prisma.notification.deleteMany({
+        where: {
+          userId: user1Id,
+          type: "ORDER_CANCELLED",
+        },
+      });
       await prisma.order.deleteMany({ where: { portfolioId: portfolio.id } });
       await prisma.portfolio.deleteMany({ where: { id: portfolio.id } });
     }

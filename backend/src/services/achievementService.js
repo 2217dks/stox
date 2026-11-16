@@ -1,5 +1,6 @@
 const prisma = require("../config/database");
 const { Prisma } = require("@prisma/client");
+const { enqueueNotificationDelivery } = require("../queues/notificationQueue");
 const logger = require("../utils/logger");
 
 const CATALOG = [
@@ -104,7 +105,7 @@ async function grantAchievement(userId, achievementCode) {
 
   if (newlyGranted) {
     try {
-      await prisma.notification.create({
+      const notification = await prisma.notification.create({
         data: {
           userId,
           type: "ACHIEVEMENT_UNLOCKED",
@@ -118,6 +119,15 @@ async function grantAchievement(userId, achievementCode) {
           },
         },
       });
+
+      void enqueueNotificationDelivery({ notificationId: notification.id }).catch(
+        (error) => {
+          logger.warn("Notification delivery enqueue failed", {
+            notificationId: notification.id,
+            message: error.message,
+          });
+        },
+      );
     } catch (notificationError) {
       logger.warn("Failed to create achievement unlocked notification", {
         userId,
