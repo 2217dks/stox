@@ -4,6 +4,7 @@ const authMiddleware = require("../middleware/auth");
 const validate = require("../middleware/validation");
 const {
   leaderboardQuerySchema,
+  leaderboardHistoryQuerySchema,
 } = require("../validators/leaderboardValidator");
 const leaderboardController = require("../controllers/leaderboardController");
 
@@ -21,6 +22,13 @@ router.get(
   authMiddleware,
   validate(leaderboardQuerySchema, "query", "validatedQuery"),
   leaderboardController.friends,
+);
+
+router.get(
+  "/history",
+  authMiddleware,
+  validate(leaderboardHistoryQuerySchema, "query", "validatedQuery"),
+  leaderboardController.history,
 );
 
 module.exports = router;

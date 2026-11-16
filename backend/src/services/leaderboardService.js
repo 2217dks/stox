@@ -99,6 +99,78 @@ async function getGlobalLeaderboard({
   };
 }
 
+async function getLeaderboardHistory({
+  period = DEFAULT_PERIOD,
+  date,
+  from,
+  to,
+  page = 1,
+  limit = 20,
+} = {}) {
+  const where = {
+    scope: "GLOBAL",
+    period,
+    user: {
+      isSuspended: false,
+    },
+  };
+
+  let orderBy;
+
+  if (date) {
+    where.snapshotDate = normalizeSnapshotDate(date);
+    orderBy = [{ rank: "asc" }, { userId: "asc" }];
+  } else if (from || to) {
+    where.snapshotDate = {};
+    if (from) {
+      where.snapshotDate.gte = normalizeSnapshotDate(from);
+    }
+    if (to) {
+      where.snapshotDate.lte = normalizeSnapshotDate(to);
+    }
+    orderBy = [{ snapshotDate: "desc" }, { rank: "asc" }, { userId: "asc" }];
+  } else {
+    const latestSnapshotDate = await resolveSnapshotDate("GLOBAL", period);
+
+    if (!latestSnapshotDate) {
+      return emptyPage(page, limit);
+    }
+
+    where.snapshotDate = latestSnapshotDate;
+    orderBy = [{ rank: "asc" }, { userId: "asc" }];
+  }
+
+  const skip = (page - 1) * limit;
+
+  const [entries, total] = await Promise.all([
+    prisma.leaderboardEntry.findMany({
+      where,
+      include: {
+        user: {
+          select: ENTRY_USER_SELECT,
+        },
+      },
+      orderBy,
+      skip,
+      take: limit,
+    }),
+
+    prisma.leaderboardEntry.count({
+      where,
+    }),
+  ]);
+
+  return {
+    leaderboard: entries.map((entry) => serializeEntry(entry)),
+    pagination: {
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+    },
+  };
+}
+
 async function getFriendsLeaderboard(
   userId,
   { period = DEFAULT_PERIOD, page = 1, limit = 20 } = {},
@@ -405,6 +477,7 @@ async function generateLeaderboardSnapshots({ date = new Date() } = {}) {
 module.exports = {
   getGlobalLeaderboard,
   getFriendsLeaderboard,
+  getLeaderboardHistory,
   generateLeaderboardSnapshots,
 
   // Exported for isolated unit testing
