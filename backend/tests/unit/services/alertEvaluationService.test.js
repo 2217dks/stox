@@ -162,6 +162,59 @@ describe("alert evaluation service", () => {
     expect(prisma.$transaction).not.toHaveBeenCalled();
   });
 
+  test("does not evaluate a quote older than the freshness limit", async () => {
+    const now = new Date("2026-01-01T00:10:00.000Z");
+    const quote = {
+      ...makeQuote("210"),
+      timestamp: "2026-01-01T00:00:00.000Z",
+    };
+
+    const result = await evaluateAlertWithQuote(makeAlert(), quote, {
+      now: () => now,
+    });
+
+    expect(result).toMatchObject({
+      outcome: "stale_quote",
+      alertId: ALERT_ID,
+      quoteTimestamp: quote.timestamp,
+      maxAgeMs: 300000,
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(prisma.alert.updateMany).not.toHaveBeenCalled();
+  });
+
+  test("allows a quote without a provider timestamp", async () => {
+    const result = await evaluateAlertWithQuote(makeAlert(), makeQuote("150"));
+
+    expect(result).toMatchObject({ outcome: "not_triggered", price: "150" });
+  });
+
+  test("counts stale quotes in the scan result without triggering alerts", async () => {
+    const alert = makeAlert();
+    prisma.alert.findMany.mockResolvedValue([alert]);
+    const quoteProvider = {
+      getQuote: jest.fn(async () => ({
+        ...makeQuote("210"),
+        timestamp: "2026-01-01T00:00:00.000Z",
+      })),
+    };
+
+    const result = await scanActiveAlerts(
+      {},
+      {
+        quoteProvider,
+        now: () => new Date("2026-01-01T00:10:00.000Z"),
+      },
+    );
+
+    expect(result).toMatchObject({ scanned: 1, staleQuotes: 1, triggered: 0 });
+    expect(result.results[0]).toMatchObject({
+      outcome: "stale_quote",
+      alertId: ALERT_ID,
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
   test("claims the alert and creates one notification when triggered", async () => {
     const alert = makeAlert();
     const quote = makeQuote("210");
