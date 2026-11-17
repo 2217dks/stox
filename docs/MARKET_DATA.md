@@ -54,49 +54,65 @@ Both provide **WebSocket streams** for real-time data and **REST APIs** for hist
 
 ---
 
-## 🔤 Symbol Normalization
+## 🔤 Symbol Normalization & Canonical Mapping Layer
+
+stox centralizes all instrument mapping, asset class inference, provider translation, and display formatting in `backend/src/services/symbolMappingService.js` (and re-exports helpers via `symbolUtils.js`):
 
 ```javascript
-// services/marketDataService.js
+const {
+    toCanonicalSymbol,
+    toProviderSymbol,
+    toDisplaySymbol,
+    parseSymbol,
+    inferAssetClass,
+    normalizeAssetClass,
+    resolveSymbol,
+} = require("./services/symbolMappingService");
 
-// Stocks are the default: any ticker Finnhub recognises, not a fixed list.
-// Crypto is inferred only for "BINANCE:..." or a pair with a real base asset
-// and one of the adapter-supported quote assets (USDT, BTC, ETH).
-const CRYPTO_PAIR = /^([A-Z0-9]{2,20})(?:USDT|BTC|ETH)$/;
+// 1. Canonical symbol mapping (provider-agnostic domain identity):
+toCanonicalSymbol("BINANCE:BTCUSDT");   // -> "BTCUSDT"
+toCanonicalSymbol("BTC/USDT");           // -> "BTCUSDT"
+toCanonicalSymbol("FINNHUB:AAPL");       // -> "AAPL"
 
-function inferAssetClass(symbol) {
-    if (symbol.startsWith("BINANCE:")) return "CRYPTO";
-    return CRYPTO_PAIR.test(symbol) ? "CRYPTO" : "STOCK";
-}
+// 2. Provider-specific translation:
+toProviderSymbol("BTCUSDT", "binance");  // -> "BTCUSDT" (for Binance REST & streams)
+toProviderSymbol("AAPL", "finnhub");     // -> "AAPL"    (for Finnhub REST /quote)
 
-export function parseSymbol(symbol) {
-    if (symbol.startsWith("BINANCE:")) {
-        return {
-            exchange: "BINANCE",
-            pair: symbol.replace("BINANCE:", ""),
-            assetType: "CRYPTO",
-        };
-    }
-    return {
-        exchange: "FINNHUB",
-        ticker: symbol,
-        assetType: "STOCK",
-    };
-}
+// 3. Human display formatting:
+toDisplaySymbol("BTCUSDT");              // -> "BTC/USDT"
+toDisplaySymbol("AAPL");                 // -> "AAPL"
 
-export function formatSymbolForDisplay(symbol) {
-    if (symbol.startsWith("BINANCE:")) {
-        const pair = symbol.replace("BINANCE:", "");
-        return pair.replace("USDT", "/USDT");
-    }
-    return symbol;
-}
+// 4. Structured metadata parsing:
+parseSymbol("BINANCE:BTC/USDT");
+// -> {
+//      canonicalSymbol: "BTCUSDT",
+//      providerSymbol: "BTCUSDT",
+//      displaySymbol: "BTC/USDT",
+//      assetClass: "CRYPTO",
+//      provider: "binance",
+//      exchange: "BINANCE",
+//      baseAsset: "BTC",
+//      quoteAsset: "USDT"
+//    }
+
+// 5. Database-backed resolution with PostgreSQL Prisma `Symbol` model:
+const instrument = await resolveSymbol("AAPL", { prisma });
+// -> {
+//      canonicalSymbol: "AAPL",
+//      assetClass: "STOCK",
+//      name: "Apple Inc.",
+//      exchange: "NASDAQ",
+//      source: "database"
+//    }
 ```
 
-A bare suffix is not enough: tickers such as `GBTC` and `METH` end in `BTC`
-and `ETH` but are stocks. Clients can also pass an explicit `assetClass` to
-override inference for genuinely ambiguous symbols. Examples such as `AAPL`
-and `MSFT` are illustrative; they are not an allow-list.
+### Ambiguous Symbols & Disambiguation Rules
+
+A bare suffix is not enough: tickers such as `GBTC`, `METH`, `SOL`, `COIN`, `RIOT`, `BITO`, and `ETHE` end in crypto quote assets or overlap crypto tickers, but represent equities or ETFs.
+- Symbols in `KNOWN_AMBIGUOUS_STOCKS` default to `STOCK`.
+- Non-empty base assets of at least 2 characters before quote assets (`USDT`, `BTC`, `ETH`) infer `CRYPTO`.
+- Clients can pass an explicit `assetClass` (`STOCK` or `CRYPTO`) to override inference for ambiguous instruments.
+- Database records in the PostgreSQL `Symbol` model are authoritative for instrument `assetType` (`STOCK`, `CRYPTO`, `FOREX`), and attempting to query a symbol with a conflicting `assetClass` throws `400 ASSET_TYPE_MISMATCH`.
 
 ---
 

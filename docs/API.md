@@ -633,6 +633,16 @@ Get trade details.
 
 # 📊 Market Data
 
+### Symbol Conventions & Mapping Layer
+
+Stox decouples internal canonical instruments from provider-specific formats:
+- **Canonical Symbols**: Internal, provider-agnostic domain representations (e.g. `BTCUSDT`, `AAPL`). Decoupled from transport prefixes (`BINANCE:`, `FINNHUB:`) and formatting slashes (`/`).
+- **Provider Representations**:
+  - **Crypto (Binance)**: API endpoints accept `BTCUSDT`, `BINANCE:BTCUSDT`, and `BTC/USDT` interchangeably. Transport prefixes are stripped and slash pairs are canonicalized automatically.
+  - **Stocks (Finnhub)**: Standard equity tickers (e.g. `AAPL`, `MSFT`, `BRK.B`).
+- **Ambiguous Tickers**: Symbols like `GBTC`, `METH`, `SOL`, `COIN`, `RIOT`, and `BITO` default to `STOCK`. Specify `assetClass=CRYPTO` (or pass explicit asset class in orders) to override.
+- **Database Resolution**: PostgreSQL `Symbol` model records are authoritative for instrument metadata (`assetType`, `exchange`, `currency`, `isActive`). Discrepancies between requested asset classes and registered symbols reject with `400 ASSET_TYPE_MISMATCH`.
+
 ## `GET /market/search`
 
 Search supported stocks and crypto pairs through the configured market-data providers.
