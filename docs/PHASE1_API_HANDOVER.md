@@ -167,6 +167,8 @@ Creates a market, limit, stop-loss, or take-profit order. Body:
 
 `assetType` is `STOCK`, `CRYPTO`, or `FOREX`; `side` is `BUY`/`SELL`; `type` defaults to `MARKET`. Quantity and prices are positive decimal strings (or numbers converted to strings), at most 10 integer digits and 8 decimal places. `MARKET` forbids prices; `LIMIT` requires `limitPrice`; `STOP_LOSS` and `TAKE_PROFIT` require `stopPrice` and forbid `limitPrice`. Returns `201` as `{ data:{ order } }`. Business failures include insufficient cash/position, invalid order state, and non-owner portfolio errors.
 
+Optional `expiresAt` is an ISO-8601 instant with an explicit UTC offset (`Z` or `±HH:MM`) and must be in the future; a value without an offset, an unparseable value, or a past instant is `400 VALIDATION_ERROR`. The worker moves a pending order to `EXPIRED` when `expiresAt <= now`, releases its cash reservation, and records an `EXPIRED` order event. Orders without `expiresAt` never expire. The response includes `expiresAt` (ISO-8601 or `null`).
+
 #### `GET /orders`
 
 Query: `page`, `limit`; optional `status` (single or comma-separated `PENDING|EXECUTED|CANCELLED|EXPIRED|REJECTED`), `symbol`, `side`, `type`, `portfolioId`, `from`, `to`. Example: `/orders?status=PENDING,EXECUTED&symbol=aapl&page=1&limit=20`. Returns `200` with the service list result, normally `{ data:{ orders:[...], pagination:{...} } }`.
@@ -174,6 +176,10 @@ Query: `page`, `limit`; optional `status` (single or comma-separated `PENDING|EX
 #### `GET /orders/:id`
 
 UUID order ID. Returns `200` as `{ data:{ order } }`; an order outside the caller's scope is treated as not found.
+
+#### `GET /orders/:id/events`
+
+UUID order ID. Returns `200` as `{ data:{ events:[...] } }`, the order's lifecycle audit trail in chronological `sequence` order. Each event has `id`, `orderId`, `sequence`, `eventType` (`CREATED|EXECUTED|CANCELLED|EXPIRED|REJECTED`), `previousStatus`, `newStatus`, `metadata`, and `createdAt`. Foreign or missing orders are `404 ORDER_NOT_FOUND`.
 
 #### `DELETE /orders/:id`
 
@@ -192,6 +198,48 @@ Query: `page`, `limit`, optional uppercase-normalized `symbol`, `side`, `portfol
 #### `GET /trades/:id`
 
 UUID trade ID. Returns `200` as `{ data:{ trade } }`; inaccessible IDs are not disclosed.
+
+### Copy trading
+
+All copy-trading routes are authenticated and scoped to the caller as the copier. A relationship is identified by its UUID and is invisible to other users (foreign and missing IDs both return `404 COPY_TRADING_NOT_FOUND`).
+
+#### `GET /copy-trading`
+
+Query: `page` (default `1`), `limit` (1–100, default `20`), optional `isActive=true|false`. Returns `200` as `{ data:{ copyTraders:[...], pagination:{ page, limit, total, totalPages } } }`. Each relationship contains:
+
+```json
+{"id":"...","copierId":"...","traderId":"...","trader":{"id":"...","name":"Asha","avatarUrl":null},"copyPortfolioId":"...","copyPortfolio":{"id":"...","name":"Main Portfolio"},"allocationPct":"50","maxTradeSize":"1000","isActive":true,"createdAt":"...","updatedAt":"..."}
+```
+
+Decimal values are strings.
+
+#### `POST /copy-trading`
+
+Starts copying another trader. Body:
+
+```json
+{"traderId":"<uuid>","allocationPct":"50","maxTradeSize":"1000","copyPortfolioId":"<uuid>","isActive":true}
+```
+
+- `traderId` is required and must be an existing, non-suspended user other than the caller.
+- `allocationPct` is optional (default `100`) and must satisfy `0 < allocationPct <= 100` with at most 2 decimal places.
+- `maxTradeSize` is optional (default `null`) and, when provided, must be greater than zero with at most 8 decimal places. It is a **notional (quote-currency) sizing cap** applied at fan-out using the source trade price. It bounds the copied quantity, not the follower's final executed notional: copied orders are `MARKET` orders and may fill at a different price. A strict execution-notional guarantee is not provided.
+- `copyPortfolioId` is optional. When omitted, the copier's default active portfolio is stored. When provided, it must belong to the caller and be active.
+- `isActive` is optional (default `true`).
+
+Returns `201` as `{ data:{ copyTrader } }`. Errors include `400 COPY_TRADING_SELF_REFERENCE`, `404 USER_NOT_FOUND`, `400 USER_SUSPENDED`, `404 PORTFOLIO_NOT_FOUND`, `400 PORTFOLIO_INACTIVE`, `400 COPY_TRADING_PORTFOLIO_REQUIRED`, and `409 COPY_TRADING_ALREADY_EXISTS` (the `[copierId, copiedId]` pair is unique, including paused relationships).
+
+#### `PATCH /copy-trading/:id`
+
+UUID path. Strict body with at least one of `allocationPct`, `maxTradeSize`, `copyPortfolioId`, or `isActive`. Send `null` for `maxTradeSize` or `copyPortfolioId` to clear it; a cleared destination falls back to the copier's default active portfolio at fan-out time. Returns `200` as `{ data:{ copyTrader } }`.
+
+#### `DELETE /copy-trading/:id`
+
+UUID path. Stops copying by setting `isActive=false` (a soft delete that preserves history); it is idempotent. Returns `200` as `{ data:{ copyTrader } }`. Re-enable the same relationship with `PATCH { "isActive": true }` rather than creating a duplicate pair.
+
+#### Copy execution semantics
+
+After a source order executes, the backend fans out one market order per active relationship where the source portfolio owner is the copied trader. Fan-out is post-commit, best-effort, and per-follower isolated: one follower's failure never rolls back the source trade or blocks another follower. The copied quantity is `sourceQuantity × allocationPct / 100`, capped by `maxTradeSize / sourcePrice` when a notional cap is set, and rounded down to 8 decimal places. Because the copied order is `MARKET`, the follower's actual fill price can differ from `sourcePrice`; `maxTradeSize` therefore caps the sized quantity, not the final executed notional. Copied orders use `source:"COPY_TRADE"`, are placed in `copyPortfolioId`, and pass through the normal reservation/execution path. A source trade whose own order is already `COPY_TRADE` is not copied again, which prevents copy chains. A durable `(sourceTradeId, copierId)` execution row makes replayed fan-out jobs idempotent; the recovery lookup runs before the retry-budget check so a committed order is never paired with a `FAILED` execution.
 
 ### Public market data
 
@@ -349,9 +397,9 @@ No admin write, analytics, audit-log, system-health, report, or market-data rout
 
 ## Confirmed absent from the current route graph
 
-The following paths appear in older API prose but are not registered under `backend/src/routes/index.js`: user portfolio/trade subroutes; portfolio performance and P&L heatmap; order modification (`PATCH /orders/:id`); market news/orderbook/trades; social user profile route; copy trading; leagues; achievements; sentiment; and all unmounted admin operations listed above. They should not be used by a Phase 1 client without a route being added and tested.
+The following paths appear in older API prose but are not registered under `backend/src/routes/index.js`: user portfolio/trade subroutes; portfolio performance and P&L heatmap; order modification (`PATCH /orders/:id`); market news/orderbook/trades; social user profile route; leagues; achievements; sentiment; and all unmounted admin operations listed above. They should not be used by a Phase 1 client without a route being added and tested.
 
 ## Test and implementation confidence
 
-The repository contains integration coverage for auth, portfolios, orders, trades, social, alerts, notifications, leaderboards, preferences, market data, validation, and trade execution, plus unit coverage for the main services and validators. Route registration is the source of truth for the catalogue above; examples are realistic request/response shapes assembled from validators and controller envelopes. Where a service's exact internal projection is not visible at the controller boundary (for example holdings and statistics fields), this document intentionally describes the confirmed envelope and labels the nested object as service-defined rather than inventing field names.
+The repository contains integration coverage for auth, portfolios, orders, trades, order events, copy trading, social, alerts, notifications, leaderboards, preferences, market data, validation, and trade execution, plus unit coverage for the main services and validators. Route registration is the source of truth for the catalogue above; examples are realistic request/response shapes assembled from validators and controller envelopes. Where a service's exact internal projection is not visible at the controller boundary (for example holdings and statistics fields), this document intentionally describes the confirmed envelope and labels the nested object as service-defined rather than inventing field names.
 

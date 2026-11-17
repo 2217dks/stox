@@ -525,9 +525,17 @@ Place an order.
     "side": "BUY",
     "type": "LIMIT",
     "quantity": "10",
-    "limitPrice": "250"
+    "limitPrice": "250",
+    "expiresAt": "2026-12-01T00:00:00.000Z"
 }
 ```
+
+`expiresAt` is optional and must be an ISO-8601 instant with an explicit UTC
+offset (`Z` or `±HH:MM`) in the future. The worker moves a pending order to
+`EXPIRED` once `expiresAt <= now`, releases its cash reservation, and records an
+`EXPIRED` order event. A value without an offset, an unparseable value, or a
+past instant is `400 VALIDATION_ERROR`. Orders without `expiresAt` never
+expire. The response includes `expiresAt` as an ISO string or `null`.
 
 #### Competition / League Portfolio Constraints
 - **Active Competition Window Only**: If `portfolioId` belongs to a competition league (`isLeague: true`), orders can only be placed while the league is active ($startDate \le now \le endDate$).
@@ -1020,9 +1028,15 @@ Get following.
 
 # 🔄 Copy Trading
 
+All copy-trading routes are authenticated and scoped to the caller as the
+copier. A relationship is identified by its UUID and is invisible to other
+users (foreign and missing IDs both return `404 COPY_TRADING_NOT_FOUND`).
+
 ## `GET /copy-trading`
 
-List active copy relationships.
+List the caller's copy relationships. Query: `page` (default `1`), `limit`
+(1–100, default `20`), optional `isActive=true|false`. Returns
+`{ data: { copyTraders: [...], pagination: {...} } }`.
 
 ## `POST /copy-trading`
 
@@ -1034,17 +1048,50 @@ Start copying a trader.
 {
     "traderId": "uuid",
     "allocationPct": "50",
-    "maxTradeSize": "1000"
+    "maxTradeSize": "1000",
+    "copyPortfolioId": "uuid",
+    "isActive": true
 }
 ```
 
+- `allocationPct` is optional (default `100`), must be `> 0` and `<= 100` with
+  at most 2 decimal places.
+- `maxTradeSize` is optional and, when provided, is a notional
+  (quote-currency) sizing cap greater than zero with at most 8 decimal places.
+  It is applied at fan-out using the source trade price, so it bounds the
+  copied quantity rather than the follower's final executed notional (copied
+  orders are `MARKET` and may fill at a different price).
+- `copyPortfolioId` is optional; when omitted the copier's default active
+  portfolio is stored. It must belong to the caller and be active.
+- `isActive` defaults to `true`.
+- `409 COPY_TRADING_ALREADY_EXISTS` covers the unique `[copierId, copiedId]`
+  pair, including paused relationships.
+
 ## `PATCH /copy-trading/:id`
 
-Update copy settings.
+Update copy settings. Strict body with at least one of `allocationPct`,
+`maxTradeSize`, `copyPortfolioId`, or `isActive`. Send `null` for
+`maxTradeSize` or `copyPortfolioId` to clear it. Returns
+`{ data: { copyTrader } }`.
 
 ## `DELETE /copy-trading/:id`
 
-Stop copying.
+Stop copying. This is a soft delete (`isActive = false`) and is idempotent.
+Re-enable the same relationship with `PATCH { "isActive": true }` instead of
+creating a duplicate pair.
+
+## Execution semantics
+
+After a source order executes, the backend places one `MARKET` order per active
+relationship whose copied trader owns the source portfolio. The copied quantity
+is `sourceQuantity × allocationPct / 100`, capped by
+`maxTradeSize / sourcePrice` when a notional cap is set, and rounded down to 8
+decimal places. Because the copied order is `MARKET`, the follower's actual fill
+price can differ from `sourcePrice`; `maxTradeSize` caps the sized quantity, not
+the final executed notional. Fan-out is post-commit, per-follower isolated, and
+guarded by a durable `(sourceTradeId, copierId)` execution row. A trade whose
+source order is already `COPY_TRADE` is not copied again, which prevents copy
+chains.
 
 ---
 

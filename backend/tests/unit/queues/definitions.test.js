@@ -1,6 +1,7 @@
 const {
   QUEUE_NAMES,
   ORDER_JOB_NAMES,
+  COPY_TRADE_JOB_NAMES,
   QUEUE_POLICIES,
   jobOptionsFor,
 } = require("../../../src/queues/definitions");
@@ -11,6 +12,7 @@ describe("queue definitions", () => {
       ORDERS: "orders",
       NOTIFICATIONS: "notifications",
       ALERTS: "alerts",
+      COPY_TRADES: "copy-trades",
     });
   });
 
@@ -19,6 +21,26 @@ describe("queue definitions", () => {
       EXECUTE_ORDER: "execute-order",
       SCAN_PENDING: "scan-pending",
     });
+  });
+
+  test("declares the copy-trade job names", () => {
+    expect(COPY_TRADE_JOB_NAMES).toEqual({
+      FAN_OUT: "fan-out-copy-trades",
+      SCAN_PENDING: "scan-pending",
+    });
+  });
+
+  test("copy-trade fan-out uses a bounded retry policy", () => {
+    const fanOut = jobOptionsFor(
+      QUEUE_NAMES.COPY_TRADES,
+      COPY_TRADE_JOB_NAMES.FAN_OUT,
+    );
+
+    expect(fanOut.attempts).toBe(3);
+    expect(fanOut.backoff).toEqual(
+      expect.objectContaining({ type: "exponential" }),
+    );
+    expect(fanOut.removeOnComplete).toBe(true);
   });
 
   test("every queue has a default retry policy", () => {

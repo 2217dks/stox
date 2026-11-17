@@ -15,6 +15,39 @@ const ZERO = new Prisma.Decimal(0);
 const MAX_MONEY = new Prisma.Decimal("9999999999.99999999");
 const MONEY_SCALE = 8;
 
+const ORDER_SOURCES = new Set(["MANUAL", "COPY_TRADE", "DCA_BOT", "LEAGUE"]);
+
+/**
+ * Validate an optional order expiry.
+ *
+ * The HTTP validator already rejects a past or offset-less instant. The
+ * service repeats the check because internal callers (copy-trade fan-out,
+ * admin tooling) can bypass the HTTP layer.
+ */
+function normalizeExpiresAt(expiresAt) {
+  if (expiresAt === null || expiresAt === undefined) {
+    return null;
+  }
+
+  const parsed = expiresAt instanceof Date ? expiresAt : new Date(expiresAt);
+
+  if (Number.isNaN(parsed.getTime())) {
+    throw AppError.badRequest(
+      "expiresAt must be a valid ISO datetime.",
+      "INVALID_EXPIRES_AT",
+    );
+  }
+
+  if (parsed.getTime() <= Date.now()) {
+    throw AppError.badRequest(
+      "expiresAt must be in the future.",
+      "INVALID_EXPIRES_AT",
+    );
+  }
+
+  return parsed;
+}
+
 /**
  * Calculate the cash that must be reserved for a BUY order.
  *
@@ -459,6 +492,9 @@ async function createOrder({
   quantity,
   limitPrice = null,
   stopPrice = null,
+  expiresAt = null,
+  source = "MANUAL",
+  copyTradeExecutionId = null,
 }) {
   await ensureActiveUser(userId);
 
@@ -469,6 +505,10 @@ async function createOrder({
       `Orders are not supported for the ${assetType} asset class.`,
       "UNSUPPORTED_ASSET_TYPE",
     );
+  }
+
+  if (!ORDER_SOURCES.has(source)) {
+    throw AppError.badRequest("Invalid order source.", "INVALID_ORDER_SOURCE");
   }
 
   const normalizedSymbol = symbol.trim().toUpperCase();
@@ -482,6 +522,21 @@ async function createOrder({
       "Quantity must be greater than zero.",
       "INVALID_QUANTITY",
     );
+  }
+
+  const normalizedExpiresAt = normalizeExpiresAt(expiresAt);
+
+  // Idempotency fast path for copied orders. A replayed fan-out must not call
+  // the quote provider or re-run the reservation just to discover that the
+  // order already committed.
+  if (copyTradeExecutionId) {
+    const existing = await prisma.order.findUnique({
+      where: { copyTradeExecutionId },
+    });
+
+    if (existing) {
+      return serializeOrder(existing);
+    }
   }
 
   // League portfolio restrictions:
@@ -522,7 +577,11 @@ async function createOrder({
       );
     }
 
-    if (league.status === "UPCOMING" && prisma.league && typeof prisma.league.update === "function") {
+    if (
+      league.status === "UPCOMING" &&
+      prisma.league &&
+      typeof prisma.league.update === "function"
+    ) {
       prisma.league
         .update({
           where: { id: league.id },
@@ -541,6 +600,7 @@ async function createOrder({
           })
         : null;
       const heldQty = holding ? new Prisma.Decimal(holding.quantity) : ZERO;
+
       if (heldQty.lt(new Prisma.Decimal(quantity))) {
         throw AppError.badRequest(
           "Short selling is not permitted in league portfolios. Insufficient shares held.",
@@ -562,98 +622,135 @@ async function createOrder({
     stopPrice,
   });
 
-  const order = await prisma.$transaction(async (tx) => {
-    // Serialize financial updates for this portfolio.
-    const portfolios = await tx.$queryRaw`
-      SELECT
-        "id",
-        "isActive",
-        "cashBalance",
-        "reservedCash"
-      FROM "Portfolio"
-      WHERE "id" = ${portfolioId}
-        AND "userId" = ${userId}
-      FOR UPDATE
-    `;
+  let reusedCopyOrder = false;
 
-    const portfolio = portfolios[0];
+  let order;
 
-    if (!portfolio) {
-      throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
-    }
+  try {
+    order = await prisma.$transaction(async (tx) => {
+      // Serialize financial updates for this portfolio.
+      const portfolios = await tx.$queryRaw`
+        SELECT
+          "id",
+          "isActive",
+          "cashBalance",
+          "reservedCash"
+        FROM "Portfolio"
+        WHERE "id" = ${portfolioId}
+          AND "userId" = ${userId}
+        FOR UPDATE
+      `;
 
-    if (!portfolio.isActive) {
-      throw AppError.badRequest("Portfolio is inactive.", "PORTFOLIO_INACTIVE");
-    }
+      const portfolio = portfolios[0];
 
-    const cashBalance = new Prisma.Decimal(portfolio.cashBalance);
-    const reservedCash = new Prisma.Decimal(portfolio.reservedCash);
-    const availableCash = cashBalance.minus(reservedCash);
+      if (!portfolio) {
+        throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+      }
 
-    if (availableCash.lt(reservation)) {
-      throw AppError.badRequest(
-        "Insufficient available portfolio cash.",
-        "INSUFFICIENT_BALANCE",
-        {
-          required: reservation.toString(),
-          available: availableCash.toString(),
-        },
-      );
-    }
+      if (!portfolio.isActive) {
+        throw AppError.badRequest(
+          "Portfolio is inactive.",
+          "PORTFOLIO_INACTIVE",
+        );
+      }
 
-    // Increase the portfolio's aggregate reservation.
-    if (reservation.gt(ZERO)) {
-      await tx.portfolio.update({
-        where: {
-          id: portfolioId,
-        },
-        data: {
-          reservedCash: {
-            increment: reservation,
+      const cashBalance = new Prisma.Decimal(portfolio.cashBalance);
+      const reservedCash = new Prisma.Decimal(portfolio.reservedCash);
+      const availableCash = cashBalance.minus(reservedCash);
+
+      if (availableCash.lt(reservation)) {
+        throw AppError.badRequest(
+          "Insufficient available portfolio cash.",
+          "INSUFFICIENT_BALANCE",
+          {
+            required: reservation.toString(),
+            available: availableCash.toString(),
           },
+        );
+      }
+
+      // Increase the portfolio's aggregate reservation.
+      if (reservation.gt(ZERO)) {
+        await tx.portfolio.update({
+          where: {
+            id: portfolioId,
+          },
+          data: {
+            reservedCash: {
+              increment: reservation,
+            },
+          },
+        });
+      }
+
+      // Create the order and its reservation in the same transaction.
+      const createdOrder = await tx.order.create({
+        data: {
+          portfolioId,
+          symbol: normalizedSymbol,
+          assetType,
+          side,
+          type,
+          status: "PENDING",
+          quantity,
+          reservedCash: reservation,
+          limitPrice,
+          stopPrice,
+          expiresAt: normalizedExpiresAt,
+          source,
+          copyTradeExecutionId,
         },
       });
+
+      await recordOrderEvent(tx, {
+        orderId: createdOrder.id,
+        eventType: "CREATED",
+        previousStatus: null,
+        newStatus: "PENDING",
+        metadata: {
+          symbol: normalizedSymbol,
+          assetType,
+          side,
+          type,
+          quantity: createdOrder.quantity.toString(),
+          reservedCash: reservation.toString(),
+          limitPrice: limitPrice ? limitPrice.toString() : null,
+          stopPrice: stopPrice ? stopPrice.toString() : null,
+          expiresAt: normalizedExpiresAt
+            ? normalizedExpiresAt.toISOString()
+            : null,
+          source,
+        },
+      });
+
+      return createdOrder;
+    });
+  } catch (error) {
+    // A copied order carries a unique execution id. If the order committed but
+    // the fan-out worker crashed before recording it, a replay must return the
+    // existing order instead of placing a second one.
+    if (error.code === "P2002" && copyTradeExecutionId) {
+      const existing = await prisma.order.findUnique({
+        where: { copyTradeExecutionId },
+      });
+
+      if (existing) {
+        order = existing;
+        reusedCopyOrder = true;
+      } else {
+        throw error;
+      }
+    } else {
+      throw error;
     }
-
-    // Create the order and its reservation in the same transaction.
-    const createdOrder = await tx.order.create({
-      data: {
-        portfolioId,
-        symbol: normalizedSymbol,
-        assetType,
-        side,
-        type,
-        status: "PENDING",
-        quantity,
-        reservedCash: reservation,
-        limitPrice,
-        stopPrice,
-        source: "MANUAL",
-      },
-    });
-
-    await recordOrderEvent(tx, {
-      orderId: createdOrder.id,
-      eventType: "CREATED",
-      previousStatus: null,
-      newStatus: "PENDING",
-      metadata: {
-        symbol: normalizedSymbol,
-        assetType,
-        side,
-        type,
-        quantity: createdOrder.quantity.toString(),
-        reservedCash: reservation.toString(),
-        limitPrice: limitPrice ? limitPrice.toString() : null,
-        stopPrice: stopPrice ? stopPrice.toString() : null,
-        source: "MANUAL",
-      },
-    });
-
-    return createdOrder;
-  });
+  }
 
   const serialized = serializeOrder(order);
+
+  if (reusedCopyOrder) {
+    return serialized;
+  }
+
   triggerOrderStatus(serialized);
 
   // Best-effort: ask the BullMQ worker to fill the order immediately instead

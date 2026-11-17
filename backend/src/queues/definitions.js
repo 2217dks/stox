@@ -9,6 +9,7 @@ const QUEUE_NAMES = Object.freeze({
   ORDERS: "orders",
   NOTIFICATIONS: "notifications",
   ALERTS: "alerts",
+  COPY_TRADES: "copy-trades",
 });
 
 const ORDER_JOB_NAMES = Object.freeze({
@@ -24,6 +25,11 @@ const NOTIFICATION_JOB_NAMES = Object.freeze({
 const ALERT_JOB_NAMES = Object.freeze({
   EVALUATE_ALERT: "evaluate-alert",
   SCAN_ALERTS: "scan-alerts",
+});
+
+const COPY_TRADE_JOB_NAMES = Object.freeze({
+  FAN_OUT: "fan-out-copy-trades",
+  SCAN_PENDING: "scan-pending",
 });
 
 const DEFAULT_JOB_OPTIONS = Object.freeze({
@@ -102,6 +108,28 @@ const QUEUE_POLICIES = Object.freeze({
       },
     },
   },
+  // Copy-trade fan-out is a post-commit side effect. The durable
+  // CopyTradeExecution rows make a replayed job safe, so completed jobs can be
+  // removed; failed jobs stay inspectable.
+  [QUEUE_NAMES.COPY_TRADES]: {
+    defaultJobOptions: {
+      attempts: 3,
+      backoff: { type: "exponential", delay: 2000 },
+      removeOnComplete: true,
+      removeOnFail: { count: 2000 },
+    },
+    jobs: {
+      [COPY_TRADE_JOB_NAMES.FAN_OUT]: {
+        attempts: 3,
+        backoff: { type: "exponential", delay: 2000 },
+        removeOnComplete: true,
+      },
+      [COPY_TRADE_JOB_NAMES.SCAN_PENDING]: {
+        attempts: 3,
+        backoff: { type: "exponential", delay: 2000 },
+      },
+    },
+  },
 });
 
 function jobOptionsFor(queueName, jobName) {
@@ -122,6 +150,7 @@ module.exports = {
   ORDER_JOB_NAMES,
   NOTIFICATION_JOB_NAMES,
   ALERT_JOB_NAMES,
+  COPY_TRADE_JOB_NAMES,
   DEFAULT_JOB_OPTIONS,
   QUEUE_POLICIES,
   jobOptionsFor,

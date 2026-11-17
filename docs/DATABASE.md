@@ -229,6 +229,7 @@ model Order {
   status          OrderStatus @default(PENDING)
 
   quantity        Decimal @db.Decimal(18, 8)
+  reservedCash    Decimal @default(0) @db.Decimal(18, 8)
 
   limitPrice      Decimal? @db.Decimal(18, 8)
   stopPrice       Decimal? @db.Decimal(18, 8)
@@ -237,21 +238,34 @@ model Order {
   executedAt      DateTime?
   expiresAt       DateTime?
 
+  executionAttempts      Int       @default(0)
+  lastExecutionAttemptAt DateTime?
+
   notes           String?
   source          OrderSource @default(MANUAL)
 
   trade           Trade?
   events          OrderEvent[]
 
+  copyTradeExecutionId String? @unique
+  copyTradeExecution   CopyTradeExecution? @relation(fields: [copyTradeExecutionId], references: [id], onDelete: SetNull)
+
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   @@index([portfolioId])
-  @@index([status])
-  @@index([symbol])
-  @@index([createdAt])
+  @@index([portfolioId, status])
+  @@index([status, createdAt])
+  @@index([status, expiresAt])
+  @@index([symbol, status])
 }
 ```
+
+`reservedCash` holds this order's share of the portfolio's cash reservation.
+`Portfolio.reservedCash` is the aggregate; both are decremented in the same
+transaction on execution, cancellation, expiry, or terminal rejection.
+`status, expiresAt` supports the overdue sweep, which runs before the
+execution batch and includes inactive portfolios.
 
 ## OrderEvent
 
@@ -304,9 +318,17 @@ model Trade {
 
   executedAt      DateTime @default(now())
 
+  // Set when the copy-trade fan-out pass completes (including a trade with no
+  // followers). The recovery scan only picks trades where this is null.
+  copyFanOutAt    DateTime?
+
+  copyExecutions  CopyTradeExecution[]
+
   @@index([portfolioId])
   @@index([symbol])
   @@index([executedAt])
+  @@index([portfolioId, executedAt])
+  @@index([copyFanOutAt, executedAt])
 }
 ```
 
@@ -442,6 +464,7 @@ model Notification {
 
   @@index([userId, isRead])
   @@index([createdAt])
+  @@index([deliveryStatus, createdAt])
 }
 ```
 
@@ -505,23 +528,87 @@ model CopyTrader {
   copier          User     @relation("Copier", fields: [copierId], references: [id], onDelete: Cascade)
   copied          User     @relation("Copied", fields: [copiedId], references: [id], onDelete: Cascade)
 
+  copyPortfolioId String?
+  copyPortfolio   Portfolio? @relation("CopyDestination", fields: [copyPortfolioId], references: [id], onDelete: SetNull)
+
   allocationPct   Decimal  @default(100) @db.Decimal(5, 2)
   maxTradeSize    Decimal? @db.Decimal(18, 8)
 
   isActive        Boolean @default(true)
 
+  executions      CopyTradeExecution[]
+
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
   @@unique([copierId, copiedId])
-  @@index([copierId])
-  @@index([copiedId])
+  @@index([copierId, isActive])
+  @@index([copiedId, isActive])
+  @@index([copyPortfolioId])
 }
 ```
 
 PostgreSQL CHECK constraints require `allocationPct` to be greater than `0` and
 at most `100`, reject self-copy relationships where `copierId = copiedId`, and
 require a provided `maxTradeSize` to be greater than `0`.
+
+`copyPortfolioId` is the destination for copied orders. The API stores the
+copier's default active portfolio when the request omits it. The column stays
+nullable so deleting a portfolio does not erase the relationship; fan-out
+resolves the default again in that case.
+
+`maxTradeSize` is a notional (quote-currency) sizing cap. Fan-out converts it
+to a quantity at the source trade price and rounds the copied quantity down to
+the 8-decimal column scale. Copied orders are `MARKET` orders, so the follower's
+actual fill price can differ and the final executed notional is not guaranteed
+to be at or below the cap; the cap bounds the quantity sized from the source
+price.
+
+## CopyTradeExecution
+
+```prisma
+enum CopyExecutionStatus {
+  PENDING
+  PLACED
+  FAILED
+  SKIPPED
+}
+
+model CopyTradeExecution {
+  id             String   @id @default(uuid())
+
+  sourceTradeId  String
+  sourceTrade    Trade    @relation(fields: [sourceTradeId], references: [id], onDelete: Cascade)
+
+  copierId       String
+  copier         User     @relation("CopyExecutions", fields: [copierId], references: [id], onDelete: Cascade)
+
+  copyTraderId   String?
+  copyTrader     CopyTrader? @relation(fields: [copyTraderId], references: [id], onDelete: SetNull)
+
+  status         CopyExecutionStatus @default(PENDING)
+  attempts       Int @default(0)
+  failureCode    String?
+  failureMessage String?
+
+  order          Order?
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([sourceTradeId, copierId])
+  @@index([copierId, createdAt])
+  @@index([status, createdAt])
+  @@index([copyTraderId])
+}
+```
+
+One row per `(source trade, copier)` is the durable idempotency guard for the
+copy-trade fan-out. `PLACED` means the copied order was created (not
+necessarily filled); `FAILED` and `SKIPPED` are terminal for that follower;
+`PENDING` means a transient failure may be retried up to the attempt budget.
+`Order.copyTradeExecutionId` is unique, so a replay cannot create a second
+order for the same execution row even if the status update was lost.
 
 ---
 
@@ -893,3 +980,89 @@ Redis handles temporary/high-speed workloads.
 ### Auditability
 
 Administrative and sensitive actions are recorded through `AuditLog`.
+
+---
+
+# 🛡️ Query safety review (49.3)
+
+This review covers raw SQL, user-controlled filters, unbounded reads, and the
+indexes added for the order-expiry and copy-trade paths.
+
+## Raw SQL inventory
+
+Every raw query uses Prisma's tagged-template API or `Prisma.sql` composition,
+which binds every interpolation as a parameter. There are no calls to
+`$queryRawUnsafe`, `$executeRawUnsafe`, `Prisma.raw`, or string-built SQL.
+
+| File | Raw operation | Why raw | Safety |
+| --- | --- | --- | --- |
+| `workers/orderWorker.js` | `SELECT ... FROM "Portfolio" ... FOR UPDATE` | Row lock before a status/reservation change | Tagged template |
+| `services/orderService.js` | Portfolio `FOR UPDATE` on create/cancel | Serialize cash-affecting writes | Tagged template |
+| `services/tradeService.js` | `INSERT ... ON CONFLICT` holding upsert | Atomic quantity/cost-basis update | Tagged template |
+| `services/tradeService.js` | `SELECT ... FOR UPDATE` on the holding | Atomic sell quantity/basis read | Tagged template |
+| `services/tradeService.js` | Portfolio `FOR UPDATE` | Serialize execution against deactivation/cancel | Tagged template |
+| `services/orderEventService.js` | Order `FOR UPDATE` + latest-sequence read | Gap-free event sequence allocation | Tagged template |
+| `services/portfolioMonthlyService.js` | Monthly realized-P&L aggregate | `TO_CHAR`/`GROUP BY` aggregation | `Prisma.sql` + `Prisma.join` |
+| `services/userStatisticsService.js` | Monthly/overall trade aggregates | CTEs and conditional counts | `Prisma.sql` + `Prisma.join` |
+| `controllers/healthController.js` | `SELECT 1` | Liveness probe | Tagged template |
+
+`tests/unit/security/sqlSafety.test.js` fails the build if an unsafe raw API
+appears or if a `$queryRaw`/`$executeRaw` call is not a tagged template or
+`Prisma.sql` composition.
+
+## User-controlled filters and ordering
+
+- `GET /orders` and `GET /trades` validate enums, UUIDs, symbols, and date
+  windows with Zod. `GET /trades` additionally restricts `sort` to
+  `TRADE_SORT_FIELDS` (`executedAt`, `totalValue`) and `order` to `asc|desc`;
+  the service never interpolates a raw sort string into SQL.
+- `GET /orders` uses a fixed `createdAt desc` order.
+- Admin list endpoints validate `status`, `role`, `isActive`, `isSuspended`,
+  `isVerified`, date bounds, and pagination before building a Prisma `where`.
+- Copy-trading list/filter inputs are enums/UUIDs/booleans, and the fan-out
+  query uses a fixed id ordering.
+- Raw aggregate queries bind `portfolioId`, `symbol`, `side`, and date bounds
+  through `Prisma.sql` parameters, including enum casts
+  (`${filters.side}::"OrderSide"`).
+
+## Bounded reads
+
+- Every paginated API uses `skip`/`take` and a `count` for pagination.
+- Worker scans are bounded: pending orders (`limit`), overdue expiry
+  (`limit`), notifications (`batchSize`), and alerts (`limit` plus
+  `ALERT_SCAN_MAX_SYMBOLS`).
+- Copy-trade fan-out pages followers in id-ordered batches of 200 instead of
+  loading an unbounded following into memory.
+
+### Residual risks
+
+- `GET /social/followers` and `GET /social/following` return the full list.
+  A user with a very large following can produce a large response; adding
+  pagination is a contract change and is left as a follow-up.
+- `listUserPortfolios` and `getHoldings` return all rows for one portfolio.
+  The row counts are naturally small, but they are not hard-capped.
+- The portfolio-snapshot worker loads all active portfolios and builds an
+  `in` list. Very large deployments should batch that job.
+- The per-order worker and alert evaluator still perform per-row/provider
+  calls. They are bounded by the batch limit, not parallelized, so a slow
+  provider delays the pass rather than exhausting the database.
+
+## Indexes added by this review
+
+| Index | Supports |
+| --- | --- |
+| `Order(status, expiresAt)` | Overdue-expiry sweep |
+| `Notification(deliveryStatus, createdAt)` | Pending-delivery scan |
+| `CopyTrader(copiedId, isActive)` | Active-follower fan-out |
+| `CopyTrader(copierId, isActive)` | Owner-scoped configuration list |
+| `CopyTrader(copyPortfolioId)` | Portfolio relation / destination cleanup |
+| `CopyTradeExecution(sourceTradeId, copierId)` (unique) | Fan-out idempotency |
+| `CopyTradeExecution(copierId, createdAt)` | Copier execution history |
+| `CopyTradeExecution(status, createdAt)` | Retry/failure inspection |
+| `CopyTradeExecution(copyTraderId)` | Relationship relation |
+| `Order(copyTradeExecutionId)` (unique) | Copied-order idempotency |
+| `Trade(copyFanOutAt, executedAt)` | Recovery scan for a fan-out enqueue lost during a Redis outage |
+
+The single-column `CopyTrader(copierId)` and `CopyTrader(copiedId)` indexes
+were replaced by the composite `(…, isActive)` indexes, which serve the same
+lookups and the fan-out/list filters without duplicate write overhead.

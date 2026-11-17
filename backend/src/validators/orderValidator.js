@@ -34,6 +34,37 @@ const decimalString = z.preprocess(
 const assetTypeEnum = z.enum(["STOCK", "CRYPTO", "FOREX"]);
 const sideEnum = z.enum(["BUY", "SELL"]);
 const orderTypeEnum = z.enum(["MARKET", "LIMIT", "STOP_LOSS", "TAKE_PROFIT"]);
+
+// An order expiry is an absolute instant, not a calendar window. Requiring an
+// explicit offset avoids the server's local timezone silently changing the
+// meaning of the request.
+const INSTANT_WITH_OFFSET_PATTERN = /(?:Z|[+-]\d{2}:?\d{2})$/i;
+
+const expiresAtSchema = z.preprocess(
+  (value) => {
+    if (value === null || value === "") {
+      return undefined;
+    }
+
+    if (typeof value === "string") {
+      return value.trim();
+    }
+
+    return value;
+  },
+  z
+    .string()
+    .refine(
+      (value) => INSTANT_WITH_OFFSET_PATTERN.test(value),
+      "expiresAt must be an ISO datetime with an explicit UTC offset (Z or ±HH:MM).",
+    )
+    .pipe(z.coerce.date())
+    .refine(
+      (value) => value.getTime() > Date.now(),
+      "expiresAt must be in the future.",
+    )
+    .optional(),
+);
 const orderStatusEnum = z.enum([
   "PENDING",
   "EXECUTED",
@@ -136,6 +167,7 @@ const createOrderSchema = z
     quantity: decimalString,
     limitPrice: decimalString.optional(),
     stopPrice: decimalString.optional(),
+    expiresAt: expiresAtSchema.optional(),
   })
   .superRefine(refineOrderPricing);
 

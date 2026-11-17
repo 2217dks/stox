@@ -5,6 +5,7 @@ const marketDataService = require("../services/marketData");
 const {
   processOrder,
   discoverPendingOrders,
+  expireOverdueOrders,
   DEFAULT_MAX_ATTEMPTS,
   DEFAULT_BATCH_SIZE,
 } = require("./orderWorker");
@@ -45,10 +46,9 @@ async function handleExecuteOrder(job, options) {
     return { outcome: "skipped", status: order.status };
   }
 
-  if (!order.portfolio || order.portfolio.isActive === false) {
-    return { outcome: "skipped", status: "PENDING" };
-  }
-
+  // Do not short-circuit inactive portfolios here: the shared processor checks
+  // expiry before the activity guard, so a direct job can still settle an
+  // expired row and release its reservation.
   const outcome = await processOrder(order, {
     quoteProvider: options.quoteProvider,
     now: options.now(),
@@ -83,10 +83,18 @@ async function handleExecuteOrder(job, options) {
  */
 async function handleScanPending(job, options) {
   const { portfolioId, limit } = job.data;
+  const batchLimit = limit ?? options.batchSize;
+
+  // Expire overdue rows first, including rows in inactive portfolios. The
+  // execution discovery query intentionally excludes inactive portfolios.
+  const expiry = await expireOverdueOrders({
+    now: options.now(),
+    limit: batchLimit,
+  });
 
   const orders = await discoverPendingOrders({
     portfolioId,
-    limit: limit ?? options.batchSize,
+    limit: batchLimit,
   });
 
   const results = await Promise.all(
@@ -101,8 +109,9 @@ async function handleScanPending(job, options) {
   const enqueued = results.filter((result) => result.enqueued).length;
 
   return {
-    scanned: orders.length,
+    scanned: expiry.scanned + orders.length,
     enqueued,
+    expired: expiry.expired,
     failed: orders.length - enqueued,
   };
 }

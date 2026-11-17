@@ -31,8 +31,9 @@ Slow operations (order execution, alerts, reports, emails) are pushed to **BullM
 
 ## ✅ Implementation status
 
-The BullMQ foundation, the **orders** queue, and the **notification** and
-**alert** queues are implemented. All three run from the same worker process.
+The BullMQ foundation and the **orders**, **notification**, **alert**, and
+**copy-trades** queues are implemented. All four run from the same worker
+process.
 
 ### Registered queues
 
@@ -41,6 +42,7 @@ The BullMQ foundation, the **orders** queue, and the **notification** and
 | Orders | `orders` | 5 | exponential, 1s |
 | Notifications | `notifications` | 5 | exponential, 5s |
 | Alerts | `alerts` | 2 | exponential, 1s |
+| Copy trades | `copy-trades` | 3 | exponential, 2s |
 
 Redis keys are namespaced with `QUEUE_PREFIX` (default `stox`), so test runs
 can use a unique prefix without touching real queues. Queues use their own
@@ -128,6 +130,27 @@ deferred symbols. A permanent provider error (`MARKET_DATA_NOT_FOUND`, an
 unsupported asset class, or a 400/404/422 response) moves the alert to
 `EXPIRED` instead of retrying it forever.
 
+### Copy-trade job contracts
+
+| Job | Payload | Attempts | What it does |
+| --- | --- | --- | --- |
+| `fan-out-copy-trades` | `{ tradeId }` | 3 | Loads an executed source trade, pages through active followers, and places one `MARKET` copied order per follower through the normal order service |
+| `scan-pending` | `{ limit? }` | 3 | Finds executed trades whose `copyFanOutAt` marker is null and enqueues one `fan-out-copy-trades` job per trade |
+
+The fan-out job is enqueued after the source trade commits and is best-effort. It
+never copies a trade whose source order is already `COPY_TRADE`, which prevents
+copy chains. Each follower is isolated: a permanent failure (insufficient
+balance/position, inactive portfolio, unsupported asset class) is recorded on
+that follower's `CopyTradeExecution` row and does not fail the job or block
+other followers. A transient failure leaves the row `PENDING` and throws
+`COPY_TRADE_RETRY` so BullMQ applies the queue's retry policy; after the
+attempt budget the row is marked `FAILED` with `MAX_ATTEMPTS_EXCEEDED`.
+
+A completed pass sets `Trade.copyFanOutAt`. The periodic `scan-pending` job
+finds trades whose marker is still null, which recovers a fan-out enqueue lost
+during a Redis outage. A trade with no followers is still marked, so the scan
+is finite; a trade is never replayed to a follower added after it executed.
+
 ### Idempotency keys
 
 | Job | Key | Guard |
@@ -135,6 +158,7 @@ unsupported asset class, or a 400/404/422 response) moves the alert to
 | `execute-order` | `jobId = orderId` | Execution is conditional on `status = PENDING`; completed jobs are removed so a resting order can be re-enqueued |
 | `send-notification` | `jobId = notificationId` | `PENDING -> SENDING` is a conditional update; terminal statuses (`DELIVERED`, `SKIPPED`, `FAILED`) short-circuit a replay; per-channel results are persisted so a partial retry does not resend a successful email |
 | `evaluate-alert` | `jobId = alertId` | `ACTIVE -> TRIGGERED` is a conditional update; completed jobs are removed so a still-active alert can be evaluated again |
+| `fan-out-copy-trades` | `jobId = tradeId` | A durable unique `(sourceTradeId, copierId)` row guards every follower; `Order.copyTradeExecutionId` is unique, so a replay cannot create a second copied order even if the execution update was lost; `Trade.copyFanOutAt` marks a completed pass |
 | `scan-alerts` / `scan-pending` | none | Discovery jobs; duplicate scans are harmless because the downstream work is guarded |
 
 ### Schedulers
@@ -144,6 +168,7 @@ unsupported asset class, or a 400/404/422 response) moves the alert to
 | `orders:scan-pending` | `orders` | `ORDER_SCAN_INTERVAL_MS` | 5000 ms |
 | `notifications:scan-pending` | `notifications` | `NOTIFICATION_SCAN_INTERVAL_MS` | 30000 ms |
 | `alerts:scan` | `alerts` | `ALERT_SCAN_INTERVAL_MS` | 15000 ms |
+| `copy-trades:scan-pending` | `copy-trades` | `COPY_TRADE_SCAN_INTERVAL_MS` | 60000 ms |
 
 Scheduler registration is retried with bounded backoff, so a worker that starts
 while Redis is briefly unavailable still registers once Redis returns.
@@ -206,21 +231,23 @@ polling loop is selected only when queues are disabled.
 
 ```bash
 cd backend
-npm run workers        # starts the order, notification, and alert workers (or polling if queues are disabled)
+npm run workers        # starts the order, notification, alert, and copy-trade workers (or polling if queues are disabled)
 ```
 
 ### Known gaps and follow-ups
 
-- **Portfolio deactivation leaves pending orders and reserved cash behind.**
-  Deactivating a portfolio does not cancel its `PENDING` orders or release
-  their reservations. The queue worker and the polling processor both skip
-  orders whose portfolio is inactive, so those rows stay `PENDING` and any
-  `reservedCash` remains held indefinitely. This is adjacent to portfolio
-  lifecycle behaviour rather than the queue race, so it is tracked as a
-  separate follow-up: deactivation should cancel (or reject) pending orders
-  and release their reservations in the same transaction. Until then, treat
-  deactivation as a stop for new executions, not as a full settlement of
-  resting orders.
+- **Portfolio deactivation leaves non-expiring pending orders behind.**
+  Deactivating a portfolio does not cancel its `PENDING` orders. The execution
+  query skips inactive portfolios, so a non-expiring order stays `PENDING`
+  with its reservation held until the owner cancels it or gives it an
+  `expiresAt`. Overdue orders are settled by the expiry sweep regardless of
+  portfolio activity, so expiry is not stranded. The remaining follow-up is to
+  cancel or reject non-expiring pending orders on deactivation in the same
+  transaction; until then, treat deactivation as a stop for new executions,
+  not as a full settlement of resting orders.
+- **Copy-trade fan-out is market-only.** Copied orders always use `MARKET` so
+  sizing is deterministic. Mirroring `LIMIT`/`STOP_LOSS`/`TAKE_PROFIT` triggers
+  is a larger design and is not implemented.
 
 ---
 
@@ -541,11 +568,11 @@ await reportQueue.add(
 
 | Queue         | Attempts | Backoff                              |
 | ------------- | -------- | ------------------------------------ |
-| orders        | 3        | Exponential (1s, 2s, 4s)             |
-| alerts        | 2        | Default                              |
+| orders        | 5        | Exponential (1s, 2s, 4s, 8s)         |
+| alerts        | 2        | Exponential (1s, 2s)                 |
 | notifications | 5        | Exponential (5s, 10s, 20s, 40s, 80s) |
 | reports       | 2        | Default                              |
-| copy-trades   | 3        | Exponential                          |
+| copy-trades   | 3        | Exponential (2s, 4s)                 |
 | achievements  | 2        | Default                              |
 
 **Failed job handling:**

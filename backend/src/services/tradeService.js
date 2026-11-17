@@ -8,6 +8,7 @@ const {
   evaluateAndGrantAchievements,
 } = require("./achievementService");
 const { publishExecutionEvents } = require("../realtime/orderEvents");
+const { enqueueCopyTradeFanOut } = require("../queues/copyTradeQueue");
 const { recordOrderEvent } = require("./orderEventService");
 const { AppError } = require("../utils/errors");
 const logger = require("../utils/logger");
@@ -441,7 +442,7 @@ async function applySell(tx, order, quantity, totalValue) {
  * `orderOrId` may be an order row (as in the worker) or a UUID, so callers
  * cannot accidentally execute a stale copy.
  */
-async function executeOrder(orderOrId, price) {
+async function executeOrder(orderOrId, price, { now = new Date() } = {}) {
   const orderId = typeof orderOrId === "string" ? orderOrId : orderOrId?.id;
 
   if (!orderId) {
@@ -449,6 +450,7 @@ async function executeOrder(orderOrId, price) {
   }
 
   const executionPrice = toExecutionPrice(price);
+  const clock = now instanceof Date ? now : new Date(now);
 
   const { trade, order: executedOrder } = await prisma.$transaction(
     async (tx) => {
@@ -466,6 +468,15 @@ async function executeOrder(orderOrId, price) {
 
       if (!order) {
         throw AppError.notFound("Order not found.", "ORDER_NOT_FOUND");
+      }
+
+      // The worker checks expiry before fetching a quote, but a direct caller
+      // or a worker that fetched the row just before the deadline could still
+      // reach this transaction. Enforcing the deadline here closes that race:
+      // the order stays PENDING and the worker records EXPIRED on its next
+      // pass instead of filling an expired order.
+      if (order.expiresAt && order.expiresAt.getTime() <= clock.getTime()) {
+        throw AppError.badRequest("Order has expired.", "ORDER_EXPIRED");
       }
 
       // Lock the portfolio before changing the order or financial state.
@@ -610,6 +621,16 @@ async function executeOrder(orderOrId, price) {
   // Realtime fan-out is best-effort and runs after the commit. Awaited here so
   // the worker's next pass observes a consistent event order.
   await publishExecutionEvents({ trade, order: executedOrder });
+
+  // Copy-trade fan-out is also post-commit and best-effort. A Redis outage
+  // must never roll back or delay the source trade; the durable
+  // CopyTradeExecution rows make a replayed job safe once Redis returns.
+  void enqueueCopyTradeFanOut({ tradeId: trade.id }).catch((error) => {
+    logger.warn("Copy-trade fan-out enqueue failed", {
+      tradeId: trade.id,
+      message: error.message,
+    });
+  });
 
   return trade;
 }

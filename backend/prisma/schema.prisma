@@ -142,12 +142,12 @@ model User {
   refreshTokens RefreshToken[]
 
   // Social
-  following Follow[]   @relation("UserFollowing")
-  followers Follow[]   @relation("UserFollowers")
+  following   Follow[]     @relation("UserFollowing")
+  followers   Follow[]     @relation("UserFollowers")
   copyTraders CopyTrader[] @relation("Copier")
-  copiedBy   CopyTrader[] @relation("Copied")
-  posts     Post[]
-  postLikes PostLike[]
+  copiedBy    CopyTrader[] @relation("Copied")
+  posts       Post[]
+  postLikes   PostLike[]
 
   // Engagement
   alerts             Alert[]
@@ -156,6 +156,9 @@ model User {
   sentimentVotes     SentimentVote[]
   userAchievements   UserAchievement[]
   leagueMembers      LeagueMember[]
+
+  // Copy-trade execution audit rows where this user is the copier.
+  copyExecutions CopyTradeExecution[] @relation("CopyExecutions")
 
   // Preferences
   preference UserPreference?
@@ -218,6 +221,9 @@ model Portfolio {
   trades               Trade[]
   performanceSnapshots PerformanceSnapshot[]
   leagueMember         LeagueMember?
+
+  // Copy relationships whose copied orders are placed in this portfolio.
+  copyTraders CopyTrader[] @relation("CopyDestination")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -299,12 +305,19 @@ model Order {
   trade  Trade?
   events OrderEvent[]
 
+  // Set only for copied orders. The unique constraint makes copied-order
+  // creation idempotent even if a fan-out job is replayed after the order
+  // committed but before the execution row was updated.
+  copyTradeExecutionId String?             @unique
+  copyTradeExecution   CopyTradeExecution? @relation(fields: [copyTradeExecutionId], references: [id], onDelete: SetNull)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([portfolioId])
   @@index([portfolioId, status])
   @@index([status, createdAt])
+  @@index([status, expiresAt])
   @@index([symbol, status])
 }
 
@@ -370,10 +383,19 @@ model Trade {
   realizedPnlPct Decimal?  @db.Decimal(18, 8)
   executedAt     DateTime  @default(now())
 
+  // Audit rows for follower orders created from this source trade.
+  copyExecutions CopyTradeExecution[]
+
+  // Set when the copy-trade fan-out pass has completed for this trade. A
+  // periodic scan retries trades whose post-commit enqueue was lost during a
+  // Redis outage.
+  copyFanOutAt DateTime?
+
   @@index([portfolioId])
   @@index([symbol])
   @@index([executedAt])
   @@index([portfolioId, executedAt])
+  @@index([copyFanOutAt, executedAt])
 }
 
 // ============================================================
@@ -464,6 +486,8 @@ model Notification {
 
   @@index([userId, isRead])
   @@index([createdAt])
+  // Pending-delivery scan: WHERE "deliveryStatus" = 'PENDING' ORDER BY "createdAt".
+  @@index([deliveryStatus, createdAt])
 }
 
 // ============================================================
@@ -499,19 +523,76 @@ model CopyTrader {
   copierId String
   copiedId String
 
-  copier  User @relation("Copier", fields: [copierId], references: [id], onDelete: Cascade)
-  copied  User @relation("Copied", fields: [copiedId], references: [id], onDelete: Cascade)
+  copier User @relation("Copier", fields: [copierId], references: [id], onDelete: Cascade)
+  copied User @relation("Copied", fields: [copiedId], references: [id], onDelete: Cascade)
+
+  // Destination portfolio for copied orders. New rows always store the
+  // copier's default active portfolio when the API omits an explicit choice.
+  // It stays nullable so a deleted portfolio does not erase the relationship;
+  // fan-out resolves the default again in that case.
+  copyPortfolioId String?
+  copyPortfolio   Portfolio? @relation("CopyDestination", fields: [copyPortfolioId], references: [id], onDelete: SetNull)
 
   allocationPct Decimal  @default(100) @db.Decimal(5, 2)
   maxTradeSize  Decimal? @db.Decimal(18, 8)
   isActive      Boolean  @default(true)
 
+  executions CopyTradeExecution[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([copierId, copiedId])
-  @@index([copierId])
-  @@index([copiedId])
+  @@index([copierId, isActive])
+  @@index([copiedId, isActive])
+  @@index([copyPortfolioId])
+}
+
+// ============================================================
+// COPY TRADE EXECUTION
+// ============================================================
+
+enum CopyExecutionStatus {
+  PENDING
+  PLACED
+  FAILED
+  SKIPPED
+}
+
+// One durable row per (source trade, copier). It is the idempotency guard for
+// the copy-trade fan-out: a replayed BullMQ job can never place the same
+// follower order twice, and it records permanent failures for auditability.
+model CopyTradeExecution {
+  id String @id @default(uuid())
+
+  sourceTradeId String
+  sourceTrade   Trade  @relation(fields: [sourceTradeId], references: [id], onDelete: Cascade)
+
+  copierId String
+  copier   User   @relation("CopyExecutions", fields: [copierId], references: [id], onDelete: Cascade)
+
+  copyTraderId String?
+  copyTrader   CopyTrader? @relation(fields: [copyTraderId], references: [id], onDelete: SetNull)
+
+  status CopyExecutionStatus @default(PENDING)
+
+  // Bounded retry accounting for transient failures (for example a market
+  // data outage while sizing the copied order).
+  attempts Int @default(0)
+
+  failureCode    String?
+  failureMessage String?
+
+  // Back-relation for Order.copyTradeExecutionId.
+  order Order?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([sourceTradeId, copierId])
+  @@index([copierId, createdAt])
+  @@index([status, createdAt])
+  @@index([copyTraderId])
 }
 
 // ============================================================
