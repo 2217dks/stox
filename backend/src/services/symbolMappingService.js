@@ -25,10 +25,10 @@ const CRYPTO_PAIR_PATTERN = new RegExp(
 );
 
 const CRYPTO_SLASH_PATTERN = new RegExp(
-  `^([A-Z0-9]{2,20})\\/(?:${CRYPTO_QUOTE_ASSETS.join("|")})$`,
+  `^([A-Z0-9]{2,20})\\/(${CRYPTO_QUOTE_ASSETS.join("|")})$`,
 );
 
-const STOCK_TICKER_PATTERN = /^[A-Z0-9]+(?:[.-][A-Z0-9]+)*$/;
+const STOCK_TICKER_PATTERN = /^[A-Z0-9]+(?:[._-][A-Z0-9]+)*$/;
 
 // Stock tickers whose letters happen to end in a crypto quote asset (e.g. BTC, ETH)
 // or overlap with well-known crypto tickers, preventing false crypto inference.

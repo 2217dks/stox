@@ -5,6 +5,10 @@ const {
   createMarketDataProviders,
 } = require("../providers/createMarketDataProviders");
 const { createMarketDataService } = require("./marketDataService");
+const {
+  inferAssetClass,
+  normalizeAssetClass,
+} = require("./symbolMappingService");
 const cacheService = require("./cacheService");
 
 const config = loadMarketDataConfig();
@@ -14,24 +18,11 @@ const marketDataService = createMarketDataService({
   providers: createMarketDataProviders(config),
 });
 
-function inferAssetClass(symbol) {
-  const normalizedSymbol = String(symbol || "")
-    .trim()
-    .toUpperCase();
-
-  return normalizedSymbol.startsWith("BINANCE:") ||
-    /(?:USDT|BTC|ETH)$/.test(normalizedSymbol)
-    ? "CRYPTO"
-    : "STOCK";
-}
-
 module.exports = {
   ...marketDataService,
 
   async getQuote(symbol, options = {}) {
-    const assetClass = options.assetClass
-      ? String(options.assetClass).trim().toUpperCase()
-      : inferAssetClass(symbol);
+    const assetClass = normalizeAssetClass(options.assetClass, symbol);
 
     return cacheService.getOrSetPrice(assetClass, symbol, () =>
       marketDataService.getQuote(symbol, options),
@@ -39,9 +30,7 @@ module.exports = {
   },
 
   async getHistoricalPrice(symbol, options = {}) {
-    const assetClass = options.assetClass
-      ? String(options.assetClass).trim().toUpperCase()
-      : inferAssetClass(symbol);
+    const assetClass = normalizeAssetClass(options.assetClass, symbol);
     const asOf = options.asOf
       ? (options.asOf instanceof Date ? options.asOf : new Date(options.asOf))
       : new Date();
