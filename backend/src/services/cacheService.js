@@ -202,6 +202,35 @@ async function setHistoricalPrices(
   );
 }
 
+async function getMarketSearch(query, options = {}) {
+  return get(cacheKeys.marketSearch(query, options));
+}
+
+async function setMarketSearch(query, options = {}, value) {
+  return set(
+    cacheKeys.marketSearch(query, options),
+    value,
+    TTL_SECONDS.symbolSearch,
+  );
+}
+
+async function getOrSetMarketSearch(query, options = {}, loader) {
+  return getOrSet(
+    cacheKeys.marketSearch(query, options),
+    loader,
+    TTL_SECONDS.symbolSearch,
+  );
+}
+
+async function invalidateMarketSearch(query, options = {}) {
+  return del(cacheKeys.marketSearch(query, options));
+}
+
+const getSymbolSearch = getMarketSearch;
+const setSymbolSearch = setMarketSearch;
+const getOrSetSymbolSearch = getOrSetMarketSearch;
+const invalidateSymbolSearch = invalidateMarketSearch;
+
 async function getMetrics() {
   return safe(
     async (redis) => {
@@ -490,6 +519,14 @@ module.exports = {
   invalidatePortfolio,
   getHistoricalPrices,
   setHistoricalPrices,
+  getMarketSearch,
+  setMarketSearch,
+  getOrSetMarketSearch,
+  invalidateMarketSearch,
+  getSymbolSearch,
+  setSymbolSearch,
+  getOrSetSymbolSearch,
+  invalidateSymbolSearch,
   getMetrics,
   getOrSetPrice,
   getOrSetPortfolioSummary,
