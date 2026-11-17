@@ -48,6 +48,7 @@ Redis is used as a caching layer in front of PostgreSQL for hot data. The goal: 
 | User session                  | `session:{userId}`                                                       | 7 days     | On logout               |
 | Historical candles            | `history:{symbol}:{interval}:{from}:{to}`                                | 1 hour     | On new candle           |
 | Symbol metadata               | `symbol:{symbol}`                                                        | 24 hours   | Manual                  |
+| Symbol search results         | `stox:v1:market:search:{assetClass}:{query}:{limit}`                     | 1 hour     | TTL expiration          |
 | Portfolio P&L Heatmap         | `analytics:v1:user:{ownerId}:portfolio:{id}:heatmap:gen:{gen}`           | 5 minutes  | On trade / position chg |
 | Portfolio Risk Metrics        | `analytics:v1:user:{ownerId}:portfolio:{id}:risk:gen:{gen}:{filters}`    | 5 minutes  | On snapshot capture     |
 | Portfolio Benchmark           | `analytics:v1:user:{ownerId}:portfolio:{id}:benchmark:{sym}:gen:{gen}`   | 1 hour     | On benchmark update     |
