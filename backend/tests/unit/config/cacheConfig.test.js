@@ -15,6 +15,7 @@ describe("cacheConfig", () => {
       CACHE_TTL_LEADERBOARD_SECONDS: "120",
       CACHE_TTL_HISTORICAL_PRICES_SECONDS: "1800",
       CACHE_TTL_SYMBOL_SECONDS: "3600",
+      CACHE_TTL_SYMBOL_SEARCH_SECONDS: "1200",
       CACHE_TTL_SESSION_SECONDS: "86400",
       CACHE_TTL_ANALYTICS_HEATMAP_SECONDS: "600",
       CACHE_TTL_ANALYTICS_RISK_METRICS_SECONDS: "450",
@@ -30,6 +31,7 @@ describe("cacheConfig", () => {
       leaderboard: 120,
       historicalPrices: 1800,
       symbol: 3600,
+      symbolSearch: 1200,
       session: 86400,
       analyticsHeatmap: 600,
       analyticsRiskMetrics: 450,
@@ -54,6 +56,7 @@ describe("cacheConfig", () => {
     expect(config.analyticsBenchmarkComparison).toBe(300);
     expect(config.analyticsMonthlyPerformance).toBe(300);
     expect(config.userStatistics).toBe(120);
+    expect(config.symbolSearch).toBe(3600);
   });
 
   test.each(["0", "-5", "1.5", "abc", "Infinity"])(
