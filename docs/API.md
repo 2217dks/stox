@@ -1286,18 +1286,18 @@ List the authenticated user's notifications.
 
 ### Supported Notification Types
 
-- `ORDER_FILLED`: Order was fully executed.
+- `ORDER_EXECUTED`: Order was fully executed.
 - `ORDER_CANCELLED`: Order was cancelled.
 - `ORDER_REJECTED`: Order was rejected during execution or validation.
 - `ORDER_EXPIRED`: Order expired before execution.
 - `PRICE_ALERT`: Price threshold alert triggered.
 - `ACHIEVEMENT_UNLOCKED`: New achievement granted to the user.
 - `COPY_TRADE_EXECUTED`: Trade executed on behalf of copier.
-- `LEAGUE_UPDATE`: Updates and results for enrolled leagues.
+- `LEAGUE_UPDATE`: Final results are available for an enrolled league.
 - `NEW_FOLLOWER`: A user followed the authenticated trader.
 - `SYSTEM`: Platform notifications.
 
-Each order transition notification includes structured metadata in its JSON `data` attribute (`orderId`, `symbol`, `side`, `quantity`, `price` or `limitPrice`, and `reason`).
+Order notifications are generated for execution, cancellation, rejection, and expiry. Other supported triggers are price-alert activation, achievement unlock, new follower, copied-order execution, and league completion. Each notification belongs to its recipient and includes event-specific structured data. Replayed source events reuse their existing notification row; delivery jobs and channel retries are idempotent.
 
 ## `PATCH /notifications/:id/read`
 

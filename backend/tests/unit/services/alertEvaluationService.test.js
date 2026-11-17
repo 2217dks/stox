@@ -5,7 +5,7 @@ jest.mock("../../../src/config/database", () => ({
     updateMany: jest.fn(),
   },
   notification: {
-    create: jest.fn(),
+    upsert: jest.fn(),
   },
   $transaction: jest.fn(),
 }));
@@ -60,7 +60,7 @@ describe("alert evaluation service", () => {
     tx = {
       alert: { updateMany: jest.fn(async () => ({ count: 1 })) },
       notification: {
-        create: jest.fn(async ({ data }) => ({ id: "notification-1", ...data })),
+        upsert: jest.fn(async ({ create }) => ({ id: "notification-1", ...create })),
       },
     };
     prisma.$transaction.mockImplementation(async (callback) => callback(tx));
@@ -181,8 +181,10 @@ describe("alert evaluation service", () => {
         message: expect.stringContaining("AAPL"),
       },
     });
-    expect(tx.notification.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
+    expect(tx.notification.upsert).toHaveBeenCalledWith({
+      where: { eventKey: `alert:${ALERT_ID}:triggered` },
+      create: expect.objectContaining({
+        eventKey: `alert:${ALERT_ID}:triggered`,
         userId: USER_ID,
         type: "PRICE_ALERT",
         title: "Price alert: AAPL",
@@ -193,6 +195,7 @@ describe("alert evaluation service", () => {
           channels: { email: true, push: false },
         }),
       }),
+      update: {},
     });
     expect(enqueueNotificationDelivery).toHaveBeenCalledWith({
       notificationId: "notification-1",
@@ -220,7 +223,7 @@ describe("alert evaluation service", () => {
       outcome: "skipped",
       reason: "ALREADY_TRIGGERED",
     });
-    expect(tx.notification.create).not.toHaveBeenCalled();
+    expect(tx.notification.upsert).not.toHaveBeenCalled();
     expect(enqueueNotificationDelivery).not.toHaveBeenCalled();
   });
 

@@ -89,6 +89,16 @@ describe("Social integration API", () => {
     expect(response.body.success).toBe(true);
     expect(response.body.data.follow.followerId).toBe(user1Id);
     expect(response.body.data.follow.followingId).toBe(user2Id);
+
+    const notification = await prisma.notification.findFirst({
+      where: { userId: user2Id, type: "NEW_FOLLOWER" },
+    });
+    expect(notification).toMatchObject({
+      userId: user2Id,
+      type: "NEW_FOLLOWER",
+      data: { followerId: user1Id },
+    });
+    expect(notification.eventKey).toContain("new-follower");
   });
 
   test("rejects a duplicate follow", async () => {
@@ -98,6 +108,12 @@ describe("Social integration API", () => {
 
     expect(response.status).toBe(409);
     expect(response.body.error.code).toBe("ALREADY_FOLLOWING");
+
+    expect(
+      await prisma.notification.count({
+        where: { userId: user2Id, type: "NEW_FOLLOWER" },
+      }),
+    ).toBe(1);
   });
 
   test("rejects following yourself", async () => {

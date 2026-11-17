@@ -441,6 +441,7 @@ model Alert {
 ```prisma
 model Notification {
   id              String   @id @default(uuid())
+  eventKey        String?  @unique // Stable source-event key; null for legacy/manual rows.
   userId          String
 
   user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)

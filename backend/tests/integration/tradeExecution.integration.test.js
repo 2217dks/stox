@@ -3,6 +3,9 @@ const { Prisma } = require("@prisma/client");
 const prisma = require("../../src/config/database");
 const orderService = require("../../src/services/orderService");
 const tradeService = require("../../src/services/tradeService");
+const {
+  createCopyTradeExecutedNotification,
+} = require("../../src/services/notificationEvents");
 
 // Contract tests for the order-execution write path.
 //
@@ -157,6 +160,32 @@ describe("executeOrder: BUY", () => {
       price: "100",
       totalValue: "200",
     });
+  });
+
+  test("creates one idempotent copy-trade notification for a copied execution", async () => {
+    const order = await createOrder({ source: "COPY_TRADE" });
+    const trade = await tradeService.executeOrder(order, "100");
+
+    const notification = await prisma.notification.findFirst({
+      where: { userId, type: "COPY_TRADE_EXECUTED" },
+    });
+    expect(notification).toMatchObject({
+      userId,
+      type: "COPY_TRADE_EXECUTED",
+      eventKey: `order:${order.id}:copy-trade-executed`,
+    });
+    expect(notification.data).toMatchObject({
+      orderId: order.id,
+      tradeId: trade.id,
+      symbol: "AAPL",
+    });
+
+    await createCopyTradeExecutedNotification({ userId, order, trade });
+    expect(
+      await prisma.notification.count({
+        where: { eventKey: notification.eventKey },
+      }),
+    ).toBe(1);
   });
 
   test("adds to an existing holding using a weighted average buy price", async () => {

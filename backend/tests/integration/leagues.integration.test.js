@@ -779,6 +779,29 @@ describe("Leagues & Competitions Integration (#128)", () => {
     });
     expect(updatedMember.rank).toBe(1);
     expect(Number(updatedMember.finalReturn)).toBe(20);
+
+    const resultNotification = await prisma.notification.findFirst({
+      where: {
+        userId: user1Id,
+        type: "LEAGUE_UPDATE",
+        eventKey: `league:${league.id}:member:${member.id}:completed`,
+      },
+    });
+    expect(resultNotification).toMatchObject({
+      userId: user1Id,
+      type: "LEAGUE_UPDATE",
+      data: {
+        leagueId: league.id,
+        rank: 1,
+      },
+    });
+
+    await request(app).get(`/api/v1/leagues/${league.id}/leaderboard`);
+    expect(
+      await prisma.notification.count({
+        where: { eventKey: resultNotification.eventKey },
+      }),
+    ).toBe(1);
   });
 
   test("Status transitions from UPCOMING to ACTIVE and agrees across list, detail, join, and leaderboard", async () => {

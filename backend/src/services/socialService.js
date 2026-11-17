@@ -1,5 +1,9 @@
 const prisma = require("../config/database");
 const { AppError } = require("../utils/errors");
+const {
+  createNotificationEvent,
+  enqueueNotificationEvent,
+} = require("./notificationEventService");
 
 // Only non-sensitive public profile fields are ever exposed by the social API.
 const PUBLIC_USER_SELECT = {
@@ -76,12 +80,32 @@ async function followUser(userId, targetUserId) {
   }
 
   try {
-    const follow = await prisma.follow.create({
-      data: {
-        followerId: userId,
-        followingId: targetUserId,
-      },
+    const { follow, notification } = await prisma.$transaction(async (tx) => {
+      const createdFollow = await tx.follow.create({
+        data: {
+          followerId: userId,
+          followingId: targetUserId,
+        },
+      });
+
+      const createdNotification = await createNotificationEvent(
+        {
+          eventKey: `follow:${createdFollow.id}:new-follower`,
+          userId: targetUserId,
+          type: "NEW_FOLLOWER",
+          title: "New follower",
+          message: "Someone started following you.",
+          data: {
+            followerId: userId,
+          },
+        },
+        { db: tx, enqueue: false },
+      );
+
+      return { follow: createdFollow, notification: createdNotification };
     });
+
+    enqueueNotificationEvent(notification.id);
 
     return {
       followerId: follow.followerId,

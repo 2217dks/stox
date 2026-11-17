@@ -41,7 +41,7 @@ The pipeline decouples events from delivery, ensuring notifications never block 
 | Email delivery | Implemented behind Resend (`src/services/emailService.js`). It is an explicit no-op until `RESEND_API_KEY` and `EMAIL_FROM` are set. |
 | Push delivery | Implemented behind FCM HTTP v1 (`src/services/pushService.js`). It is an explicit no-op until the FCM service-account variables are set. |
 | Webhook delivery | **Planned**. |
-| Achievement/copy-trade/league/digest sources | **Planned**. Only order-execution and price-alert notifications are produced today. |
+| Domain-event sources | Implemented for order execution/cancellation/rejection/expiry, price alerts, achievement unlocks, new followers, copied-order execution, and completed league results. A scheduled daily digest remains planned. |
 
 Email and push are attempted only when both the user's `UserPreference` switches and the legacy `User` flags/destinations allow them. A `PRICE_ALERT` can additionally carry the alert's own `sendEmail`/`sendPush` flags, which can only narrow delivery.
 
@@ -104,14 +104,21 @@ Email and push are attempted only when both the user's `UserPreference` switches
 
 ## 📡 Event Sources
 
-| Event                  | Trigger              | Notification Type    |
-| ---------------------- | -------------------- | -------------------- |
-| `order:executed`       | BullMQ order worker  | ORDER_EXECUTED       |
-| `alert:triggered`      | BullMQ alert worker  | PRICE_ALERT          |
-| `achievement:unlocked` | Achievement worker   | ACHIEVEMENT_UNLOCKED |
-| `copy:trade`           | Copy trade worker    | COPY_TRADE_EXECUTED  |
-| `league:ended`         | Report worker        | LEAGUE_UPDATE        |
-| `digest:daily`         | Report worker (cron) | SYSTEM               |
+| Trigger                                   | Notification Type     | Recipient                          |
+| ----------------------------------------- | --------------------- | ---------------------------------- |
+| Order executed/cancelled/rejected/expired | matching order type   | Portfolio owner                    |
+| Alert transitions from ACTIVE to TRIGGERED | PRICE_ALERT           | Alert owner                        |
+| Achievement is newly granted              | ACHIEVEMENT_UNLOCKED  | Awarded user                       |
+| Follow relationship is created             | NEW_FOLLOWER          | Followed user                      |
+| A copied order executes                    | COPY_TRADE_EXECUTED   | Copier                             |
+| League standings are finalized             | LEAGUE_UPDATE         | Ranked participant                 |
+| Daily digest                               | SYSTEM                | **Planned; no scheduled producer** |
+
+Each source uses a stable `Notification.eventKey`. The unique database index
+makes notification-row creation idempotent across event retries. The queue uses
+the notification ID as its job ID, and the worker's conditional delivery claim
+prevents duplicate channel delivery. The pending-row scan recovers delivery
+when Redis is unavailable.
 
 ---
 

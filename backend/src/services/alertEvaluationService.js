@@ -2,7 +2,10 @@ const { Prisma } = require("@prisma/client");
 
 const prisma = require("../config/database");
 const marketDataService = require("./marketData");
-const { enqueueNotificationDelivery } = require("../queues/notificationQueue");
+const {
+  createNotificationEvent,
+  enqueueNotificationEvent,
+} = require("./notificationEventService");
 const logger = require("../utils/logger");
 
 const ALERT_SYMBOL_SELECT = {
@@ -191,15 +194,17 @@ async function triggerAlert(alert, quote, evaluation, { now = () => new Date() }
       return null;
     }
 
-    return tx.notification.create({
-      data: {
+    return createNotificationEvent(
+      {
+        eventKey: `alert:${alert.id}:triggered`,
         userId: alert.userId,
         type: "PRICE_ALERT",
         title: `Price alert: ${alert.symbol.symbol}`,
         message: evaluation.message,
         data: buildNotificationData(alert, quote),
       },
-    });
+      { db: tx, enqueue: false },
+    );
   });
 
   if (!notification) {
@@ -208,15 +213,7 @@ async function triggerAlert(alert, quote, evaluation, { now = () => new Date() }
 
   // The notification row is the source of truth. Delivery is best-effort; the
   // pending-notification scan retries it if Redis is unavailable.
-  void enqueueNotificationDelivery({
-    notificationId: notification.id,
-  }).catch((error) => {
-    logger.warn("Alert notification enqueue failed", {
-      alertId: alert.id,
-      notificationId: notification.id,
-      message: error.message,
-    });
-  });
+  enqueueNotificationEvent(notification.id);
 
   return {
     outcome: "triggered",

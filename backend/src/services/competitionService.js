@@ -3,6 +3,10 @@ const prisma = require("../config/database");
 const defaultMarketData = require("./marketData");
 const { resolveHoldingPrice } = require("./portfolioValuationService");
 const { AppError } = require("../utils/errors");
+const {
+  createNotificationEvent,
+  enqueueNotificationEvent,
+} = require("./notificationEventService");
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -569,11 +573,11 @@ async function getLeagueLeaderboard({
 
   // If ended and finalizeIfEnded is true, persist finalReturn and rank atomically and idempotently
   if (isEnded && finalizeIfEnded && evaluatedMembers.length > 0) {
-    await prisma.$transaction(async (tx) => {
+    const completionNotifications = await prisma.$transaction(async (tx) => {
       const leagues = await tx.$queryRaw`
         SELECT id, status FROM "League" WHERE id = ${league.id} FOR UPDATE
       `;
-      if (!leagues || leagues.length === 0) return;
+      if (!leagues || leagues.length === 0) return [];
       const lockedLeague = leagues[0];
 
       const existingRankedCount = await tx.leagueMember.count({
@@ -585,7 +589,7 @@ async function getLeagueLeaderboard({
       });
 
       if (lockedLeague.status === "COMPLETED" && existingRankedCount >= evaluatedMembers.length) {
-        return;
+        return [];
       }
 
       await tx.league.update({
@@ -602,7 +606,35 @@ async function getLeagueLeaderboard({
           },
         });
       }
+
+      const notifications = [];
+      for (const m of evaluatedMembers) {
+        notifications.push(
+          await createNotificationEvent(
+            {
+              eventKey: `league:${league.id}:member:${m.id}:completed`,
+              userId: m.userId,
+              type: "LEAGUE_UPDATE",
+              title: "League results are ready",
+              message: `You finished #${m.rank} in ${league.name}.`,
+              data: {
+                leagueId: league.id,
+                leagueName: league.name,
+                rank: m.rank,
+                returnPct: m.returnPct.toString(),
+              },
+            },
+            { db: tx, enqueue: false },
+          ),
+        );
+      }
+
+      return notifications;
     });
+
+    for (const notification of completionNotifications) {
+      enqueueNotificationEvent(notification.id);
+    }
   }
 
   return {
