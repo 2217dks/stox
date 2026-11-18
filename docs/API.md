@@ -633,6 +633,16 @@ Get trade details.
 
 # 📊 Market Data
 
+### Symbol Conventions & Mapping Layer
+
+Stox decouples internal canonical instruments from provider-specific formats:
+- **Canonical Symbols**: Internal, provider-agnostic domain representations (e.g. `BTCUSDT`, `AAPL`). Decoupled from transport prefixes (`BINANCE:`, `FINNHUB:`) and formatting slashes (`/`).
+- **Provider Representations**:
+  - **Crypto (Binance)**: API endpoints accept `BTCUSDT`, `BINANCE:BTCUSDT`, and `BTC/USDT` interchangeably. Transport prefixes are stripped and slash pairs are canonicalized automatically.
+  - **Stocks (Finnhub)**: Standard equity tickers (e.g. `AAPL`, `MSFT`, `BRK.B`).
+- **Ambiguous Tickers**: Symbols like `GBTC`, `METH`, `SOL`, `COIN`, `RIOT`, and `BITO` default to `STOCK`. Specify `assetClass=CRYPTO` (or pass explicit asset class in orders) to override.
+- **Database Resolution**: PostgreSQL `Symbol` model records are authoritative for instrument metadata (`assetType`, `exchange`, `currency`, `isActive`). Discrepancies between requested asset classes and registered symbols reject with `400 ASSET_TYPE_MISMATCH`.
+
 ## `GET /market/search`
 
 Search supported stocks and crypto pairs through the configured market-data providers.
@@ -656,6 +666,10 @@ Symbol and exchange are uppercase; currency is uppercase when known. Optional me
 When both asset classes are requested, the service combines both provider results. If either provider fails, the entire request returns the standard market-data error envelope rather than a partial result.
 
 Pass `assetClass` to search only one provider. Provider timeouts, throttling, and unavailability use the standard market-data domain error codes.
+
+### Caching
+
+Search results are cached in Redis under `stox:v1:market:search:{assetClass}:{query}:{limit}` with a 1-hour bounded TTL (`CACHE_TTL_SYMBOL_SEARCH_SECONDS`, configurable). Queries are case-insensitively normalized with trimmed whitespace so equivalent lookups hit the same cache entry. Empty match arrays (`[]`) are cached to prevent repetitive upstream provider queries on unknown symbols. If Redis is unavailable, the endpoint transparently falls back to direct provider lookups without client-facing failure.
 
 ### Example
 
@@ -1288,18 +1302,18 @@ List the authenticated user's notifications.
 
 ### Supported Notification Types
 
-- `ORDER_FILLED`: Order was fully executed.
+- `ORDER_EXECUTED`: Order was fully executed.
 - `ORDER_CANCELLED`: Order was cancelled.
 - `ORDER_REJECTED`: Order was rejected during execution or validation.
 - `ORDER_EXPIRED`: Order expired before execution.
 - `PRICE_ALERT`: Price threshold alert triggered.
 - `ACHIEVEMENT_UNLOCKED`: New achievement granted to the user.
 - `COPY_TRADE_EXECUTED`: Trade executed on behalf of copier.
-- `LEAGUE_UPDATE`: Updates and results for enrolled leagues.
+- `LEAGUE_UPDATE`: Final results are available for an enrolled league.
 - `NEW_FOLLOWER`: A user followed the authenticated trader.
 - `SYSTEM`: Platform notifications.
 
-Each order transition notification includes structured metadata in its JSON `data` attribute (`orderId`, `symbol`, `side`, `quantity`, `price` or `limitPrice`, and `reason`).
+Order notifications are generated for execution, cancellation, rejection, and expiry. Other supported triggers are price-alert activation, achievement unlock, new follower, copied-order execution, and league completion. Each notification belongs to its recipient and includes event-specific structured data. Replayed source events reuse their existing notification row; delivery jobs and channel retries are idempotent.
 
 ## `PATCH /notifications/:id/read`
 

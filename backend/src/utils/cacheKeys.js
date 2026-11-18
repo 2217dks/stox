@@ -74,6 +74,29 @@ const cacheKeys = {
     return `${PREFIX}:symbol:${required(assetClass, "assetClass")}:${normalizeSymbol(symbol)}`;
   },
 
+  marketSearch(query, options = {}) {
+    const raw = required(query, "query").trim().replace(/\s+/g, " ");
+    if (!raw) {
+      throw new Error("query is required");
+    }
+    const q = raw.toUpperCase();
+    const assetClass = options.assetClass
+      ? String(options.assetClass).trim().toUpperCase()
+      : "ALL";
+    const limit =
+      options.limit !== undefined &&
+      options.limit !== null &&
+      options.limit !== ""
+        ? normalizeNumber(options.limit, "ALL")
+        : "ALL";
+
+    return `${PREFIX}:market:search:${assetClass}:${q}:${limit}`;
+  },
+
+  symbolSearch(query, options = {}) {
+    return cacheKeys.marketSearch(query, options);
+  },
+
   session(userId) {
     return `${PREFIX}:session:${required(userId, "userId")}`;
   },

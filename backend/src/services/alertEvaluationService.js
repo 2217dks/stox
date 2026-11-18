@@ -2,7 +2,10 @@ const { Prisma } = require("@prisma/client");
 
 const prisma = require("../config/database");
 const marketDataService = require("./marketData");
-const { enqueueNotificationDelivery } = require("../queues/notificationQueue");
+const {
+  createNotificationEvent,
+  enqueueNotificationEvent,
+} = require("./notificationEventService");
 const logger = require("../utils/logger");
 
 const ALERT_SYMBOL_SELECT = {
@@ -12,6 +15,29 @@ const ALERT_SYMBOL_SELECT = {
 
 const DEFAULT_SCAN_LIMIT = 100;
 const DEFAULT_MAX_SYMBOLS_PER_SCAN = 50;
+const DEFAULT_MAX_QUOTE_AGE_MS = 5 * 60 * 1000;
+
+function maxQuoteAgeMs() {
+  const configured = Number.parseInt(process.env.ALERT_MAX_QUOTE_AGE_MS, 10);
+
+  return Number.isInteger(configured) && configured > 0
+    ? configured
+    : DEFAULT_MAX_QUOTE_AGE_MS;
+}
+
+function isStaleQuote(quote, now) {
+  // Some supported providers omit timestamps. The market-data contract
+  // normalizes those to null, so freshness cannot be checked in that case.
+  if (!quote.timestamp) {
+    return false;
+  }
+
+  const timestamp = Date.parse(quote.timestamp);
+
+  return (
+    Number.isFinite(timestamp) && now.getTime() - timestamp > maxQuoteAgeMs()
+  );
+}
 
 // Provider errors that describe the request/symbol rather than a temporary
 // outage. Retrying cannot fix them, so the alert is expired instead of being
@@ -191,15 +217,17 @@ async function triggerAlert(alert, quote, evaluation, { now = () => new Date() }
       return null;
     }
 
-    return tx.notification.create({
-      data: {
+    return createNotificationEvent(
+      {
+        eventKey: `alert:${alert.id}:triggered`,
         userId: alert.userId,
         type: "PRICE_ALERT",
         title: `Price alert: ${alert.symbol.symbol}`,
         message: evaluation.message,
         data: buildNotificationData(alert, quote),
       },
-    });
+      { db: tx, enqueue: false },
+    );
   });
 
   if (!notification) {
@@ -208,15 +236,7 @@ async function triggerAlert(alert, quote, evaluation, { now = () => new Date() }
 
   // The notification row is the source of truth. Delivery is best-effort; the
   // pending-notification scan retries it if Redis is unavailable.
-  void enqueueNotificationDelivery({
-    notificationId: notification.id,
-  }).catch((error) => {
-    logger.warn("Alert notification enqueue failed", {
-      alertId: alert.id,
-      notificationId: notification.id,
-      message: error.message,
-    });
-  });
+  enqueueNotificationEvent(notification.id);
 
   return {
     outcome: "triggered",
@@ -235,6 +255,16 @@ async function evaluateAlertWithQuote(
     return { outcome: "skipped", status: alert.status };
   }
 
+  const evaluatedAt = now();
+  if (isStaleQuote(quote, evaluatedAt)) {
+    return {
+      outcome: "stale_quote",
+      alertId: alert.id,
+      quoteTimestamp: quote.timestamp,
+      maxAgeMs: maxQuoteAgeMs(),
+    };
+  }
+
   const evaluation = evaluateCondition(alert, quote);
 
   // A percentage alert created before baselines existed has no reference
@@ -249,7 +279,7 @@ async function evaluateAlertWithQuote(
       },
       data: {
         baselinePrice: quote.price,
-        baselineAt: now(),
+        baselineAt: evaluatedAt,
       },
     });
 
@@ -473,6 +503,8 @@ async function scanActiveAlerts(
     invalid: results.filter((result) => result.outcome === "invalid").length,
     expired: results.filter((result) => result.outcome === "expired").length,
     errors: results.filter((result) => result.outcome === "error").length,
+    staleQuotes: results.filter((result) => result.outcome === "stale_quote")
+      .length,
     results,
   };
 }

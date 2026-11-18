@@ -132,9 +132,12 @@ describe("marketDataService provider-independent interface", () => {
       expect(normalizeAssetClass(undefined, pair)).toBe("CRYPTO");
     }
 
-    // An explicit asset class always wins, even for an ambiguous symbol.
+    // An explicit asset class wins for ambiguous symbols, but must not contradict unambiguous crypto formats.
     expect(normalizeAssetClass("CRYPTO", "WBTC")).toBe("CRYPTO");
-    expect(normalizeAssetClass("STOCK", "BTCUSDT")).toBe("STOCK");
+    expect(normalizeAssetClass("STOCK", "ETH")).toBe("STOCK");
+    expect(() => normalizeAssetClass("STOCK", "BTCUSDT")).toThrow(
+      "Market data is not supported for this asset class.",
+    );
   });
 
   test("infers crypto for the project's unprefixed crypto symbols", async () => {

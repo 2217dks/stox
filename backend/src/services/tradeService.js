@@ -3,10 +3,11 @@ const { randomUUID } = require("crypto");
 const { Prisma } = require("@prisma/client");
 
 const prisma = require("../config/database");
-const { createOrderExecutedNotification } = require("./notificationEvents");
 const {
-  evaluateAndGrantAchievements,
-} = require("./achievementService");
+  createOrderExecutedNotification,
+  createCopyTradeExecutedNotification,
+} = require("./notificationEvents");
+const { evaluateAndGrantAchievements } = require("./achievementService");
 const { publishExecutionEvents } = require("../realtime/orderEvents");
 const { enqueueCopyTradeFanOut } = require("../queues/copyTradeQueue");
 const { recordOrderEvent } = require("./orderEventService");
@@ -592,17 +593,32 @@ async function executeOrder(orderOrId, price, { now = new Date() } = {}) {
     cacheService.invalidateUserAnalytics(executedOrder.portfolio.userId),
   ]);
 
-  try {
-    await createOrderExecutedNotification({
-      userId: executedOrder.portfolio.userId,
-      order: executedOrder,
-      trade,
-    });
-  } catch (error) {
-    logger.warn("Failed to create order-executed notification", {
-      orderId: executedOrder.id,
-      error: error.message,
-    });
+  if (executedOrder.source === "COPY_TRADE") {
+    try {
+      await createCopyTradeExecutedNotification({
+        userId: executedOrder.portfolio.userId,
+        order: executedOrder,
+        trade,
+      });
+    } catch (error) {
+      logger.warn("Failed to create copy-trade notification", {
+        orderId: executedOrder.id,
+        error: error.message,
+      });
+    }
+  } else {
+    try {
+      await createOrderExecutedNotification({
+        userId: executedOrder.portfolio.userId,
+        order: executedOrder,
+        trade,
+      });
+    } catch (error) {
+      logger.warn("Failed to create order-executed notification", {
+        orderId: executedOrder.id,
+        error: error.message,
+      });
+    }
   }
 
   try {

@@ -1,3 +1,15 @@
+const {
+  toCanonicalSymbol,
+  toProviderSymbol,
+  toDisplaySymbol,
+  parseSymbol,
+  parseProviderPrefix,
+  inferAssetClass,
+  normalizeAssetClass,
+  normalizeSymbol,
+  isUnambiguousCryptoSymbol,
+} = require("../services/symbolMappingService");
+
 /**
  * Convert a client/provider symbol into the internal representation used by
  * rooms, cache keys, listeners, and realtime payloads.
@@ -7,12 +19,26 @@
  * the market stream from disagreeing about which symbol a room represents.
  */
 function toInternalSymbol(symbol) {
-  return String(symbol || "")
-    .trim()
-    .toUpperCase()
-    .replace(/^BINANCE:/, "");
+  if (!symbol) return "";
+  try {
+    return toCanonicalSymbol(symbol);
+  } catch {
+    return String(symbol || "")
+      .trim()
+      .toUpperCase()
+      .replace(/^BINANCE:/, "");
+  }
 }
 
 module.exports = {
   toInternalSymbol,
+  toCanonicalSymbol,
+  toProviderSymbol,
+  toDisplaySymbol,
+  parseSymbol,
+  parseProviderPrefix,
+  inferAssetClass,
+  normalizeAssetClass,
+  normalizeSymbol,
+  isUnambiguousCryptoSymbol,
 };

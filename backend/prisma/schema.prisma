@@ -458,6 +458,11 @@ model PerformanceSnapshot {
 model Notification {
   id String @id @default(uuid())
 
+  // Stable source-event identity prevents producers from creating duplicate
+  // inbox rows when a domain event is replayed. Null is retained for legacy
+  // and manually-created notifications.
+  eventKey String? @unique
+
   userId String
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)

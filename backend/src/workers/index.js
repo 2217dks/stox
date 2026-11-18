@@ -20,6 +20,7 @@ const { closeQueues, isQueuesEnabled } = require("../queues");
 const { startPortfolioSnapshotWorker } = require("./portfolioSnapshotWorker");
 const { startLeaderboardSnapshotWorker } = require("./leaderboardSnapshotWorker");
 const { startAchievementWorker } = require("./achievementWorker");
+const { startLeagueCompletionWorker } = require("./leagueCompletionWorker");
 
 const SHUTDOWN_TIMEOUT_MS = 5000;
 const DEFAULT_NOTIFICATION_SCAN_INTERVAL_MS = 30000;
@@ -111,6 +112,7 @@ const copyTradeScanScheduler = queuesEnabled
 const snapshotWorker = startPortfolioSnapshotWorker();
 const leaderboardWorker = startLeaderboardSnapshotWorker();
 const achievementWorker = startAchievementWorker();
+const leagueCompletionWorker = startLeagueCompletionWorker();
 
 logger.info(
   queuesEnabled
@@ -127,6 +129,7 @@ if (queuesEnabled) {
 logger.info("Portfolio snapshot worker started for daily scheduled captures");
 logger.info("Leaderboard snapshot worker started for daily scheduled refreshes");
 logger.info("Achievement worker started for durable achievement reconciliation");
+logger.info("League completion worker started for processing completed competitions");
 
 let shuttingDown = false;
 
@@ -172,6 +175,7 @@ async function shutdown(signal) {
   snapshotWorker.stop();
   leaderboardWorker.stop();
   achievementWorker.stop();
+  leagueCompletionWorker.stop();
 
   await closeQueueWorker(queueWorker, "Order queue worker");
   await closeQueueWorker(notificationQueueWorker, "Notification queue worker");
@@ -216,4 +220,5 @@ module.exports = {
   copyTradeScanScheduler,
   snapshotWorker,
   leaderboardWorker,
+  leagueCompletionWorker,
 };

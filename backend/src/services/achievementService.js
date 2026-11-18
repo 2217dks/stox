@@ -1,6 +1,6 @@
 const prisma = require("../config/database");
 const { Prisma } = require("@prisma/client");
-const { enqueueNotificationDelivery } = require("../queues/notificationQueue");
+const { createNotificationEvent } = require("./notificationEventService");
 const { calculatePortfolioValuation } = require("./portfolioValuationService");
 const logger = require("../utils/logger");
 
@@ -107,32 +107,23 @@ async function grantAchievement(userId, achievementCode) {
     throw error;
   }
 
+
   if (newlyGranted) {
     try {
-      const notification = await prisma.notification.create({
+      await createNotificationEvent({
+        eventKey: `achievement:${userAchievement.id}:unlocked`,
+        userId,
+        type: "ACHIEVEMENT_UNLOCKED",
+        title: "Achievement unlocked",
+        message: `You earned the "${achievement.name}" achievement!`,
         data: {
-          userId,
-          type: "ACHIEVEMENT_UNLOCKED",
-          title: "Achievement unlocked",
-          message: `You earned the "${achievement.name}" achievement!`,
-          data: {
-            achievementId: achievement.id,
-            code: achievement.code,
-            name: achievement.name,
-            description: userAchievement.reason,
-            reason: userAchievement.reason,
-          },
+          achievementId: achievement.id,
+          code: achievement.code,
+          name: achievement.name,
+          description: userAchievement.reason,
+          reason: userAchievement.reason,
         },
       });
-
-      void enqueueNotificationDelivery({ notificationId: notification.id }).catch(
-        (error) => {
-          logger.warn("Notification delivery enqueue failed", {
-            notificationId: notification.id,
-            message: error.message,
-          });
-        },
-      );
     } catch (notificationError) {
       logger.warn("Failed to create achievement unlocked notification", {
         userId,
@@ -141,6 +132,7 @@ async function grantAchievement(userId, achievementCode) {
       });
     }
   }
+
 
   return userAchievement;
 }

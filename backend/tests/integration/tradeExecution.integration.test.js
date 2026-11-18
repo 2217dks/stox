@@ -3,6 +3,10 @@ const { Prisma } = require("@prisma/client");
 const prisma = require("../../src/config/database");
 const orderService = require("../../src/services/orderService");
 const tradeService = require("../../src/services/tradeService");
+const {
+  createOrderExecutedNotification,
+  createCopyTradeExecutedNotification,
+} = require("../../src/services/notificationEvents");
 
 // Contract tests for the order-execution write path.
 //
@@ -157,6 +161,54 @@ describe("executeOrder: BUY", () => {
       price: "100",
       totalValue: "200",
     });
+
+    // Regular order does not generate a COPY_TRADE_EXECUTED notification
+    const copyNotification = await prisma.notification.findFirst({
+      where: { eventKey: `order:${order.id}:copy-trade-executed` },
+    });
+    expect(copyNotification).toBeNull();
+
+    // Repeated processing of regular order notification is idempotent
+    await createOrderExecutedNotification({ userId, order, trade: storedTrade });
+    expect(
+      await prisma.notification.count({
+        where: { eventKey: notification.eventKey },
+      }),
+    ).toBe(1);
+  });
+
+  test("creates one idempotent copy-trade notification for a copied execution without duplicate order-executed alert", async () => {
+    const order = await createOrder({ source: "COPY_TRADE" });
+    const trade = await tradeService.executeOrder(order, "100");
+
+    const copyNotifications = await prisma.notification.findMany({
+      where: { eventKey: `order:${order.id}:copy-trade-executed` },
+    });
+    expect(copyNotifications).toHaveLength(1);
+    expect(copyNotifications[0]).toMatchObject({
+      userId,
+      type: "COPY_TRADE_EXECUTED",
+      eventKey: `order:${order.id}:copy-trade-executed`,
+    });
+    expect(copyNotifications[0].data).toMatchObject({
+      orderId: order.id,
+      tradeId: trade.id,
+      symbol: "AAPL",
+    });
+
+    // Mutually exclusive: Copied order must NOT generate an ordinary ORDER_EXECUTED notification
+    const regularNotification = await prisma.notification.findFirst({
+      where: { eventKey: `order:${order.id}:executed` },
+    });
+    expect(regularNotification).toBeNull();
+
+    // Repeated processing does not create duplicate execution notifications
+    await createCopyTradeExecutedNotification({ userId, order, trade });
+    expect(
+      await prisma.notification.count({
+        where: { eventKey: copyNotifications[0].eventKey },
+      }),
+    ).toBe(1);
   });
 
   test("adds to an existing holding using a weighted average buy price", async () => {

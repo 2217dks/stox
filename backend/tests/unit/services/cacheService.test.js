@@ -290,6 +290,164 @@ describe("cacheService", () => {
       expect(loader).not.toHaveBeenCalled();
     });
 
+    test("loads and caches symbol search results on a cache miss", async () => {
+      fakeRedis.get.mockResolvedValue(null);
+
+      const matches = [
+        {
+          symbol: "AAPL",
+          name: "Apple Inc.",
+          assetClass: "STOCK",
+          exchange: "NASDAQ",
+          currency: "USD",
+          type: "Common Stock",
+          source: "finnhub",
+        },
+      ];
+      const loader = jest.fn().mockResolvedValue(matches);
+
+      const result = await cacheService.getOrSetMarketSearch(
+        "apple",
+        { assetClass: "STOCK", limit: 20 },
+        loader,
+      );
+
+      expect(result).toEqual(matches);
+      expect(loader).toHaveBeenCalledTimes(1);
+      expect(fakeRedis.set).toHaveBeenCalledWith(
+        "stox:v1:market:search:STOCK:APPLE:20",
+        JSON.stringify(matches),
+        "EX",
+        cacheService.TTL_SECONDS.symbolSearch,
+      );
+    });
+
+    test("does not call the search loader on a cache hit", async () => {
+      const matches = [
+        {
+          symbol: "AAPL",
+          name: "Apple Inc.",
+          assetClass: "STOCK",
+          exchange: "NASDAQ",
+          currency: "USD",
+          type: "Common Stock",
+          source: "finnhub",
+        },
+      ];
+      fakeRedis.get.mockResolvedValue(JSON.stringify(matches));
+
+      const loader = jest.fn();
+
+      const result = await cacheService.getOrSetMarketSearch(
+        "apple",
+        { assetClass: "STOCK", limit: 20 },
+        loader,
+      );
+
+      expect(result).toEqual(matches);
+      expect(loader).not.toHaveBeenCalled();
+      expect(fakeRedis.get).toHaveBeenCalledWith(
+        "stox:v1:market:search:STOCK:APPLE:20",
+      );
+    });
+
+    test("caches and returns empty search results consistently", async () => {
+      fakeRedis.get.mockResolvedValue(null);
+
+      const loader = jest.fn().mockResolvedValue([]);
+
+      const result = await cacheService.getOrSetMarketSearch(
+        "nonexistent",
+        { limit: 20 },
+        loader,
+      );
+
+      expect(result).toEqual([]);
+      expect(loader).toHaveBeenCalledTimes(1);
+      expect(fakeRedis.set).toHaveBeenCalledWith(
+        "stox:v1:market:search:ALL:NONEXISTENT:20",
+        JSON.stringify([]),
+        "EX",
+        cacheService.TTL_SECONDS.symbolSearch,
+      );
+
+      // Subsequent hit with cached empty array
+      fakeRedis.get.mockResolvedValue(JSON.stringify([]));
+      const hitLoader = jest.fn();
+      const hitResult = await cacheService.getOrSetMarketSearch(
+        "nonexistent",
+        { limit: 20 },
+        hitLoader,
+      );
+
+      expect(hitResult).toEqual([]);
+      expect(hitLoader).not.toHaveBeenCalled();
+    });
+
+    test("falls back safely to search loader on Redis failure", async () => {
+      fakeRedis.get.mockRejectedValue(new Error("Redis connection timed out"));
+
+      const matches = [
+        {
+          symbol: "BINANCE:BTCUSDT",
+          name: "BTC/USDT",
+          assetClass: "CRYPTO",
+        },
+      ];
+      const loader = jest.fn().mockResolvedValue(matches);
+
+      const result = await cacheService.getOrSetMarketSearch(
+        "btc",
+        { assetClass: "CRYPTO" },
+        loader,
+      );
+
+      expect(result).toEqual(matches);
+      expect(loader).toHaveBeenCalledTimes(1);
+      expect(logger.warn).toHaveBeenCalledWith(
+        "Redis cache operation failed",
+        expect.objectContaining({ message: "Redis connection timed out" }),
+      );
+    });
+
+    test("supports direct getMarketSearch, setMarketSearch, and invalidateMarketSearch", async () => {
+      const matches = [{ symbol: "TSLA", name: "Tesla Inc." }];
+
+      await cacheService.setMarketSearch("tsla", { limit: 10 }, matches);
+      expect(fakeRedis.set).toHaveBeenCalledWith(
+        "stox:v1:market:search:ALL:TSLA:10",
+        JSON.stringify(matches),
+        "EX",
+        cacheService.TTL_SECONDS.symbolSearch,
+      );
+
+      fakeRedis.get.mockResolvedValue(JSON.stringify(matches));
+      const cached = await cacheService.getMarketSearch("tsla", { limit: 10 });
+      expect(cached).toEqual(matches);
+
+      await cacheService.invalidateMarketSearch("tsla", { limit: 10 });
+      expect(fakeRedis.del).toHaveBeenCalledWith(
+        "stox:v1:market:search:ALL:TSLA:10",
+      );
+    });
+
+    test("aliases getSymbolSearch and getOrSetSymbolSearch to marketSearch", async () => {
+      fakeRedis.get.mockResolvedValue(JSON.stringify([]));
+      const loader = jest.fn();
+
+      const result = await cacheService.getOrSetSymbolSearch(
+        "aapl",
+        { assetClass: "STOCK" },
+        loader,
+      );
+
+      expect(result).toEqual([]);
+      expect(loader).not.toHaveBeenCalled();
+      expect(fakeRedis.get).toHaveBeenCalledWith(
+        "stox:v1:market:search:STOCK:AAPL:ALL",
+      );
+    });
+
     test("does not cache an in-flight summary after portfolio invalidation", async () => {
       const generationKey = "stox:v1:portfolio:summary:generation:portfolio-1";
 
