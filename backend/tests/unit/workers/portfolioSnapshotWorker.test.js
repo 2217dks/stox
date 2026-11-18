@@ -81,6 +81,26 @@ describe("portfolioSnapshotWorker unit tests", () => {
       );
     });
 
+    test("captureDailyPortfolioSnapshots does not forward a null price provider", async () => {
+      // Regression: an explicit `null` overrides the valuation layer's default
+      // market-data provider and crashes on `priceProvider.getHistoricalPrice`.
+      captureAllPortfolioSnapshots.mockResolvedValue({
+        snapshotDate: "2026-11-14",
+        asOf: "2026-11-14T23:59:59.999Z",
+        totalPortfolios: 1,
+        alreadyCaptured: 0,
+        attempted: 1,
+        successful: 1,
+        failed: 0,
+        errors: [],
+      });
+
+      await captureDailyPortfolioSnapshots({ targetDate: "2026-11-14" });
+
+      const [call] = captureAllPortfolioSnapshots.mock.calls.at(-1);
+      expect(call.priceProvider).toBeUndefined();
+    });
+
     test("date boundary: execution shortly after midnight UTC captures previous day EOD", async () => {
       const mockClient = {
         portfolio: {

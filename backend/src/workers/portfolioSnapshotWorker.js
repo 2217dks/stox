@@ -100,7 +100,7 @@ async function captureDailyPortfolioSnapshots({
   asOf = null,
   portfolioIds = null,
   force = false,
-  priceProvider = null,
+  priceProvider,
   client = prisma,
 } = {}) {
   let resolvedTargetDate;
@@ -171,7 +171,7 @@ function startPortfolioSnapshotWorker({
   intervalMs = DEFAULT_SNAPSHOT_INTERVAL_MS,
   settlementWindowHours = DEFAULT_SETTLEMENT_WINDOW_HOURS,
   autoStart = true,
-  priceProvider = null,
+  priceProvider,
   client = prisma,
 } = {}) {
   let stopped = false;
