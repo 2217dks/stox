@@ -2,6 +2,12 @@ jest.mock("dotenv", () => ({
   config: jest.fn(),
 }));
 
+jest.mock("../../../src/config/database", () => ({
+  symbol: {
+    findUnique: jest.fn().mockResolvedValue(null),
+  },
+}));
+
 jest.mock("../../../src/config/marketDataConfig", () => ({
   loadMarketDataConfig: jest.fn(() => ({
     providerByAssetClass: {

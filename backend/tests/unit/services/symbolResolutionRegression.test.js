@@ -1,3 +1,11 @@
+const mockPrismaDatabase = {
+  symbol: {
+    findUnique: jest.fn().mockResolvedValue(null),
+  },
+};
+
+jest.mock("../../../src/config/database", () => mockPrismaDatabase);
+
 const {
   resolveSymbol,
   toProviderSymbol,
@@ -17,6 +25,10 @@ describe("Symbol Resolution & Mapping Regression Suite", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+
+    mockPrismaDatabase.symbol.findUnique.mockReset();
+    mockPrismaDatabase.symbol.findUnique.mockResolvedValue(null);
+    mockPrisma = mockPrismaDatabase;
 
     mockPrisma = {
       symbol: {

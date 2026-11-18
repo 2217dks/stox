@@ -351,7 +351,7 @@ async function applyBuy(tx, order, quantity, price, totalValue, portfolio) {
   });
 }
 
-async function applySell(tx, order, quantity, totalValue) {
+async function applySell(tx, order, quantity, totalValue, fees = ZERO) {
   // Lock the holding and read its current quantity and invested amount.
   //
   // The removed cost basis is proportional to `totalInvested`, not derived
@@ -398,10 +398,11 @@ async function applySell(tx, order, quantity, totalValue) {
   // Rounding the stored remainder at the column scale makes the remainder and
   // the removed basis add back to the original total exactly. A full close is
   // forced to zero in the `newTotalInvested` assignment above, so it can never
-  // retain a rounded residual. Realized P&L uses this same removed basis, so
+  // retain a rounded residual. Realized P&L uses this same removed basis minus fees, so
   // the trade record and the holding can never disagree about what was sold.
+  const feesDecimal = toDecimal(fees) || ZERO;
   const removedCostBasis = currentTotalInvested.minus(newTotalInvested);
-  const realizedPnl = totalValue.minus(removedCostBasis);
+  const realizedPnl = totalValue.minus(removedCostBasis).minus(feesDecimal);
 
   await tx.holding.update({
     where: { id: holding.id },
@@ -411,12 +412,13 @@ async function applySell(tx, order, quantity, totalValue) {
     },
   });
 
-  // A sell only credits cash, so an unconditional increment is safe.
+  // A sell credits net cash (totalValue - fees), so increment cashBalance.
+  const netCashCredit = totalValue.minus(feesDecimal);
   await tx.portfolio.update({
     where: { id: order.portfolioId },
     data: {
       cashBalance: {
-        increment: totalValue,
+        increment: netCashCredit,
       },
     },
   });
@@ -443,7 +445,7 @@ async function applySell(tx, order, quantity, totalValue) {
  * `orderOrId` may be an order row (as in the worker) or a UUID, so callers
  * cannot accidentally execute a stale copy.
  */
-async function executeOrder(orderOrId, price, { now = new Date() } = {}) {
+async function executeOrder(orderOrId, price, { now = new Date(), fees = 0 } = {}) {
   const orderId = typeof orderOrId === "string" ? orderOrId : orderOrId?.id;
 
   if (!orderId) {
@@ -452,6 +454,7 @@ async function executeOrder(orderOrId, price, { now = new Date() } = {}) {
 
   const executionPrice = toExecutionPrice(price);
   const clock = now instanceof Date ? now : new Date(now);
+  const feesDecimal = toDecimal(fees) || ZERO;
 
   const { trade, order: executedOrder } = await prisma.$transaction(
     async (tx) => {
@@ -542,7 +545,13 @@ async function executeOrder(orderOrId, price, { now = new Date() } = {}) {
           portfolio,
         );
       } else if (order.side === "SELL") {
-        const realized = await applySell(tx, order, quantity, totalValue);
+        const realized = await applySell(
+          tx,
+          order,
+          quantity,
+          totalValue,
+          feesDecimal,
+        );
 
         realizedPnl = realized.realizedPnl;
         realizedPnlPct = realized.realizedPnlPct;
@@ -560,7 +569,7 @@ async function executeOrder(orderOrId, price, { now = new Date() } = {}) {
           quantity,
           price: executionPrice,
           totalValue,
-          fees: ZERO,
+          fees: feesDecimal,
           realizedPnl,
           realizedPnlPct,
           executedAt,
@@ -579,7 +588,7 @@ async function executeOrder(orderOrId, price, { now = new Date() } = {}) {
           totalValue: totalValue.toString(),
           realizedPnl: realizedPnl ? realizedPnl.toString() : null,
           realizedPnlPct: realizedPnlPct ? realizedPnlPct.toString() : null,
-          fees: ZERO.toString(),
+          fees: feesDecimal.toString(),
         },
       });
 
@@ -651,6 +660,11 @@ async function executeOrder(orderOrId, price, { now = new Date() } = {}) {
   return trade;
 }
 
+const {
+  calculateRealizedPnl,
+  getPortfolioRealizedPnl,
+} = require("./realizedPnlService");
+
 module.exports = {
   serializeTrade,
   getTrade,
@@ -658,4 +672,6 @@ module.exports = {
   evaluateOrder,
   executeOrder,
   TRADE_SORT_FIELDS,
+  calculateRealizedPnl,
+  getPortfolioRealizedPnl,
 };
