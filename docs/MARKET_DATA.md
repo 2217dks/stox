@@ -112,7 +112,25 @@ A bare suffix is not enough: tickers such as `GBTC`, `METH`, `SOL`, `COIN`, `RIO
 - Symbols in `KNOWN_AMBIGUOUS_STOCKS` default to `STOCK`.
 - Non-empty base assets of at least 2 characters before quote assets (`USDT`, `BTC`, `ETH`) infer `CRYPTO`.
 - Clients can pass an explicit `assetClass` (`STOCK` or `CRYPTO`) to override inference for ambiguous instruments.
-- Database records in the PostgreSQL `Symbol` model are authoritative for instrument `assetType` (`STOCK`, `CRYPTO`, `FOREX`), and attempting to query a symbol with a conflicting `assetClass` throws `400 ASSET_TYPE_MISMATCH`.
+
+### Database Precedence & Resolution Rules (`resolveSymbol`)
+
+All market-data paths (`getQuote`, `getHistoricalPrices`, `getHistoricalPrice`) resolve instruments through `resolveSymbol()`:
+
+1. **Authoritative Database Precedence**:
+   - When a symbol exists in the PostgreSQL `Symbol` table, its database metadata (`assetType`, `exchange`, `currency`) takes absolute precedence over syntax-based inference.
+   - For example, an equity registered as `XYZUSDT` with `assetType: "STOCK"` routes to Finnhub as a stock despite ending in `USDT`.
+   - A single-token cryptocurrency registered as `ETH` with `assetType: "CRYPTO"` routes to Binance as crypto (`ETHUSDT`) despite having no slash or pair suffix.
+2. **Inactive Symbol Enforcement**:
+   - Inactive database records (`isActive: false`) are rejected with `404 SYMBOL_NOT_FOUND` ("Active symbol not found.") unless `includeInactive: true` is explicitly provided.
+3. **Unknown Symbols & Fallback**:
+   - Symbols without a database record fall back to deterministic rule-based inference (`source: "rule"`) by default.
+   - When `strict: true` is supplied, unknown symbols throw `404 SYMBOL_NOT_FOUND`.
+4. **Strict Prefix & Asset-Class Compatibility**:
+   - Conflicting provider prefixes (`FINNHUB:BTCUSDT`, `BINANCE:AAPL`, `BINANCE:GBTC`, `FINNHUB:BTC/USDT`) throw `400 MARKET_DATA_INVALID_REQUEST`.
+   - Explicit asset classes conflicting with prefixes (e.g. `FINNHUB:AAPL` with `assetClass: "CRYPTO"`, or `BINANCE:BTCUSDT` with `assetClass: "STOCK"`) throw `422 MARKET_DATA_UNSUPPORTED_ASSET_CLASS`.
+   - Slash-form crypto notation with conflicting explicit asset class (`BTC/USDT` with `assetClass: "STOCK"`) throws `422 MARKET_DATA_UNSUPPORTED_ASSET_CLASS`.
+   - Querying a database record with a conflicting explicit asset class (e.g. `AAPL` with `assetClass: "CRYPTO"`) throws `400 ASSET_TYPE_MISMATCH`.
 
 ---
 
