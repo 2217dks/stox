@@ -38,6 +38,16 @@ module.exports = {
     );
   },
 
+  async searchSymbols(query, options = {}) {
+    if (typeof query !== "string" || !query.trim()) {
+      return marketDataService.searchSymbols(query, options);
+    }
+
+    return cacheService.getOrSetMarketSearch(query, options, () =>
+      marketDataService.searchSymbols(query, options),
+    );
+  },
+
   async getHistoricalPrice(symbol, options = {}) {
     const assetClass = options.assetClass
       ? String(options.assetClass).trim().toUpperCase()

@@ -657,6 +657,10 @@ When both asset classes are requested, the service combines both provider result
 
 Pass `assetClass` to search only one provider. Provider timeouts, throttling, and unavailability use the standard market-data domain error codes.
 
+### Caching
+
+Search results are cached in Redis under `stox:v1:market:search:{assetClass}:{query}:{limit}` with a 1-hour bounded TTL (`CACHE_TTL_SYMBOL_SEARCH_SECONDS`, configurable). Queries are case-insensitively normalized with trimmed whitespace so equivalent lookups hit the same cache entry. Empty match arrays (`[]`) are cached to prevent repetitive upstream provider queries on unknown symbols. If Redis is unavailable, the endpoint transparently falls back to direct provider lookups without client-facing failure.
+
 ### Example
 
 ```text

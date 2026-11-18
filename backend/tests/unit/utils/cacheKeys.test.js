@@ -127,4 +127,60 @@ describe("cacheKeys", () => {
       expect(k1).toContain(`stox:v1:analytics:u:${userId1}:stats-monthly::MSFT`);
     });
   });
+
+  describe("marketSearch and symbolSearch cache keys", () => {
+    test("generates expected stable key with default options", () => {
+      const key = cacheKeys.marketSearch("apple");
+      expect(key).toBe("stox:v1:market:search:ALL:APPLE:ALL");
+    });
+
+    test("normalizes query case, surrounding whitespace, and internal spacing", () => {
+      const k1 = cacheKeys.marketSearch("apple");
+      const k2 = cacheKeys.marketSearch("  APPLE  ");
+      const k3 = cacheKeys.marketSearch("  apple  ");
+      const k4 = cacheKeys.marketSearch("  apple   inc  ");
+
+      expect(k1).toBe(k2);
+      expect(k1).toBe(k3);
+      expect(k4).toBe("stox:v1:market:search:ALL:APPLE INC:ALL");
+    });
+
+    test("normalizes assetClass and limit filters", () => {
+      const k1 = cacheKeys.marketSearch("aapl", { assetClass: "stock", limit: 20 });
+      const k2 = cacheKeys.marketSearch("AAPL", { assetClass: "STOCK", limit: "20" });
+      const k3 = cacheKeys.marketSearch("btc", { assetClass: "crypto", limit: 50 });
+
+      expect(k1).toBe("stox:v1:market:search:STOCK:AAPL:20");
+      expect(k1).toBe(k2);
+      expect(k3).toBe("stox:v1:market:search:CRYPTO:BTC:50");
+    });
+
+    test("differentiates keys when query, assetClass, or limit differs", () => {
+      const base = cacheKeys.marketSearch("apple", { assetClass: "STOCK", limit: 20 });
+      const diffQuery = cacheKeys.marketSearch("msft", { assetClass: "STOCK", limit: 20 });
+      const diffClass = cacheKeys.marketSearch("apple", { assetClass: "CRYPTO", limit: 20 });
+      const diffLimit = cacheKeys.marketSearch("apple", { assetClass: "STOCK", limit: 10 });
+      const allClass = cacheKeys.marketSearch("apple", { limit: 20 });
+
+      expect(base).not.toBe(diffQuery);
+      expect(base).not.toBe(diffClass);
+      expect(base).not.toBe(diffLimit);
+      expect(base).not.toBe(allClass);
+    });
+
+    test("symbolSearch is an alias for marketSearch", () => {
+      const k1 = cacheKeys.symbolSearch("apple", { assetClass: "STOCK", limit: 20 });
+      const k2 = cacheKeys.marketSearch("apple", { assetClass: "STOCK", limit: 20 });
+
+      expect(k1).toBe(k2);
+    });
+
+    test("throws an error when query is missing or whitespace-only", () => {
+      expect(() => cacheKeys.marketSearch()).toThrow("query is required");
+      expect(() => cacheKeys.marketSearch("")).toThrow("query is required");
+      expect(() => cacheKeys.marketSearch("   ")).toThrow("query is required");
+      expect(() => cacheKeys.marketSearch(null)).toThrow("query is required");
+      expect(() => cacheKeys.marketSearch(undefined)).toThrow("query is required");
+    });
+  });
 });
