@@ -272,9 +272,580 @@ Deactivate or delete a portfolio.
 
 Get current holdings.
 
+## `GET /portfolios/:id/realized-pnl`
+
+Calculate realized P&L from completed sell trades for a caller-owned portfolio.
+
+Sign conventions:
+- Positive (`> 0`): Net profit / gain
+- Negative (`< 0`): Net loss
+- Zero (`= 0`): Breakeven
+
+Cost-basis and fee treatment:
+- Proportional cost basis is deducted based on the portfolio holding's `totalInvested`.
+- Trade fees are deducted directly from realized proceeds (`realizedPnl = totalValue - costBasis - fees`).
+- Exact `Decimal(18, 8)` precision is preserved across partial closes and multiple fills.
+
+### Query Parameters
+
+| Parameter | Type   | Default | Description |
+|-----------|--------|---------|-------------|
+| `period`  | enum   | `1M`    | Observation window: `1W`, `1M`, `3M`, `6M`, `1Y`, `YTD`, `ALL` |
+| `from`    | string | -       | ISO datetime lower bound (inclusive) |
+| `to`      | string | -       | ISO datetime upper bound (exclusive) |
+| `symbol`  | string | -       | Optional symbol filter (e.g. `AAPL`) |
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolioId": "uuid",
+    "period": "1M",
+    "startDate": "2026-10-18T00:00:00.000Z",
+    "endDate": "2026-11-18T00:00:00.000Z",
+    "realizedPnl": "195.00000000",
+    "realizedPnlPct": "15.0000",
+    "totalProceeds": "1500.00000000",
+    "totalCostBasis": "1300.00000000",
+    "totalFees": "5.00000000",
+    "tradeCount": 1,
+    "winningTrades": 1,
+    "losingTrades": 0,
+    "breakevenTrades": 0,
+    "winRate": 1.0,
+    "bySymbol": [
+      {
+        "symbol": "AAPL",
+        "realizedPnl": "195.00000000",
+        "realizedPnlPct": "15.0000",
+        "proceeds": "1500.00000000",
+        "costBasis": "1300.00000000",
+        "fees": "5.00000000",
+        "tradeCount": 1,
+        "winningTrades": 1,
+        "losingTrades": 0,
+        "breakevenTrades": 0
+      }
+    ],
+    "trades": [
+      {
+        "id": "trade-uuid",
+        "orderId": "order-uuid",
+        "symbol": "AAPL",
+        "side": "SELL",
+        "quantity": "10.00000000",
+        "price": "150.00000000",
+        "totalValue": "1500.00000000",
+        "costBasis": "1300.00000000",
+        "fees": "5.00000000",
+        "realizedPnl": "195.00000000",
+        "realizedPnlPct": "15.0000",
+        "executedAt": "2026-11-01T10:00:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+## `GET /portfolios/:id/unrealized-pnl`
+
+Calculate live unrealized P&L for open positions (`quantity > 0`) using eligible market prices and position cost basis.
+
+Sign conventions:
+- Long positions: `currentMarketValue - totalInvested`
+- Short positions: `totalInvested - currentMarketValue`
+
+Freshness & Stale Handling:
+- Never treats missing, null, or stale prices as zero.
+- Each open position exposes freshness context (`isStale`, `freshness`, `ageSeconds`, `priceTimestamp`).
+- When `rejectStale=true`, requests encountering stale quotes fail explicitly with `503 MARKET_DATA_STALE_QUOTE`.
+
+### Query Parameters
+
+| Parameter       | Type    | Default | Description |
+|-----------------|---------|---------|-------------|
+| `rejectStale`   | boolean | `false` | When true, rejects quotes exceeding configured freshness thresholds with `503 MARKET_DATA_STALE_QUOTE` |
+| `allowStale`    | boolean | `false` | When true, permits stale quotes to be included while explicitly marking them `isStale: true` |
+| `maxAgeSeconds` | int     | -       | Optional client-requested maximum quote age limit in seconds (1 to 86400) |
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolioId": "uuid",
+    "totalInvested": "3000.00000000",
+    "marketValue": "3300.00000000",
+    "unrealizedPnl": "300.00000000",
+    "unrealizedPnlPct": "10.0000",
+    "isStale": false,
+    "freshness": "FRESH",
+    "maxAgeSeconds": 15,
+    "positionCount": 1,
+    "asOf": "2026-11-18T00:50:00.000Z",
+    "positions": [
+      {
+        "id": "holding-uuid",
+        "symbol": "AAPL",
+        "assetType": "STOCK",
+        "isShort": false,
+        "quantity": "20.00000000",
+        "averageBuyPrice": "150.00000000",
+        "totalInvested": "3000.00000000",
+        "currentPrice": "165.00000000",
+        "marketValue": "3300.00000000",
+        "unrealizedPnl": "300.00000000",
+        "unrealizedPnlPct": "10.0000",
+        "isStale": false,
+        "freshness": "FRESH",
+        "ageSeconds": 15,
+        "priceTimestamp": "2026-11-18T00:49:45.000Z"
+      }
+    ]
+  }
+}
+```
+
+## `GET /portfolios/:id/pnl`
+
+Aggregate portfolio-level realized and unrealized P&L with decimal-safe precision.
+
+Reconciles:
+- Realized P&L from closed/partially closed trades (`Trade.side = 'SELL'`) within period boundaries.
+- Unrealized P&L from open positions (`Holding.quantity > 0`) marked to market with live freshness checks.
+- Cash balance and total portfolio valuation (`cashBalance + openHoldingsMarketValue`).
+- Total account return against `startingBalance`.
+- Double-counting prevention: cost basis transitions cleanly from open holding to closed trade upon execution.
+- Trade fees are deducted directly from realized proceeds and accounted for without double-counting.
+
+### Query Parameters
+
+| Parameter       | Type    | Default | Description |
+|-----------------|---------|---------|-------------|
+| `period`        | enum    | `1M`    | Observation window: `1W`, `1M`, `3M`, `6M`, `1Y`, `YTD`, `ALL` |
+| `from`          | string  | -       | ISO datetime lower bound |
+| `to`            | string  | -       | ISO datetime upper bound |
+| `symbol`        | string  | -       | Optional symbol filter |
+| `rejectStale`   | boolean | `false` | When true, rejects quotes exceeding freshness thresholds with `503 MARKET_DATA_STALE_QUOTE` |
+| `allowStale`    | boolean | `false` | When true, permits stale quotes to be included while marking `isStale: true` |
+| `maxAgeSeconds` | int     | -       | Optional client-requested maximum quote age limit in seconds |
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolioId": "uuid",
+    "currency": "USD",
+    "period": "1M",
+    "startDate": "2026-10-18T00:00:00.000Z",
+    "endDate": "2026-11-18T00:00:00.000Z",
+    "asOf": "2026-11-18T00:50:00.000Z",
+    "startingBalance": "10000.00000000",
+    "cashBalance": "4000.00000000",
+    "openHoldingsValue": "6300.00000000",
+    "openHoldingsCostBasis": "6000.00000000",
+    "totalPortfolioValue": "10300.00000000",
+    "netPnl": "500.00000000",
+    "netPnlPct": "6.2539",
+    "accountPnl": "300.00000000",
+    "accountPnlPct": "3.0000",
+    "realized": {
+      "pnl": "200.00000000",
+      "pnlPct": "10.0000",
+      "proceeds": "2200.00000000",
+      "costBasis": "1995.00000000",
+      "fees": "5.00000000",
+      "tradeCount": 2,
+      "winningTrades": 2,
+      "losingTrades": 0,
+      "breakevenTrades": 0,
+      "winRate": 1.0,
+      "bySymbol": []
+    },
+    "unrealized": {
+      "pnl": "300.00000000",
+      "pnlPct": "5.0000",
+      "marketValue": "6300.00000000",
+      "costBasis": "6000.00000000",
+      "positionCount": 1,
+      "isStale": false,
+      "freshness": "FRESH",
+      "maxAgeSeconds": 15,
+      "positions": []
+    },
+    "reconciliation": {
+      "isReconciled": true,
+      "openPositionsCount": 1,
+      "closedTradesCount": 2,
+      "totalFees": "5.00000000"
+    }
+  }
+}
+```
+
+## `GET /portfolios/:id/snapshots`
+
+Retrieve chronological daily end-of-day performance snapshots for a caller-owned portfolio.
+
+Guarantees:
+- Enforces strict user ownership (returns 404 for unowned or missing portfolios).
+- Results are strictly ordered chronologically (`snapshotDate ASC`).
+- Missing snapshot dates are represented accurately without inventing synthetic values.
+
+### Query Parameters
+
+| Parameter | Type   | Default | Description |
+|-----------|--------|---------|-------------|
+| `from`    | string | -       | Date or ISO datetime lower bound (e.g. `2026-10-01`) |
+| `to`      | string | -       | Date or ISO datetime upper bound (e.g. `2026-11-01`) |
+| `limit`   | int    | `100`   | Maximum snapshots to return (1 to 365) |
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolioId": "uuid",
+    "from": "2026-10-01",
+    "to": "2026-11-01",
+    "count": 2,
+    "snapshots": [
+      {
+        "id": "snapshot-uuid-1",
+        "portfolioId": "uuid",
+        "snapshotDate": "2026-10-01",
+        "totalValue": "10000",
+        "cashBalance": "5000",
+        "holdingsValue": "5000",
+        "dailyPnl": "0",
+        "dailyPnlPct": "0",
+        "createdAt": "2026-10-01T23:59:59.000Z"
+      },
+      {
+        "id": "snapshot-uuid-2",
+        "portfolioId": "uuid",
+        "snapshotDate": "2026-10-02",
+        "totalValue": "10250",
+        "cashBalance": "5000",
+        "holdingsValue": "5250",
+        "dailyPnl": "250",
+        "dailyPnlPct": "0.025",
+        "createdAt": "2026-10-02T23:59:59.000Z"
+      }
+    ]
+  }
+}
+```
+
+## `GET /portfolios/:id/dashboard`
+
+Unified portfolio dashboard summary endpoint composing portfolio metadata, performance metrics, open positions summary with live quote freshness, and recent order/trade activity into one request.
+
+Scoped strictly to the authenticated user and portfolio.
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolio": {
+      "id": "uuid",
+      "name": "Default Portfolio",
+      "description": "My trading portfolio",
+      "currency": "USD",
+      "startingBalance": "10000.00000000",
+      "cashBalance": "5000.00000000",
+      "holdingsValue": "5500.00000000",
+      "totalValue": "10500.00000000",
+      "isDefault": true,
+      "createdAt": "2026-10-01T00:00:00.000Z"
+    },
+    "performance": {
+      "totalPnl": "500.00000000",
+      "totalReturnPct": "5.0000",
+      "accountPnl": "500.00000000",
+      "accountPnlPct": "5.0000",
+      "dailyPnl": "120",
+      "dailyReturnPct": "0.0115",
+      "lastSnapshotDate": "2026-11-17",
+      "realizedPnl": "200.00000000",
+      "realizedPnlPct": "10.0000",
+      "unrealizedPnl": "300.00000000",
+      "unrealizedPnlPct": "6.0000",
+      "winRate": 0.8,
+      "winningTrades": 4,
+      "losingTrades": 1,
+      "tradeCount": 5
+    },
+    "positionsSummary": {
+      "openPositionsCount": 2,
+      "totalInvested": "5000.00000000",
+      "marketValue": "5500.00000000",
+      "isStale": false,
+      "freshness": "FRESH",
+      "topPositions": [
+        {
+          "symbol": "AAPL",
+          "marketValue": "3500.00000000",
+          "unrealizedPnl": "200.00000000"
+        }
+      ]
+    },
+    "recentActivity": {
+      "pendingOrdersCount": 1,
+      "recentOrders": [],
+      "recentTrades": []
+    },
+    "asOf": "2026-11-18T00:50:00.000Z"
+  }
+}
+```
+
 ## `GET /portfolios/:id/performance`
 
-Get performance history and statistics.
+Expose portfolio performance for a requested period using the approved return methodology and baseline anchoring.
+
+### Query Parameters
+
+| Parameter | Type   | Default | Description |
+|-----------|--------|---------|-------------|
+| `period`  | enum   | `1M`    | Window preset: `1W`, `1M`, `3M`, `6M`, `1Y`, `YTD`, `ALL` |
+| `year`    | int    | -       | Optional calendar year filter (e.g. `2026`) |
+| `from`    | string | -       | Custom start boundary (`YYYY-MM-DD` or ISO 8601) |
+| `to`      | string | -       | Custom end boundary (`YYYY-MM-DD` or ISO 8601) |
+
+### Return Methodology & Invariants
+
+- **Baseline**: Anchored to the latest snapshot strictly prior to period start. If no prior snapshot exists, falls back to the first snapshot in the window or the portfolio's starting balance.
+- **Date Boundary Normalization**: Date-only bounds (`to: YYYY-MM-DD`) are normalized to `23:59:59.999Z` of the requested day, ensuring intraday trades and daily end-of-day snapshots on that day are fully captured. Uses centralized date boundary parsing shared with `/history`.
+- **Return %**: Calculated as `(netPnl / startValue) * 100`, formatted to 4 decimal places. Returns `"0.0000"` when start value is zero.
+- **Realized P&L**: Sum of realized P&L from closed trades executed within `[from, to]`.
+- **Unrealized P&L**: Net valuation change minus realized P&L (`netPnl - realizedPnl`).
+- **Time-Weighted Return (TWR)**: Compounded product of daily snapshot return factors $\prod (1 + r_i) - 1$.
+- **Best/Worst Day**: Identifies the single day with highest and lowest daily P&L and return.
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolioId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "period": "1M",
+    "startDate": "2026-10-19T00:00:00.000Z",
+    "endDate": "2026-11-18T23:59:59.999Z",
+    "asOf": "2026-11-18T01:00:00.000Z",
+    "baseline": {
+      "date": "2026-10-18",
+      "source": "prior_snapshot",
+      "totalValue": "10000.00000000",
+      "cashBalance": "5000.00000000",
+      "holdingsValue": "5000.00000000"
+    },
+    "current": {
+      "date": "2026-11-18",
+      "totalValue": "10400.00000000",
+      "cashBalance": "6000.00000000",
+      "holdingsValue": "4400.00000000"
+    },
+    "performance": {
+      "startValue": "10000.00000000",
+      "endValue": "10400.00000000",
+      "netPnl": "400.00000000",
+      "returnPct": "4.0000",
+      "timeWeightedReturnPct": "3.9850",
+      "realizedPnl": "150.00000000",
+      "unrealizedPnl": "250.00000000",
+      "fees": "4.50000000",
+      "tradesCount": 2,
+      "bestDay": {
+        "date": "2026-11-02",
+        "pnl": "300.00000000",
+        "returnPct": "2.9400"
+      },
+      "worstDay": {
+        "date": "2026-11-03",
+        "pnl": "-100.00000000",
+        "returnPct": "-0.9500"
+      }
+    },
+    "series": [
+      {
+        "date": "2026-11-01",
+        "totalValue": "10200.00000000",
+        "cashBalance": "5000.00000000",
+        "holdingsValue": "5200.00000000",
+        "dailyPnl": "200.00000000",
+        "dailyReturnPct": "2.0000"
+      }
+    ]
+  }
+}
+```
+
+## `GET /portfolios/:id/history`
+
+Expose chronological historical portfolio state for a requested time range, combining verified snapshots with executed trade activity and tracking missing date gaps without inventing synthetic records.
+
+Guarantees:
+- **Centralized Date Boundaries**: End dates are normalized to `23:59:59.999Z`, producing consistent query windows compatible with `/performance`.
+- **Distinct Date Validation**: `recordedDays` and `missingDays` metadata are derived strictly from distinct recorded UTC dates, ensuring that duplicate snapshot records on the same day never distort gap calculations or calendar day totals.
+
+### Query Parameters
+
+| Parameter | Type   | Default       | Description |
+|-----------|--------|---------------|-------------|
+| `from`    | string | 30 days ago   | Range start date (`YYYY-MM-DD` or ISO 8601). Maximum window 365 days. |
+| `to`      | string | Current date  | Range end date (`YYYY-MM-DD` or ISO 8601). Must be $\ge$ `from`. |
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolioId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "metadata": {
+      "requestedRange": {
+        "from": "2026-11-01",
+        "to": "2026-11-05"
+      },
+      "totalDays": 5,
+      "recordedDays": 3,
+      "missingDays": 2,
+      "hasGaps": true,
+      "gaps": [
+        {
+          "from": "2026-11-03",
+          "to": "2026-11-04",
+          "missingDays": 2
+        }
+      ]
+    },
+    "history": [
+      {
+        "date": "2026-11-01",
+        "totalValue": "10000.00000000",
+        "cashBalance": "5000.00000000",
+        "holdingsValue": "5000.00000000",
+        "dailyPnl": "0.00000000",
+        "dailyPnlPct": "0.0000",
+        "tradesCount": 0,
+        "tradeVolume": "0.00000000"
+      },
+      {
+        "date": "2026-11-02",
+        "totalValue": "10200.00000000",
+        "cashBalance": "4500.00000000",
+        "holdingsValue": "5700.00000000",
+        "dailyPnl": "200.00000000",
+        "dailyPnlPct": "2.0000",
+        "tradesCount": 2,
+        "tradeVolume": "750.00000000"
+      }
+    ]
+  }
+}
+```
+
+## `GET /portfolios/:id/allocation`
+
+Calculate current portfolio allocation breakdown across requested dimensions (`symbol` or `asset`).
+
+### Query Parameters
+
+| Parameter   | Type | Default  | Description |
+|-------------|------|----------|-------------|
+| `dimension` | enum | `symbol` | Grouping dimension: `symbol` (individual holdings + cash) or `asset` (asset class: `STOCK`, `CRYPTO`, `CASH`). |
+
+### Allocation Rules & Reconciliation
+
+- **Cash Inclusion**: Uninvested cash balance is treated as a first-class allocation component (`CASH`).
+- **Missing Price Fallback & Visibility**: When live market prices are unavailable or non-positive, gracefully falls back to holding `averageBuyPrice` (cost basis). To ensure transparency:
+  - Individual items carry `isPriceEstimated: true` and `priceSource: "cost_basis"`.
+  - The root response carries `isEstimated: true` and `valuationMethod: "estimated"`.
+  - `pricingSummary` provides explicit counts (`totalHoldings`, `liveQuotes`, `estimatedQuotes`).
+  - The `reconciliation` block explicitly carries `isEstimated: true` and `valuationMethod: "estimated"` to prevent implying values are live market valuations.
+- **Zero Value Behavior**: If total portfolio value $\le 0$, all allocation percentages return `"0.0000"`.
+- **Percentage Reconciliation**: Sum of allocation percentages is strictly reconciled to **`100.0000%`** by distributing any 4-decimal rounding residual to the largest holding.
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolioId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "dimension": "symbol",
+    "totalPortfolioValue": "10000.00000000",
+    "cashBalance": "2500.00000000",
+    "holdingsValue": "7500.00000000",
+    "holdingsCount": 2,
+    "isEstimated": false,
+    "valuationMethod": "market",
+    "pricingSummary": {
+      "totalHoldings": 2,
+      "liveQuotes": 2,
+      "estimatedQuotes": 0,
+      "hasEstimatedPrices": false
+    },
+    "allocations": [
+      {
+        "key": "MSFT",
+        "name": "MSFT",
+        "dimension": "symbol",
+        "assetType": "STOCK",
+        "quantity": "20.00000000",
+        "price": "300.00000000",
+        "priceSource": "live",
+        "isPriceEstimated": false,
+        "value": "6000.00000000",
+        "percentage": "60.0000"
+      },
+      {
+        "key": "CASH",
+        "name": "Cash Balance",
+        "dimension": "symbol",
+        "assetType": "CASH",
+        "quantity": "1.00000000",
+        "price": "2500.00000000",
+        "priceSource": "portfolio",
+        "isPriceEstimated": false,
+        "value": "2500.00000000",
+        "percentage": "25.0000"
+      },
+      {
+        "key": "AAPL",
+        "name": "AAPL",
+        "dimension": "symbol",
+        "assetType": "STOCK",
+        "quantity": "10.00000000",
+        "price": "150.00000000",
+        "priceSource": "live",
+        "isPriceEstimated": false,
+        "value": "1500.00000000",
+        "percentage": "15.0000"
+      }
+    ],
+    "reconciliation": {
+      "totalPortfolioValue": "10000.00000000",
+      "sumAllocatedValue": "10000.00000000",
+      "totalPercentage": "100.0000",
+      "isReconciled": true,
+      "isEstimated": false,
+      "valuationMethod": "market"
+    },
+    "asOf": "2026-11-18T01:00:00.000Z"
+  }
+}
+```
 
 ## `GET /portfolios/:id/pnl-heatmap`
 
@@ -642,6 +1213,24 @@ Stox decouples internal canonical instruments from provider-specific formats:
   - **Stocks (Finnhub)**: Standard equity tickers (e.g. `AAPL`, `MSFT`, `BRK.B`).
 - **Ambiguous Tickers**: Symbols like `GBTC`, `METH`, `SOL`, `COIN`, `RIOT`, and `BITO` default to `STOCK`. Specify `assetClass=CRYPTO` (or pass explicit asset class in orders) to override.
 - **Database Resolution**: PostgreSQL `Symbol` model records are authoritative for instrument metadata (`assetType`, `exchange`, `currency`, `isActive`). Discrepancies between requested asset classes and registered symbols reject with `400 ASSET_TYPE_MISMATCH`.
+
+### Provider Resilience and Retry Policy
+
+All market data provider requests apply bounded retries with exponential backoff and jitter for transient provider failures:
+- **Transient Failures Retried**:
+  - Request timeouts (`HTTP 408`, `HTTP 504`, `ECONNABORTED`, `ETIMEDOUT`, `ESOCKETTIMEDOUT`).
+  - Provider rate limits and throttling (`HTTP 429`, `HTTP 418`, or `HTTP 403` with throttling messages).
+  - Server errors (`HTTP 500`, `HTTP 502`, `HTTP 503`, `HTTP 504`).
+  - Transient network disconnects (`ECONNRESET`, `ECONNREFUSED`, `EPIPE`, `EAI_AGAIN`).
+- **Permanent Failures Never Retried**:
+  - Invalid requests (`HTTP 400`, `HTTP 422`).
+  - Unknown symbols / Not found (`HTTP 404`, Binance error code `-1121`, or `"unknown symbol"`).
+  - Permanent authentication errors (`HTTP 401`, non-rate-limit `HTTP 403`).
+- **Backoff & Jitter**:
+  - Bounded to `MARKET_DATA_MAX_RETRIES` (default: 2 retries, 3 total attempts).
+  - Exponential delay starting at `MARKET_DATA_RETRY_BASE_DELAY_MS` (default: 200ms) up to `MARKET_DATA_RETRY_MAX_DELAY_MS` (default: 2000ms).
+  - Full jitter randomized to prevent synchronized thundering-herd spikes.
+  - Provider `Retry-After` headers (numeric seconds or HTTP dates) are respected when supplied.
 
 ## `GET /market/search`
 
