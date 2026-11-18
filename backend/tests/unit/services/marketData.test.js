@@ -2,6 +2,12 @@ jest.mock("dotenv", () => ({
   config: jest.fn(),
 }));
 
+jest.mock("../../../src/config/database", () => ({
+  symbol: {
+    findUnique: jest.fn().mockResolvedValue(null),
+  },
+}));
+
 jest.mock("../../../src/config/marketDataConfig", () => ({
   loadMarketDataConfig: jest.fn(() => ({
     providerByAssetClass: {
@@ -93,6 +99,26 @@ describe("marketData quote caching", () => {
       "CRYPTO",
       "BTCUSDT",
       expect.any(Function),
+    );
+  });
+
+  test.each([
+    { bypassCache: true },
+    { skipCache: true },
+    { noCache: true },
+    { bypass: true },
+  ])("forwards bypass flag when %j is passed", async (bypassOption) => {
+    await marketData.getQuote("AAPL", bypassOption);
+
+    expect(cacheService.getOrSetPrice).toHaveBeenCalledWith(
+      "STOCK",
+      "AAPL",
+      expect.any(Function),
+      expect.objectContaining({
+        bypass: true,
+        assetClass: "STOCK",
+        ...bypassOption,
+      }),
     );
   });
 
