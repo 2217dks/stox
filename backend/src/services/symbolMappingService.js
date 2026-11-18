@@ -416,6 +416,7 @@ async function resolveSymbol(symbol, options = {}) {
 
   const prisma = options.prisma || getDefaultPrisma();
   let dbRecord = null;
+  let dbError = null;
 
   if (prisma?.symbol?.findUnique) {
     try {
@@ -423,9 +424,21 @@ async function resolveSymbol(symbol, options = {}) {
         where: { symbol: canonicalSymbol },
       });
     } catch (err) {
-      if (options.failOnError) {
-        throw err;
-      }
+      dbError = err;
+    }
+  }
+
+  if (dbError) {
+    if (options.allowFallbackOnError) {
+      dbRecord = null;
+    } else if (options.failOnError || dbError instanceof AppError) {
+      throw dbError;
+    } else {
+      throw createMarketDataError(
+        "Symbol resolution failed due to a database error.",
+        500,
+        "DATABASE_ERROR",
+      );
     }
   }
 

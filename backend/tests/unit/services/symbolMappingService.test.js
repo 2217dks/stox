@@ -362,6 +362,49 @@ describe("symbolMappingService", () => {
       });
     });
 
+    test("throws DATABASE_ERROR (500) when database query rejects with an error", async () => {
+      mockPrisma.symbol.findUnique.mockRejectedValueOnce(
+        new Error("Database connection timeout"),
+      );
+
+      await expect(
+        resolveSymbol("AAPL", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 500,
+        code: "DATABASE_ERROR",
+        message: "Symbol resolution failed due to a database error.",
+      });
+    });
+
+    test("propagates AppError directly if thrown by database layer", async () => {
+      const { AppError } = require("../../../src/utils/errors");
+      mockPrisma.symbol.findUnique.mockRejectedValueOnce(
+        new AppError("Custom database error", { statusCode: 503, code: "DB_DOWN" }),
+      );
+
+      await expect(
+        resolveSymbol("AAPL", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 503,
+        code: "DB_DOWN",
+        message: "Custom database error",
+      });
+    });
+
+    test("permits fallback on error only when allowFallbackOnError is true", async () => {
+      mockPrisma.symbol.findUnique.mockRejectedValueOnce(
+        new Error("Database connection timeout"),
+      );
+
+      const result = await resolveSymbol("BTCUSDT", {
+        prisma: mockPrisma,
+        allowFallbackOnError: true,
+      });
+
+      expect(result.source).toBe("rule");
+      expect(result.assetClass).toBe("CRYPTO");
+    });
+
     test("resolves multiple symbols in batch", async () => {
       mockPrisma.symbol.findUnique
         .mockResolvedValueOnce({

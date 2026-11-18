@@ -413,4 +413,84 @@ describe("Symbol Resolution & Mapping Regression Suite", () => {
       expect(quote.assetClass).toBe("CRYPTO");
     });
   });
+
+  describe("Item 4: Database Resolution Failure Handling", () => {
+    test("rejects with DATABASE_ERROR when findUnique fails with connection error and does not silently fall back (ETH)", async () => {
+      mockPrisma.symbol.findUnique.mockRejectedValue(
+        new Error("Connection to PostgreSQL failed: ECONNREFUSED"),
+      );
+
+      // resolveSymbol must throw DATABASE_ERROR rather than silently falling back to STOCK
+      await expect(
+        resolveSymbol("ETH", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 500,
+        code: "DATABASE_ERROR",
+        message: "Symbol resolution failed due to a database error.",
+      });
+
+      // getQuote must propagate resolution error and not dispatch to Finnhub/stock provider
+      await expect(
+        service.getQuote("ETH", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 500,
+        code: "DATABASE_ERROR",
+      });
+      expect(mockStockProvider.getQuote).not.toHaveBeenCalled();
+      expect(mockCryptoProvider.getQuote).not.toHaveBeenCalled();
+
+      // getHistoricalPrices must also propagate resolution error
+      await expect(
+        service.getHistoricalPrices("ETH", {
+          prisma: mockPrisma,
+          interval: "1d",
+          from: 1_700_000_000_000,
+          to: 1_700_086_400_000,
+          limit: 10,
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 500,
+        code: "DATABASE_ERROR",
+      });
+      expect(mockStockProvider.getHistoricalPrices).not.toHaveBeenCalled();
+      expect(mockCryptoProvider.getHistoricalPrices).not.toHaveBeenCalled();
+    });
+
+    test("rejects with DATABASE_ERROR when findUnique fails with query error for a registered stock ending in USDT (XYZUSDT)", async () => {
+      mockPrisma.symbol.findUnique.mockRejectedValue(
+        new Error("Query failed: table 'Symbol' does not exist"),
+      );
+
+      // Must not silently fall back to CRYPTO based on USDT suffix!
+      await expect(
+        resolveSymbol("XYZUSDT", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 500,
+        code: "DATABASE_ERROR",
+      });
+
+      await expect(
+        service.getQuote("XYZUSDT", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 500,
+        code: "DATABASE_ERROR",
+      });
+      expect(mockCryptoProvider.getQuote).not.toHaveBeenCalled();
+      expect(mockStockProvider.getQuote).not.toHaveBeenCalled();
+    });
+
+    test("allows explicit opt-in fallback when allowFallbackOnError: true is set", async () => {
+      mockPrisma.symbol.findUnique.mockRejectedValue(
+        new Error("Temporary DB glitch"),
+      );
+
+      const resolved = await resolveSymbol("BTCUSDT", {
+        prisma: mockPrisma,
+        allowFallbackOnError: true,
+      });
+      expect(resolved.source).toBe("rule");
+      expect(resolved.assetClass).toBe("CRYPTO");
+      expect(resolved.canonicalSymbol).toBe("BTCUSDT");
+    });
+  });
 });
