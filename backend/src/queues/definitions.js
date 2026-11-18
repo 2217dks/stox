@@ -10,6 +10,7 @@ const QUEUE_NAMES = Object.freeze({
   NOTIFICATIONS: "notifications",
   ALERTS: "alerts",
   COPY_TRADES: "copy-trades",
+  SNAPSHOTS: "snapshots",
 });
 
 const ORDER_JOB_NAMES = Object.freeze({
@@ -30,6 +31,11 @@ const ALERT_JOB_NAMES = Object.freeze({
 const COPY_TRADE_JOB_NAMES = Object.freeze({
   FAN_OUT: "fan-out-copy-trades",
   SCAN_PENDING: "scan-pending",
+});
+
+const SNAPSHOT_JOB_NAMES = Object.freeze({
+  GENERATE_PORTFOLIO_SNAPSHOTS: "generate-portfolio-snapshots",
+  PRUNE_SNAPSHOT_RETENTION: "prune-snapshot-retention",
 });
 
 const DEFAULT_JOB_OPTIONS = Object.freeze({
@@ -130,6 +136,26 @@ const QUEUE_POLICIES = Object.freeze({
       },
     },
   },
+  [QUEUE_NAMES.SNAPSHOTS]: {
+    defaultJobOptions: {
+      attempts: 3,
+      backoff: { type: "exponential", delay: 5000 },
+      removeOnComplete: { count: 500 },
+      removeOnFail: { count: 2000 },
+    },
+    jobs: {
+      [SNAPSHOT_JOB_NAMES.GENERATE_PORTFOLIO_SNAPSHOTS]: {
+        attempts: 3,
+        backoff: { type: "exponential", delay: 5000 },
+        removeOnComplete: { count: 500 },
+      },
+      [SNAPSHOT_JOB_NAMES.PRUNE_SNAPSHOT_RETENTION]: {
+        attempts: 2,
+        backoff: { type: "exponential", delay: 10000 },
+        removeOnComplete: { count: 100 },
+      },
+    },
+  },
 });
 
 function jobOptionsFor(queueName, jobName) {
@@ -151,6 +177,7 @@ module.exports = {
   NOTIFICATION_JOB_NAMES,
   ALERT_JOB_NAMES,
   COPY_TRADE_JOB_NAMES,
+  SNAPSHOT_JOB_NAMES,
   DEFAULT_JOB_OPTIONS,
   QUEUE_POLICIES,
   jobOptionsFor,
