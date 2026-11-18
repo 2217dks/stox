@@ -85,6 +85,36 @@ function normalizeSymbol(symbol) {
       "MARKET_DATA_INVALID_REQUEST",
     );
   }
+
+  // Reject conflicting provider prefixes based on symbol syntax
+  if (value.startsWith("FINNHUB:")) {
+    const clean = value.slice("FINNHUB:".length);
+    if (
+      clean.includes("/") ||
+      (CRYPTO_PAIR_PATTERN.test(clean) && !KNOWN_AMBIGUOUS_STOCKS.has(clean))
+    ) {
+      throw createMarketDataError(
+        "A valid stock ticker symbol is required.",
+        400,
+        "MARKET_DATA_INVALID_REQUEST",
+      );
+    }
+  }
+
+  if (value.startsWith("BINANCE:")) {
+    const clean = value.slice("BINANCE:".length);
+    const isCryptoSlash = CRYPTO_SLASH_PATTERN.test(clean);
+    const isCryptoPair =
+      CRYPTO_PAIR_PATTERN.test(clean) && !KNOWN_AMBIGUOUS_STOCKS.has(clean);
+    if (!isCryptoSlash && !isCryptoPair) {
+      throw createMarketDataError(
+        "The cryptocurrency symbol format is invalid.",
+        400,
+        "MARKET_DATA_INVALID_REQUEST",
+      );
+    }
+  }
+
   return value;
 }
 
@@ -133,6 +163,34 @@ function normalizeAssetClass(value, symbol) {
         "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
       );
     }
+    if (symbol && typeof symbol === "string") {
+      const upper = symbol.trim().toUpperCase();
+      if (upper.startsWith("FINNHUB:") && assetClass === "CRYPTO") {
+        throw createMarketDataError(
+          "Market data is not supported for this asset class.",
+          422,
+          "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
+        );
+      }
+      if (upper.startsWith("BINANCE:") && assetClass === "STOCK") {
+        throw createMarketDataError(
+          "Market data is not supported for this asset class.",
+          422,
+          "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
+        );
+      }
+      const clean = upper.replace(/^(?:BINANCE|FINNHUB):/, "");
+      if (
+        (CRYPTO_SLASH_PATTERN.test(clean) || clean.includes("/")) &&
+        assetClass === "STOCK"
+      ) {
+        throw createMarketDataError(
+          "Market data is not supported for this asset class.",
+          422,
+          "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
+        );
+      }
+    }
     return assetClass;
   }
   return inferAssetClass(symbol);
@@ -149,6 +207,43 @@ function toCanonicalSymbol(symbol, options = {}) {
   const assetClass = options.assetClass
     ? String(options.assetClass).trim().toUpperCase()
     : null;
+
+  if (assetClass && !ASSET_CLASS_SET.has(assetClass)) {
+    throw createMarketDataError(
+      "Market data is not supported for this asset class.",
+      422,
+      "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
+    );
+  }
+
+  // Reject conflicting prefixes and explicit asset classes
+  if (normalized.startsWith("FINNHUB:") && assetClass === "CRYPTO") {
+    throw createMarketDataError(
+      "Market data is not supported for this asset class.",
+      422,
+      "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
+    );
+  }
+
+  if (normalized.startsWith("BINANCE:") && assetClass === "STOCK") {
+    throw createMarketDataError(
+      "Market data is not supported for this asset class.",
+      422,
+      "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
+    );
+  }
+
+  // Reject slash-form symbols with conflicting STOCK asset class
+  if (
+    (CRYPTO_SLASH_PATTERN.test(unprefixed) || unprefixed.includes("/")) &&
+    assetClass === "STOCK"
+  ) {
+    throw createMarketDataError(
+      "Market data is not supported for this asset class.",
+      422,
+      "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
+    );
+  }
 
   const slashMatch = CRYPTO_SLASH_PATTERN.exec(unprefixed);
   if (slashMatch) {
@@ -191,15 +286,20 @@ function toProviderSymbol(symbol, providerId, options = {}) {
       );
     }
 
-    if (!CRYPTO_PAIR_PATTERN.test(canonical)) {
-      throw createMarketDataError(
-        "The cryptocurrency symbol format is invalid.",
-        400,
-        "MARKET_DATA_INVALID_REQUEST",
-      );
+    if (CRYPTO_PAIR_PATTERN.test(canonical)) {
+      return canonical;
     }
 
-    return canonical;
+    if (explicitAssetClass === "CRYPTO" && /^[A-Z0-9]{2,10}$/.test(canonical)) {
+      const quote = options.quoteAsset || "USDT";
+      return `${canonical}${quote}`;
+    }
+
+    throw createMarketDataError(
+      "The cryptocurrency symbol format is invalid.",
+      400,
+      "MARKET_DATA_INVALID_REQUEST",
+    );
   }
 
   if (normalizedProvider === "finnhub") {
@@ -300,10 +400,19 @@ function parseSymbol(symbol, options = {}) {
  * Handles active/inactive status, asset type consistency, and provider mapping.
  */
 async function resolveSymbol(symbol, options = {}) {
+  const normalized = normalizeSymbol(symbol);
   const canonicalSymbol = toCanonicalSymbol(symbol, options);
   const requestedAssetClass = options.assetClass
     ? String(options.assetClass).trim().toUpperCase()
     : null;
+
+  if (requestedAssetClass && !ASSET_CLASS_SET.has(requestedAssetClass)) {
+    throw createMarketDataError(
+      "Market data is not supported for this asset class.",
+      422,
+      "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
+    );
+  }
 
   const prisma = options.prisma || getDefaultPrisma();
   let dbRecord = null;
@@ -335,11 +444,36 @@ async function resolveSymbol(symbol, options = {}) {
       );
     }
 
+    if (normalized.startsWith("FINNHUB:") && dbRecord.assetType !== "STOCK") {
+      throw createMarketDataError(
+        "A valid stock ticker symbol is required.",
+        400,
+        "MARKET_DATA_INVALID_REQUEST",
+      );
+    }
+
+    if (normalized.startsWith("BINANCE:") && dbRecord.assetType !== "CRYPTO") {
+      throw createMarketDataError(
+        "The cryptocurrency symbol format is invalid.",
+        400,
+        "MARKET_DATA_INVALID_REQUEST",
+      );
+    }
+
     const assetClass = dbRecord.assetType;
     const provider = DEFAULT_PROVIDER_BY_ASSET_CLASS[assetClass] || null;
-    const providerSymbol = provider
-      ? toProviderSymbol(canonicalSymbol, provider, { assetClass })
-      : null;
+    let providerSymbol = null;
+    try {
+      if (provider) {
+        providerSymbol = toProviderSymbol(canonicalSymbol, provider, {
+          assetClass,
+          quoteAsset: dbRecord.currency === "BTC" ? "BTC" : "USDT",
+        });
+      }
+    } catch {
+      providerSymbol = canonicalSymbol;
+    }
+
     const displaySymbol = toDisplaySymbol(canonicalSymbol, { assetClass });
 
     return {

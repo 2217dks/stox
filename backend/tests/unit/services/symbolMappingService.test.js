@@ -33,6 +33,21 @@ describe("symbolMappingService", () => {
       expect(() => normalizeSymbol("BTC@USDT")).toThrow("The symbol format is invalid.");
       expect(() => normalizeSymbol("BTC USDT")).toThrow("The symbol format is invalid.");
     });
+
+    test("rejects conflicting provider prefixes that contradict instrument syntax", () => {
+      expect(() => normalizeSymbol("FINNHUB:BTCUSDT")).toThrow(
+        "A valid stock ticker symbol is required.",
+      );
+      expect(() => normalizeSymbol("FINNHUB:BTC/USDT")).toThrow(
+        "A valid stock ticker symbol is required.",
+      );
+      expect(() => normalizeSymbol("BINANCE:AAPL")).toThrow(
+        "The cryptocurrency symbol format is invalid.",
+      );
+      expect(() => normalizeSymbol("BINANCE:GBTC")).toThrow(
+        "The cryptocurrency symbol format is invalid.",
+      );
+    });
   });
 
   describe("inferAssetClass", () => {
@@ -90,6 +105,18 @@ describe("symbolMappingService", () => {
         "Market data is not supported for this asset class.",
       );
     });
+
+    test("rejects conflicting explicit asset classes against prefixes and slash syntax", () => {
+      expect(() => normalizeAssetClass("CRYPTO", "FINNHUB:AAPL")).toThrow(
+        "Market data is not supported for this asset class.",
+      );
+      expect(() => normalizeAssetClass("STOCK", "BINANCE:BTCUSDT")).toThrow(
+        "Market data is not supported for this asset class.",
+      );
+      expect(() => normalizeAssetClass("STOCK", "BTC/USDT")).toThrow(
+        "Market data is not supported for this asset class.",
+      );
+    });
   });
 
   describe("toCanonicalSymbol", () => {
@@ -109,6 +136,18 @@ describe("symbolMappingService", () => {
       expect(toCanonicalSymbol("AAPL")).toBe("AAPL");
       expect(toCanonicalSymbol("BRK.B")).toBe("BRK.B");
       expect(toCanonicalSymbol("BF.B")).toBe("BF.B");
+    });
+
+    test("rejects conflicting prefixes or slash forms with incompatible explicit asset class", () => {
+      expect(() =>
+        toCanonicalSymbol("FINNHUB:AAPL", { assetClass: "CRYPTO" }),
+      ).toThrow("Market data is not supported for this asset class.");
+      expect(() =>
+        toCanonicalSymbol("BINANCE:BTCUSDT", { assetClass: "STOCK" }),
+      ).toThrow("Market data is not supported for this asset class.");
+      expect(() =>
+        toCanonicalSymbol("BTC/USDT", { assetClass: "STOCK" }),
+      ).toThrow("Market data is not supported for this asset class.");
     });
   });
 
