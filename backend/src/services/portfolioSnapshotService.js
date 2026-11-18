@@ -8,6 +8,8 @@ const {
   serializeSnapshot,
 } = require("./portfolioSnapshotRepository");
 
+const { AppError } = require("../utils/errors");
+
 const ZERO = new Prisma.Decimal(0);
 
 function toUtcDateString(dateInput) {
@@ -235,9 +237,108 @@ async function captureAllPortfolioSnapshots({
   return results;
 }
 
+/**
+ * Retrieve chronological daily portfolio snapshots for a caller-owned portfolio.
+ */
+async function getPortfolioDailySnapshots(
+  userId,
+  portfolioId,
+  {
+    from = null,
+    to = null,
+    limit = 100,
+    client = prisma,
+  } = {},
+) {
+  // 1. Validate query parameters before querying database
+  let parsedLimit = 100;
+  if (limit !== null && limit !== undefined) {
+    const num = Number(limit);
+    if (!Number.isInteger(num) || num <= 0) {
+      throw AppError.badRequest("Limit must be a positive integer.", "INVALID_LIMIT");
+    }
+    if (num > 1000) {
+      throw AppError.badRequest("Limit cannot exceed 1000.", "INVALID_LIMIT");
+    }
+    parsedLimit = num;
+  }
+
+  let fromDate = null;
+  if (from !== null && from !== undefined) {
+    fromDate = from instanceof Date ? from : new Date(from);
+    if (Number.isNaN(fromDate.getTime())) {
+      throw AppError.badRequest("Invalid 'from' date parameter.", "INVALID_DATE_RANGE");
+    }
+  }
+
+  let toDate = null;
+  if (to !== null && to !== undefined) {
+    toDate = to instanceof Date ? to : new Date(to);
+    if (Number.isNaN(toDate.getTime())) {
+      throw AppError.badRequest("Invalid 'to' date parameter.", "INVALID_DATE_RANGE");
+    }
+  }
+
+  if (fromDate && toDate && fromDate.getTime() > toDate.getTime()) {
+    throw AppError.badRequest("'from' date cannot be after 'to' date.", "INVALID_DATE_RANGE");
+  }
+
+  const db = client || prisma;
+
+  // 2. Validate portfolio existence and caller ownership
+  const portfolio = await db.portfolio.findFirst({
+    where: {
+      id: portfolioId,
+      userId,
+    },
+    select: {
+      id: true,
+      name: true,
+      currency: true,
+      isActive: true,
+    },
+  });
+
+  if (!portfolio) {
+    throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+  }
+
+  const where = {
+    portfolioId,
+  };
+
+  if (fromDate || toDate) {
+    where.snapshotDate = {};
+    if (fromDate) where.snapshotDate.gte = fromDate;
+    if (toDate) where.snapshotDate.lte = toDate;
+  }
+
+  // 3. Query the latest window of snapshots and return in chronological order (asc)
+  const snapshots = await db.performanceSnapshot.findMany({
+    where,
+    orderBy: {
+      snapshotDate: "desc",
+    },
+    take: parsedLimit,
+  });
+
+  snapshots.reverse();
+
+  const serialized = snapshots.map(serializeSnapshot);
+
+  return {
+    portfolioId: portfolio.id,
+    from: fromDate ? fromDate.toISOString().slice(0, 10) : null,
+    to: toDate ? toDate.toISOString().slice(0, 10) : null,
+    count: serialized.length,
+    snapshots: serialized,
+  };
+}
+
 module.exports = {
   toUtcDateString,
   getUtcEndOfDay,
   capturePortfolioSnapshot,
   captureAllPortfolioSnapshots,
+  getPortfolioDailySnapshots,
 };
