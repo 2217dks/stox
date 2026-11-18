@@ -10,6 +10,10 @@ const {
   normalizeAssetClass,
   resolveSymbol,
 } = require("./symbolMappingService");
+const {
+  assertQuoteFreshness,
+  evaluateQuoteFreshness,
+} = require("../utils/quoteFreshness");
 const cacheService = require("./cacheService");
 
 const config = loadMarketDataConfig();
@@ -25,16 +29,43 @@ module.exports = {
   async getQuote(symbol, options = {}) {
     const resolved = await resolveSymbol(symbol, options);
 
-    return cacheService.getOrSetPrice(
-      resolved.assetClass,
-      resolved.canonicalSymbol,
-      () =>
-        marketDataService.getQuote(resolved.canonicalSymbol, {
-          ...options,
-          assetClass: resolved.assetClass,
-          _resolved: resolved,
-        }),
+    const bypass = Boolean(
+      options.bypass === true ||
+        options.bypassCache === true ||
+        options.skipCache === true ||
+        options.noCache === true,
     );
+
+    const getQuoteCallback = () =>
+      marketDataService.getQuote(resolved.canonicalSymbol, {
+        ...options,
+        rejectStale: false,
+        maxAgeSeconds: undefined,
+        assetClass: resolved.assetClass,
+        _resolved: resolved,
+      });
+
+    let quote;
+    if (bypass) {
+      quote = await cacheService.getOrSetPrice(
+        resolved.assetClass,
+        resolved.canonicalSymbol,
+        getQuoteCallback,
+        { ...options, bypass, assetClass: resolved.assetClass },
+      );
+    } else {
+      quote = await cacheService.getOrSetPrice(
+        resolved.assetClass,
+        resolved.canonicalSymbol,
+        getQuoteCallback,
+      );
+    }
+
+    return assertQuoteFreshness(quote, {
+      config,
+      assetClass: resolved.assetClass,
+      ...options,
+    });
   },
 
   async searchSymbols(query, options = {}) {

@@ -93,9 +93,32 @@ const marketSearchQuerySchema = z
   })
   .strict();
 
+function queryBoolean(val) {
+  if (typeof val === "string") {
+    const lower = val.trim().toLowerCase();
+    if (lower === "true" || lower === "1") return true;
+    if (lower === "false" || lower === "0") return false;
+  }
+  return val;
+}
+
+const quoteQuerySchema = z
+  .object({
+    rejectStale: z.preprocess(queryBoolean, z.boolean()).optional(),
+    maxAgeSeconds: z.preprocess(
+      queryInteger,
+      z.number().int().positive().max(86400).optional(),
+    ),
+    bypassCache: z.preprocess(queryBoolean, z.boolean()).optional(),
+    skipCache: z.preprocess(queryBoolean, z.boolean()).optional(),
+    noCache: z.preprocess(queryBoolean, z.boolean()).optional(),
+  })
+  .strict();
+
 module.exports = {
   cryptoQuoteParamsSchema,
   stockQuoteParamsSchema,
+  quoteQuerySchema,
   historicalPricesParamsSchema,
   historicalPricesQuerySchema,
   marketOverviewQuerySchema,
