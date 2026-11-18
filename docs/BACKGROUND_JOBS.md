@@ -130,6 +130,13 @@ deferred symbols. A permanent provider error (`MARKET_DATA_NOT_FOUND`, an
 unsupported asset class, or a 400/404/422 response) moves the alert to
 `EXPIRED` instead of retrying it forever.
 
+Quotes with a provider timestamp older than `ALERT_MAX_QUOTE_AGE_MS` (default
+300000 ms / 5 minutes) are treated as stale: the alert remains `ACTIVE`, is not
+evaluated or notified, and the scan advances its rotation cursor so other
+alerts can proceed. The next scheduled scan retries it. Quotes without a
+provider timestamp are accepted because the market-data contract allows
+providers to omit timestamps; freshness cannot be verified for those quotes.
+
 ### Copy-trade job contracts
 
 | Job | Payload | Attempts | What it does |
