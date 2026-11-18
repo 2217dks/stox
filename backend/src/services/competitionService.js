@@ -612,11 +612,84 @@ async function evaluateLeagueMembers(
   return evaluatedMembers;
 }
 
+const DEFAULT_MAX_COMPLETION_RETRIES = 3;
+
+/**
+ * Validate that the precomputed evaluated member list matches the eligible locked member list.
+ *
+ * Rules:
+ * 1. No eligible participant missing from precomputed results.
+ * 2. No unexpected participant in precomputed results.
+ * 3. No participant duplicated in precomputed results.
+ *
+ * @param {Array<object>} precomputedEvaluated
+ * @param {Array<object>} eligibleLockedMembers
+ * @returns {{ isValid: boolean, missingMemberIds: string[], unexpectedMemberIds: string[], duplicateMemberIds: string[] }}
+ */
+function validateMembershipConsistency(precomputedEvaluated, eligibleLockedMembers) {
+  if (!Array.isArray(precomputedEvaluated)) {
+    return {
+      isValid: false,
+      reason: "PRECOMPUTED_NOT_ARRAY",
+      missingMemberIds: [],
+      unexpectedMemberIds: [],
+      duplicateMemberIds: [],
+    };
+  }
+
+  const eligibleList = Array.isArray(eligibleLockedMembers) ? eligibleLockedMembers : [];
+
+  const seenPrecomputedIds = new Set();
+  const duplicateMemberIds = [];
+  for (const m of precomputedEvaluated) {
+    if (!m || !m.id) continue;
+    if (seenPrecomputedIds.has(m.id)) {
+      duplicateMemberIds.push(m.id);
+    }
+    seenPrecomputedIds.add(m.id);
+  }
+
+  const lockedEligibleIds = new Set(eligibleList.map((m) => m.id));
+
+  // Missing: present in locked eligible members but not in precomputedEvaluated
+  const missingMemberIds = [];
+  for (const m of eligibleList) {
+    if (m && m.id && !seenPrecomputedIds.has(m.id)) {
+      missingMemberIds.push(m.id);
+    }
+  }
+
+  // Unexpected: present in precomputedEvaluated but not in locked eligible members
+  const unexpectedMemberIds = [];
+  for (const m of precomputedEvaluated) {
+    if (m && m.id && !lockedEligibleIds.has(m.id)) {
+      unexpectedMemberIds.push(m.id);
+    }
+  }
+
+  const isValid =
+    duplicateMemberIds.length === 0 &&
+    missingMemberIds.length === 0 &&
+    unexpectedMemberIds.length === 0 &&
+    seenPrecomputedIds.size === lockedEligibleIds.size;
+
+  return {
+    isValid,
+    missingMemberIds,
+    unexpectedMemberIds,
+    duplicateMemberIds,
+  };
+}
+
 /**
  * Complete a league when its end time arrives or reconcile an already-ended league.
  * Calculates final rankings, persists results, and produces completion notifications atomically.
  * Concurrency-safe: database row lock protects the finalization decision; repeated runs or
  * concurrent worker execution will not overwrite final rankings or duplicate notifications.
+ *
+ * Validates participant-set consistency before persisting rankings to prevent membership drift.
+ * If drift is detected, aborts the transaction and retries with a fresh participant snapshot
+ * up to maxRetries.
  */
 async function completeLeague(
   leagueId,
@@ -624,204 +697,294 @@ async function completeLeague(
     now = new Date(),
     priceProvider = defaultMarketData,
     client = prisma,
+    maxRetries = DEFAULT_MAX_COMPLETION_RETRIES,
   } = {},
 ) {
-  // Phase 1: Pre-fetch league state to check existence, end-date boundaries,
-  // and gather necessary market data outside the transaction.
-  const league = await client.league.findUnique({
-    where: { id: leagueId },
-    include: {
-      members: {
+  const maxAttempts = Math.max(
+    1,
+    typeof maxRetries === "number" && !Number.isNaN(maxRetries)
+      ? maxRetries
+      : DEFAULT_MAX_COMPLETION_RETRIES,
+  );
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      // Phase 1: Pre-fetch league state to check existence, end-date boundaries,
+      // and gather necessary market data outside the transaction.
+      const league = await client.league.findUnique({
+        where: { id: leagueId },
         include: {
-          user: {
-            select: {
-              id: true,
-              name: true,
-              avatarUrl: true,
-              isSuspended: true,
-            },
-          },
-          portfolio: {
+          members: {
             include: {
-              trades: {
-                orderBy: { executedAt: "asc" },
+              user: {
+                select: {
+                  id: true,
+                  name: true,
+                  avatarUrl: true,
+                  isSuspended: true,
+                },
+              },
+              portfolio: {
+                include: {
+                  trades: {
+                    orderBy: { executedAt: "asc" },
+                  },
+                },
               },
             },
           },
         },
-      },
-    },
-  });
+      });
 
-  if (!league) {
-    throw new AppError("League not found.", {
-      statusCode: 404,
-      code: "LEAGUE_NOT_FOUND",
-    });
-  }
-
-  const currentDate = now instanceof Date ? now : new Date(now);
-  const endDate = new Date(league.endDate);
-  const isEnded = currentDate >= endDate || league.status === "COMPLETED";
-
-  if (!isEnded) {
-    return { completed: false, reason: "LEAGUE_NOT_ENDED", leagueId: league.id };
-  }
-
-  // Check if members already have persisted final rankings in the initial read
-  const alreadyPersisted =
-    league.members.length > 0 &&
-    league.members.every((m) => m.rank != null && m.finalReturn != null);
-
-  // If rankings are not already persisted, evaluate member returns outside
-  // the transaction so we do not hold row locks while fetching external market data.
-  let precomputedEvaluated = null;
-  if (!alreadyPersisted && league.members.length > 0) {
-    precomputedEvaluated = await evaluateLeagueMembers(league, {
-      valuationDate: endDate,
-      priceProvider,
-    });
-  }
-
-  // Phase 2: Transaction with row-level locking to serialize finalization & reconciliation.
-  const transactionResult = await client.$transaction(async (tx) => {
-    // 1. Acquire row lock on League
-    let lockedLeague;
-    if (typeof tx.$queryRaw === "function") {
-      const leagues = await tx.$queryRaw`
-        SELECT id, status, "endDate" FROM "League" WHERE id = ${league.id} FOR UPDATE
-      `;
-      if (!leagues || leagues.length === 0) return { completionNotifications: [], memberCount: 0 };
-      lockedLeague = leagues[0];
-    } else {
-      lockedLeague = await tx.league.findUnique({ where: { id: league.id } });
-      if (!lockedLeague) return { completionNotifications: [], memberCount: 0 };
-    }
-
-    if (lockedLeague.status === "CANCELLED") {
-      return { completionNotifications: [], memberCount: 0 };
-    }
-
-    // 2. Re-read the latest participant state inside the transaction
-    const lockedMembers = await tx.leagueMember.findMany({
-      where: { leagueId: league.id },
-      include: {
-        user: {
-          select: {
-            id: true,
-            name: true,
-            avatarUrl: true,
-            isSuspended: true,
-          },
-        },
-      },
-    });
-
-    // 3. Check whether final rankings have already been persisted
-    const hasPersistedRankings =
-      lockedMembers.length > 0 &&
-      lockedMembers.every((m) => m.rank != null && m.finalReturn != null);
-
-    let memberResults = [];
-
-    if (hasPersistedRankings) {
-      // Final rankings ALREADY exist (persisted previously or by a concurrent worker that won the race).
-      // Preserve them! Do NOT recalculate or overwrite them.
-      const activeMembers = lockedMembers
-        .filter((m) => !m.user?.isSuspended)
-        .sort((a, b) => (a.rank || 0) - (b.rank || 0));
-
-      memberResults = activeMembers.map((m) => ({
-        id: m.id,
-        userId: m.userId,
-        rank: m.rank,
-        returnPct: m.finalReturn,
-      }));
-    } else if (lockedMembers.length > 0) {
-      // Rankings do not exist yet. Use precomputed results or compute them.
-      let evaluated = precomputedEvaluated;
-      if (!evaluated) {
-        const fullLeague = await tx.league.findUnique({
-          where: { id: league.id },
-          include: {
-            members: {
-              include: {
-                user: { select: { id: true, name: true, avatarUrl: true, isSuspended: true } },
-                portfolio: { include: { trades: { orderBy: { executedAt: "asc" } } } },
-              },
-            },
-          },
+      if (!league) {
+        throw new AppError("League not found.", {
+          statusCode: 404,
+          code: "LEAGUE_NOT_FOUND",
         });
-        evaluated = await evaluateLeagueMembers(fullLeague, {
+      }
+
+      const currentDate = now instanceof Date ? now : new Date(now);
+      const endDate = new Date(league.endDate);
+      const isEnded = currentDate >= endDate || league.status === "COMPLETED";
+
+      if (!isEnded) {
+        return { completed: false, reason: "LEAGUE_NOT_ENDED", leagueId: league.id };
+      }
+
+      if (league.status === "CANCELLED") {
+        return { completed: false, reason: "LEAGUE_CANCELLED", leagueId: league.id };
+      }
+
+      // Check if eligible members already have persisted final rankings in the initial read
+      const eligibleInitialMembers = (league.members || []).filter(
+        (m) => !m.user?.isSuspended,
+      );
+      const alreadyPersisted =
+        eligibleInitialMembers.length > 0 &&
+        eligibleInitialMembers.every((m) => m.rank != null && m.finalReturn != null);
+
+      // If rankings are not already persisted, evaluate member returns outside
+      // the transaction so we do not hold row locks while fetching external market data.
+      let precomputedEvaluated = null;
+      if (!alreadyPersisted) {
+        precomputedEvaluated = await evaluateLeagueMembers(league, {
           valuationDate: endDate,
           priceProvider,
         });
       }
 
-      for (const m of evaluated) {
-        await tx.leagueMember.update({
-          where: { id: m.id },
-          data: {
-            rank: m.rank,
-            finalReturn: m.returnPct,
+      // Phase 2: Transaction with row-level locking to serialize finalization & reconciliation.
+      const transactionResult = await client.$transaction(async (tx) => {
+        // 1. Acquire row lock on League
+        let lockedLeague;
+        if (typeof tx.$queryRaw === "function") {
+          const leagues = await tx.$queryRaw`
+            SELECT id, status, "endDate" FROM "League" WHERE id = ${league.id} FOR UPDATE
+          `;
+          if (!leagues || leagues.length === 0) {
+            return { completionNotifications: [], memberCount: 0, notFound: true };
+          }
+          lockedLeague = leagues[0];
+        } else {
+          lockedLeague = await tx.league.findUnique({ where: { id: league.id } });
+          if (!lockedLeague) {
+            return { completionNotifications: [], memberCount: 0, notFound: true };
+          }
+        }
+
+        if (lockedLeague.status === "CANCELLED") {
+          return { completionNotifications: [], memberCount: 0, cancelled: true };
+        }
+
+        // 2. Re-read the latest participant state inside the transaction
+        const lockedMembers = await tx.leagueMember.findMany({
+          where: { leagueId: league.id },
+          include: {
+            user: {
+              select: {
+                id: true,
+                name: true,
+                avatarUrl: true,
+                isSuspended: true,
+              },
+            },
           },
+        });
+
+        const eligibleLockedMembers = lockedMembers.filter((m) => !m.user?.isSuspended);
+
+        // 3. Check whether final rankings have already been persisted
+        const hasPersistedRankings =
+          eligibleLockedMembers.length > 0 &&
+          eligibleLockedMembers.every((m) => m.rank != null && m.finalReturn != null);
+
+        let memberResults = [];
+
+        if (hasPersistedRankings) {
+          // Final rankings ALREADY exist (persisted previously or by a concurrent worker that won the race).
+          // Preserve them! Do NOT recalculate or overwrite them.
+          const activeMembers = eligibleLockedMembers
+            .slice()
+            .sort((a, b) => (a.rank || 0) - (b.rank || 0));
+
+          memberResults = activeMembers.map((m) => ({
+            id: m.id,
+            userId: m.userId,
+            rank: m.rank,
+            returnPct: m.finalReturn,
+          }));
+        } else if (eligibleLockedMembers.length > 0) {
+          // Rankings do not exist yet. Validate participant-set consistency against precomputedEvaluated.
+          if (precomputedEvaluated === null) {
+            const driftError = new Error(
+              `League membership changed during evaluation for league ${league.id}`,
+            );
+            driftError.code = "LEAGUE_MEMBERSHIP_DRIFT";
+            driftError.details = { reason: "PRECOMPUTED_NOT_AVAILABLE" };
+            throw driftError;
+          }
+
+          const validation = validateMembershipConsistency(
+            precomputedEvaluated,
+            eligibleLockedMembers,
+          );
+
+          if (!validation.isValid) {
+            const driftError = new Error(
+              `League membership changed during evaluation for league ${league.id}`,
+            );
+            driftError.code = "LEAGUE_MEMBERSHIP_DRIFT";
+            driftError.details = validation;
+            throw driftError;
+          }
+
+          for (const m of precomputedEvaluated) {
+            await tx.leagueMember.update({
+              where: { id: m.id },
+              data: {
+                rank: m.rank,
+                finalReturn: m.returnPct,
+              },
+            });
+          }
+
+          memberResults = precomputedEvaluated.map((m) => ({
+            id: m.id,
+            userId: m.userId,
+            rank: m.rank,
+            returnPct: m.returnPct,
+          }));
+        } else {
+          // No eligible members in the league. If precomputed had members, drift occurred.
+          if (precomputedEvaluated && precomputedEvaluated.length > 0) {
+            const validation = validateMembershipConsistency(
+              precomputedEvaluated,
+              eligibleLockedMembers,
+            );
+            if (!validation.isValid) {
+              const driftError = new Error(
+                `League membership changed during evaluation for league ${league.id}`,
+              );
+              driftError.code = "LEAGUE_MEMBERSHIP_DRIFT";
+              driftError.details = validation;
+              throw driftError;
+            }
+          }
+        }
+
+        if (lockedLeague.status !== "COMPLETED") {
+          await tx.league.update({
+            where: { id: league.id },
+            data: { status: "COMPLETED" },
+          });
+        }
+
+        // Atomically create participant completion notification records
+        const notifications = [];
+        for (const m of memberResults) {
+          const notif = await createNotificationEvent(
+            {
+              eventKey: `league:${league.id}:member:${m.id}:completed`,
+              userId: m.userId,
+              type: "LEAGUE_UPDATE",
+              title: "League results are ready",
+              message: `You finished #${m.rank} in ${league.name}.`,
+              data: {
+                leagueId: league.id,
+                leagueName: league.name,
+                rank: m.rank,
+                returnPct: m.returnPct.toString(),
+              },
+            },
+            { db: tx, enqueue: false },
+          );
+          notifications.push(notif);
+        }
+
+        return {
+          completionNotifications: notifications,
+          memberCount: memberResults.length,
+        };
+      });
+
+      if (transactionResult.notFound) {
+        throw new AppError("League not found.", {
+          statusCode: 404,
+          code: "LEAGUE_NOT_FOUND",
         });
       }
 
-      memberResults = evaluated.map((m) => ({
-        id: m.id,
-        userId: m.userId,
-        rank: m.rank,
-        returnPct: m.returnPct,
-      }));
-    }
+      if (transactionResult.cancelled) {
+        return { completed: false, reason: "LEAGUE_CANCELLED", leagueId: league.id };
+      }
 
-    if (lockedLeague.status !== "COMPLETED") {
-      await tx.league.update({
-        where: { id: league.id },
-        data: { status: "COMPLETED" },
-      });
-    }
+      // Post-commit: enqueue notification delivery after transaction successfully commits
+      for (const notification of transactionResult.completionNotifications) {
+        enqueueNotificationEvent(notification.id);
+      }
 
-    // Atomically create participant completion notification records
-    const notifications = [];
-    for (const m of memberResults) {
-      const notif = await createNotificationEvent(
-        {
-          eventKey: `league:${league.id}:member:${m.id}:completed`,
-          userId: m.userId,
-          type: "LEAGUE_UPDATE",
-          title: "League results are ready",
-          message: `You finished #${m.rank} in ${league.name}.`,
-          data: {
-            leagueId: league.id,
-            leagueName: league.name,
-            rank: m.rank,
-            returnPct: m.returnPct.toString(),
+      return {
+        completed: true,
+        leagueId: league.id,
+        memberCount: transactionResult.memberCount,
+        notifications: transactionResult.completionNotifications,
+      };
+    } catch (error) {
+      if (error.code === "LEAGUE_MEMBERSHIP_DRIFT") {
+        logger.warn(
+          `League membership drift detected during completion for league ${leagueId} (attempt ${attempt}/${maxAttempts})`,
+          {
+            leagueId,
+            attempt,
+            maxAttempts,
+            details: error.details,
           },
-        },
-        { db: tx, enqueue: false },
-      );
-      notifications.push(notif);
+        );
+
+        if (attempt < maxAttempts) {
+          continue;
+        }
+
+        logger.error(
+          `League completion aborted: membership drift exceeded retry limit for league ${leagueId}`,
+          {
+            leagueId,
+            attempts: maxAttempts,
+            details: error.details,
+          },
+        );
+
+        return {
+          completed: false,
+          reason: "MEMBERSHIP_DRIFT_EXCEEDED",
+          leagueId,
+          attempts: maxAttempts,
+        };
+      }
+
+      throw error;
     }
-
-    return {
-      completionNotifications: notifications,
-      memberCount: memberResults.length,
-    };
-  });
-
-  // Post-commit: enqueue notification delivery after transaction successfully commits
-  for (const notification of transactionResult.completionNotifications) {
-    enqueueNotificationEvent(notification.id);
   }
-
-  return {
-    completed: true,
-    leagueId: league.id,
-    memberCount: transactionResult.memberCount,
-    notifications: transactionResult.completionNotifications,
-  };
 }
 
 /**
@@ -925,5 +1088,6 @@ module.exports = {
   syncLeagueStatuses,
   completeLeague,
   processCompletedLeagues,
+  validateMembershipConsistency,
 };
 

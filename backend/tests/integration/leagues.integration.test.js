@@ -1382,4 +1382,465 @@ describe("Leagues & Competitions Integration (#128)", () => {
     expect(preservedMember1.rank).toBe(1);
     expect(Number(preservedMember1.finalReturn)).toBe(30);
   });
+
+  describe("League completion membership consistency and retry on drift", () => {
+    afterEach(async () => {
+      // Ensure user2 is never left suspended
+      if (user2Id) {
+        await prisma.user.update({
+          where: { id: user2Id },
+          data: { isSuspended: false },
+        });
+      }
+    });
+
+    test("completion succeeds when membership is stable", async () => {
+      const startDate = new Date(Date.now() - 5 * 86400000);
+      const endDate = new Date(Date.now() - 86400000);
+
+      const league = await prisma.league.create({
+        data: {
+          name: `Stable Completion League ${Date.now()}`,
+          startingBalance: 10000,
+          startDate,
+          endDate,
+          status: "ACTIVE",
+        },
+      });
+      createdLeagueIds.push(league.id);
+
+      const p1 = await prisma.portfolio.create({
+        data: {
+          userId: user1Id,
+          name: `Stable-P1-${Date.now()}`,
+          startingBalance: 10000,
+          cashBalance: 10000,
+          reservedCash: 0,
+        },
+      });
+      const member1 = await prisma.leagueMember.create({
+        data: {
+          leagueId: league.id,
+          userId: user1Id,
+          portfolioId: p1.id,
+          joinedAt: new Date(startDate.getTime() - 50000),
+        },
+      });
+      await createTestTrade({
+        portfolioId: p1.id,
+        symbol: "AAPL",
+        side: "BUY",
+        quantity: 10,
+        price: 150,
+        totalValue: 1500,
+        executedAt: new Date(startDate.getTime() + 3600000),
+      });
+
+      const p2 = await prisma.portfolio.create({
+        data: {
+          userId: user2Id,
+          name: `Stable-P2-${Date.now()}`,
+          startingBalance: 10000,
+          cashBalance: 10000,
+          reservedCash: 0,
+        },
+      });
+      const member2 = await prisma.leagueMember.create({
+        data: {
+          leagueId: league.id,
+          userId: user2Id,
+          portfolioId: p2.id,
+          joinedAt: new Date(startDate.getTime() - 25000),
+        },
+      });
+      await createTestTrade({
+        portfolioId: p2.id,
+        symbol: "MSFT",
+        side: "BUY",
+        quantity: 5,
+        price: 200,
+        totalValue: 1000,
+        executedAt: new Date(startDate.getTime() + 3600000),
+      });
+
+      const mockPriceProvider = {
+        getHistoricalPrice: jest.fn().mockImplementation(async (sym) => {
+          if (sym === "AAPL") return { symbol: "AAPL", price: 180 };
+          return { symbol: "MSFT", price: 220 };
+        }),
+      };
+
+      const result = await completeLeague(league.id, {
+        now: new Date(),
+        priceProvider: mockPriceProvider,
+      });
+
+      expect(result.completed).toBe(true);
+      expect(result.memberCount).toBe(2);
+
+      const dbLeague = await prisma.league.findUnique({ where: { id: league.id } });
+      expect(dbLeague.status).toBe("COMPLETED");
+
+      const dbM1 = await prisma.leagueMember.findUnique({ where: { id: member1.id } });
+      const dbM2 = await prisma.leagueMember.findUnique({ where: { id: member2.id } });
+
+      expect(dbM1.rank).toBe(1);
+      expect(Number(dbM1.finalReturn)).toBe(3); // (10000 - 1500 + 10*180 = 10300) -> +3%
+      expect(dbM2.rank).toBe(2);
+      expect(Number(dbM2.finalReturn)).toBe(1); // (10000 - 1000 + 5*220 = 10100) -> +1%
+
+      const notifs = await prisma.notification.findMany({
+        where: { eventKey: { startsWith: `league:${league.id}:` } },
+      });
+      expect(notifs).toHaveLength(2);
+    });
+
+    test("membership drift detected when member is added during valuation: rolls back, retries with fresh members, and completes successfully", async () => {
+      const startDate = new Date(Date.now() - 5 * 86400000);
+      const endDate = new Date(Date.now() - 86400000);
+
+      const league = await prisma.league.create({
+        data: {
+          name: `Drift Added League ${Date.now()}`,
+          startingBalance: 10000,
+          startDate,
+          endDate,
+          status: "ACTIVE",
+        },
+      });
+      createdLeagueIds.push(league.id);
+
+      const p1 = await prisma.portfolio.create({
+        data: {
+          userId: user1Id,
+          name: `DriftAdd-P1-${Date.now()}`,
+          startingBalance: 10000,
+          cashBalance: 10000,
+          reservedCash: 0,
+        },
+      });
+      const member1 = await prisma.leagueMember.create({
+        data: {
+          leagueId: league.id,
+          userId: user1Id,
+          portfolioId: p1.id,
+          joinedAt: new Date(startDate.getTime() - 50000),
+        },
+      });
+      await createTestTrade({
+        portfolioId: p1.id,
+        symbol: "AAPL",
+        side: "BUY",
+        quantity: 10,
+        price: 150,
+        totalValue: 1500,
+        executedAt: new Date(startDate.getTime() + 3600000),
+      });
+
+      // Prepare portfolio for member 2 that will join during attempt 1's valuation
+      const p2 = await prisma.portfolio.create({
+        data: {
+          userId: user2Id,
+          name: `DriftAdd-P2-${Date.now()}`,
+          startingBalance: 10000,
+          cashBalance: 10000,
+          reservedCash: 0,
+        },
+      });
+
+      let valuationCalls = 0;
+      let member2 = null;
+
+      const mockPriceProvider = {
+        getHistoricalPrice: jest.fn().mockImplementation(async (sym) => {
+          valuationCalls++;
+          // On the very first valuation call in Attempt 1, simulate concurrent member join
+          if (valuationCalls === 1) {
+            member2 = await prisma.leagueMember.create({
+              data: {
+                leagueId: league.id,
+                userId: user2Id,
+                portfolioId: p2.id,
+                joinedAt: new Date(startDate.getTime() - 30000),
+              },
+            });
+            await createTestTrade({
+              portfolioId: p2.id,
+              symbol: "AAPL",
+              side: "BUY",
+              quantity: 5,
+              price: 150,
+              totalValue: 750,
+              executedAt: new Date(startDate.getTime() + 3600000),
+            });
+          }
+          return { symbol: sym, price: 180 };
+        }),
+      };
+
+      const result = await completeLeague(league.id, {
+        now: new Date(),
+        priceProvider: mockPriceProvider,
+        maxRetries: 3,
+      });
+
+      expect(result.completed).toBe(true);
+      expect(result.memberCount).toBe(2);
+
+      // Verify DB state: both member 1 and member 2 are ranked and persisted
+      const dbLeague = await prisma.league.findUnique({ where: { id: league.id } });
+      expect(dbLeague.status).toBe("COMPLETED");
+
+      const dbM1 = await prisma.leagueMember.findUnique({ where: { id: member1.id } });
+      const dbM2 = await prisma.leagueMember.findUnique({ where: { id: member2.id } });
+
+      expect(dbM1.rank).not.toBeNull();
+      expect(dbM1.finalReturn).not.toBeNull();
+      expect(dbM2.rank).not.toBeNull();
+      expect(dbM2.finalReturn).not.toBeNull();
+
+      // Notifications created for both members
+      const notifs = await prisma.notification.findMany({
+        where: { eventKey: { startsWith: `league:${league.id}:` } },
+      });
+      expect(notifs).toHaveLength(2);
+      expect(notifs.map((n) => n.userId).sort()).toEqual([user1Id, user2Id].sort());
+    });
+
+    test("ineligible/suspended member drift: member suspended during valuation is excluded on retry", async () => {
+      const startDate = new Date(Date.now() - 5 * 86400000);
+      const endDate = new Date(Date.now() - 86400000);
+
+      const league = await prisma.league.create({
+        data: {
+          name: `Drift Suspend League ${Date.now()}`,
+          startingBalance: 10000,
+          startDate,
+          endDate,
+          status: "ACTIVE",
+        },
+      });
+      createdLeagueIds.push(league.id);
+
+      const p1 = await prisma.portfolio.create({
+        data: {
+          userId: user1Id,
+          name: `DriftSusp-P1-${Date.now()}`,
+          startingBalance: 10000,
+          cashBalance: 10000,
+          reservedCash: 0,
+        },
+      });
+      const member1 = await prisma.leagueMember.create({
+        data: {
+          leagueId: league.id,
+          userId: user1Id,
+          portfolioId: p1.id,
+          joinedAt: new Date(startDate.getTime() - 50000),
+        },
+      });
+      await createTestTrade({
+        portfolioId: p1.id,
+        symbol: "AAPL",
+        side: "BUY",
+        quantity: 10,
+        price: 150,
+        totalValue: 1500,
+        executedAt: new Date(startDate.getTime() + 3600000),
+      });
+
+      const p2 = await prisma.portfolio.create({
+        data: {
+          userId: user2Id,
+          name: `DriftSusp-P2-${Date.now()}`,
+          startingBalance: 10000,
+          cashBalance: 10000,
+          reservedCash: 0,
+        },
+      });
+      const member2 = await prisma.leagueMember.create({
+        data: {
+          leagueId: league.id,
+          userId: user2Id,
+          portfolioId: p2.id,
+          joinedAt: new Date(startDate.getTime() - 30000),
+        },
+      });
+      await createTestTrade({
+        portfolioId: p2.id,
+        symbol: "AAPL",
+        side: "BUY",
+        quantity: 5,
+        price: 150,
+        totalValue: 750,
+        executedAt: new Date(startDate.getTime() + 3600000),
+      });
+
+      let valuationCalls = 0;
+      const mockPriceProvider = {
+        getHistoricalPrice: jest.fn().mockImplementation(async (sym) => {
+          valuationCalls++;
+          // During attempt 1 valuation, user2 is suspended concurrently
+          if (valuationCalls === 1) {
+            await prisma.user.update({
+              where: { id: user2Id },
+              data: { isSuspended: true },
+            });
+          }
+          return { symbol: sym, price: 180 };
+        }),
+      };
+
+      const result = await completeLeague(league.id, {
+        now: new Date(),
+        priceProvider: mockPriceProvider,
+        maxRetries: 3,
+      });
+
+      expect(result.completed).toBe(true);
+      expect(result.memberCount).toBe(1);
+
+      // Verify DB state: member 1 is ranked, member 2 is NOT ranked
+      const dbLeague = await prisma.league.findUnique({ where: { id: league.id } });
+      expect(dbLeague.status).toBe("COMPLETED");
+
+      const dbM1 = await prisma.leagueMember.findUnique({ where: { id: member1.id } });
+      const dbM2 = await prisma.leagueMember.findUnique({ where: { id: member2.id } });
+
+      expect(dbM1.rank).toBe(1);
+      expect(Number(dbM1.finalReturn)).toBe(3);
+      expect(dbM2.rank).toBeNull();
+      expect(dbM2.finalReturn).toBeNull();
+
+      // Only member 1 received a completion notification
+      const notifs = await prisma.notification.findMany({
+        where: { eventKey: { startsWith: `league:${league.id}:` } },
+      });
+      expect(notifs).toHaveLength(1);
+      expect(notifs[0].userId).toBe(user1Id);
+    });
+
+    test("retry exhaustion: fails cleanly with reason MEMBERSHIP_DRIFT_EXCEEDED without persisting partial rankings or marking league completed", async () => {
+      const startDate = new Date(Date.now() - 5 * 86400000);
+      const endDate = new Date(Date.now() - 86400000);
+
+      const league = await prisma.league.create({
+        data: {
+          name: `Drift Exhaustion League ${Date.now()}`,
+          startingBalance: 10000,
+          startDate,
+          endDate,
+          status: "ACTIVE",
+        },
+      });
+      createdLeagueIds.push(league.id);
+
+      const p1 = await prisma.portfolio.create({
+        data: {
+          userId: user1Id,
+          name: `DriftExhaust-P1-${Date.now()}`,
+          startingBalance: 10000,
+          cashBalance: 10000,
+          reservedCash: 0,
+        },
+      });
+      const member1 = await prisma.leagueMember.create({
+        data: {
+          leagueId: league.id,
+          userId: user1Id,
+          portfolioId: p1.id,
+          joinedAt: new Date(startDate.getTime() - 50000),
+        },
+      });
+      await createTestTrade({
+        portfolioId: p1.id,
+        symbol: "AAPL",
+        side: "BUY",
+        quantity: 10,
+        price: 150,
+        totalValue: 1500,
+        executedAt: new Date(startDate.getTime() + 3600000),
+      });
+
+      // Prepare additional portfolios for injecting members on each attempt
+      const pExtra1 = await prisma.portfolio.create({
+        data: {
+          userId: user2Id,
+          name: `DriftExhaust-P2-${Date.now()}`,
+          startingBalance: 10000,
+          cashBalance: 10000,
+          reservedCash: 0,
+        },
+      });
+      const pExtra2 = await prisma.portfolio.create({
+        data: {
+          userId: user3Id,
+          name: `DriftExhaust-P3-${Date.now()}`,
+          startingBalance: 10000,
+          cashBalance: 10000,
+          reservedCash: 0,
+        },
+      });
+
+      let attemptCount = 0;
+      const mockPriceProvider = {
+        getHistoricalPrice: jest.fn().mockImplementation(async (sym) => {
+          attemptCount++;
+          // On each attempt, add an unpredicted member during valuation
+          if (attemptCount === 1) {
+            await prisma.leagueMember.create({
+              data: {
+                leagueId: league.id,
+                userId: user2Id,
+                portfolioId: pExtra1.id,
+                joinedAt: new Date(startDate.getTime() - 40000),
+              },
+            });
+          } else if (attemptCount === 2) {
+            await prisma.leagueMember.create({
+              data: {
+                leagueId: league.id,
+                userId: user3Id,
+                portfolioId: pExtra2.id,
+                joinedAt: new Date(startDate.getTime() - 30000),
+              },
+            });
+          }
+          return { symbol: sym, price: 180 };
+        }),
+      };
+
+      const result = await completeLeague(league.id, {
+        now: new Date(),
+        priceProvider: mockPriceProvider,
+        maxRetries: 2,
+      });
+
+      expect(result).toMatchObject({
+        completed: false,
+        reason: "MEMBERSHIP_DRIFT_EXCEEDED",
+        leagueId: league.id,
+        attempts: 2,
+      });
+
+      // DB state must be completely untouched: status STILL ACTIVE, all ranks NULL
+      const dbLeague = await prisma.league.findUnique({ where: { id: league.id } });
+      expect(dbLeague.status).toBe("ACTIVE");
+
+      const members = await prisma.leagueMember.findMany({
+        where: { leagueId: league.id },
+      });
+      expect(members.length).toBeGreaterThan(0);
+      for (const m of members) {
+        expect(m.rank).toBeNull();
+        expect(m.finalReturn).toBeNull();
+      }
+
+      // No notifications created whatsoever
+      const notifCount = await prisma.notification.count({
+        where: { eventKey: { startsWith: `league:${league.id}:` } },
+      });
+      expect(notifCount).toBe(0);
+    });
+  });
 });
