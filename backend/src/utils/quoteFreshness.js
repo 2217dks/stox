@@ -1,8 +1,17 @@
 const { createMarketDataError } = require("../providers/marketDataErrors");
-const {
-  DEFAULT_FRESHNESS_THRESHOLDS,
-  DEFAULT_MAX_CLOCK_SKEW_SECONDS,
-} = require("../config/marketDataConfig");
+const marketDataConfig = require("../config/marketDataConfig");
+
+const FALLBACK_FRESHNESS_THRESHOLDS = Object.freeze({
+  CRYPTO: 60,
+  STOCK: 300,
+  DEFAULT: 120,
+});
+const FALLBACK_MAX_CLOCK_SKEW_SECONDS = 5;
+
+const DEFAULT_FRESHNESS_THRESHOLDS =
+  marketDataConfig.DEFAULT_FRESHNESS_THRESHOLDS || FALLBACK_FRESHNESS_THRESHOLDS;
+const DEFAULT_MAX_CLOCK_SKEW_SECONDS =
+  marketDataConfig.DEFAULT_MAX_CLOCK_SKEW_SECONDS || FALLBACK_MAX_CLOCK_SKEW_SECONDS;
 
 /**
  * Evaluate the freshness of a normalized market quote based on its provider timestamp
@@ -24,6 +33,7 @@ function evaluateQuoteFreshness(quote, options = {}) {
       isFuture: false,
       freshness: "STALE",
       ageSeconds: null,
+      ageMs: null,
     };
   }
 
@@ -35,6 +45,7 @@ function evaluateQuoteFreshness(quote, options = {}) {
       isFuture: false,
       freshness: "STALE",
       ageSeconds: null,
+      ageMs: null,
     };
   }
 
@@ -46,6 +57,7 @@ function evaluateQuoteFreshness(quote, options = {}) {
       isFuture: false,
       freshness: "STALE",
       ageSeconds: null,
+      ageMs: null,
     };
   }
 
@@ -78,6 +90,7 @@ function evaluateQuoteFreshness(quote, options = {}) {
   let isFuture = false;
   let freshness = "FRESH";
   let ageSeconds = null;
+  let ageMs = null;
 
   if (diffMs < -maxClockSkewMs) {
     // Ahead by more than acceptable clock skew -> invalid / future timestamp
@@ -85,18 +98,20 @@ function evaluateQuoteFreshness(quote, options = {}) {
     isStale = true;
     freshness = "FUTURE";
     ageSeconds = null;
+    ageMs = null;
   } else if (diffMs < 0) {
     // Ahead within acceptable clock skew tolerance (e.g. up to 5s ahead)
     isFuture = false;
     isStale = false;
     freshness = "FRESH";
     ageSeconds = 0;
+    ageMs = 0;
   } else {
     // Normal past/current timestamp
     isFuture = false;
-    const ageMs = diffMs;
+    ageMs = diffMs;
     ageSeconds = Math.floor(ageMs / 1000);
-    isStale = ageSeconds > thresholdSeconds;
+    isStale = ageMs > thresholdSeconds * 1000;
     freshness = isStale ? "STALE" : "FRESH";
   }
 
@@ -106,6 +121,7 @@ function evaluateQuoteFreshness(quote, options = {}) {
     isFuture,
     freshness,
     ageSeconds,
+    ageMs,
   };
 }
 
@@ -130,8 +146,13 @@ function assertQuoteFreshness(quote, options = {}) {
     options.maxAgeSeconds !== undefined &&
     options.maxAgeSeconds !== null
   ) {
-    const maxAge = Number(options.maxAgeSeconds);
-    if (evaluated.ageSeconds === null || evaluated.ageSeconds > maxAge) {
+    const maxAgeMs = Number(options.maxAgeSeconds) * 1000;
+    if (
+      evaluated.ageSeconds === null ||
+      evaluated.ageMs === null ||
+      evaluated.ageMs === undefined ||
+      evaluated.ageMs > maxAgeMs
+    ) {
       throw createMarketDataError(
         "Market data quote is stale or delayed.",
         503,

@@ -106,6 +106,17 @@ async function safe(operation, fallback, options = {}) {
       message: error.message,
     });
 
+    if (resource !== "metrics_error_incr" && resource !== "metrics") {
+      try {
+        const redis = await getRedis();
+        if (redis && typeof redis.incr === "function") {
+          await redis.incr(cacheKeys.metric("errors"));
+        }
+      } catch (_) {
+        // Best-effort metric increment; do not disrupt error fallback
+      }
+    }
+
     return fallback;
   }
 }
