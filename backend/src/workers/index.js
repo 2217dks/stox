@@ -16,8 +16,13 @@ const {
 } = require("../queues/notificationQueue");
 const { ensureAlertScanScheduler } = require("../queues/alertQueue");
 const { ensureCopyTradeScanScheduler } = require("../queues/copyTradeQueue");
+const {
+  ensurePortfolioSnapshotScheduler,
+  ensureSnapshotRetentionScheduler,
+} = require("../queues/portfolioSnapshotQueue");
 const { closeQueues, isQueuesEnabled } = require("../queues");
 const { startPortfolioSnapshotWorker } = require("./portfolioSnapshotWorker");
+const { createPortfolioSnapshotQueueWorker } = require("./portfolioSnapshotQueueWorker");
 const { startLeaderboardSnapshotWorker } = require("./leaderboardSnapshotWorker");
 const { startAchievementWorker } = require("./achievementWorker");
 const { startLeagueCompletionWorker } = require("./leagueCompletionWorker");
@@ -56,6 +61,10 @@ const notificationQueueWorker = queuesEnabled
   : null;
 const alertQueueWorker = queuesEnabled ? createAlertQueueWorker() : null;
 const copyTradeQueueWorker = queuesEnabled ? createCopyTradeWorker() : null;
+const snapshotQueueWorker = queuesEnabled
+  ? createPortfolioSnapshotQueueWorker()
+  : null;
+const snapshotWorker = queuesEnabled ? null : startPortfolioSnapshotWorker();
 
 const SCAN_INTERVAL_MS =
   Number.parseInt(process.env.ORDER_SCAN_INTERVAL_MS, 10) ||
@@ -72,6 +81,12 @@ const ALERT_SCAN_INTERVAL_MS =
 const COPY_TRADE_SCAN_INTERVAL_MS =
   Number.parseInt(process.env.COPY_TRADE_SCAN_INTERVAL_MS, 10) ||
   DEFAULT_COPY_TRADE_SCAN_INTERVAL_MS;
+
+const SNAPSHOT_SCAN_INTERVAL_MS =
+  Number.parseInt(process.env.SNAPSHOT_SCAN_INTERVAL_MS, 10) || 60000;
+
+const SNAPSHOT_RETENTION_INTERVAL_MS =
+  Number.parseInt(process.env.SNAPSHOT_RETENTION_INTERVAL_MS, 10) || 86400000;
 
 const scanScheduler = queuesEnabled
   ? startScanScheduler({
@@ -109,7 +124,24 @@ const copyTradeScanScheduler = queuesEnabled
     })
   : null;
 
-const snapshotWorker = startPortfolioSnapshotWorker();
+const snapshotScheduler = queuesEnabled
+  ? startScanScheduler({
+      ensureScheduler: ensurePortfolioSnapshotScheduler,
+      intervalMs: SNAPSHOT_SCAN_INTERVAL_MS,
+      log: logger,
+      label: "Portfolio snapshot",
+    })
+  : null;
+
+const snapshotRetentionScheduler = queuesEnabled
+  ? startScanScheduler({
+      ensureScheduler: ensureSnapshotRetentionScheduler,
+      intervalMs: SNAPSHOT_RETENTION_INTERVAL_MS,
+      log: logger,
+      label: "Snapshot retention",
+    })
+  : null;
+
 const leaderboardWorker = startLeaderboardSnapshotWorker();
 const achievementWorker = startAchievementWorker();
 const leagueCompletionWorker = startLeagueCompletionWorker();
@@ -122,11 +154,15 @@ logger.info(
 
 if (queuesEnabled) {
   logger.info(
-    "Notification, alert, and copy-trade workers started on their BullMQ queues",
+    "Notification, alert, copy-trade, and portfolio snapshot workers started on their BullMQ queues",
   );
 }
 
-logger.info("Portfolio snapshot worker started for daily scheduled captures");
+logger.info(
+  queuesEnabled
+    ? "Portfolio snapshot queue worker started on BullMQ snapshots queue"
+    : "Portfolio snapshot worker started for daily scheduled captures (polling)",
+);
 logger.info("Leaderboard snapshot worker started for daily scheduled refreshes");
 logger.info("Achievement worker started for durable achievement reconciliation");
 logger.info("League completion worker started for processing completed competitions");
@@ -171,8 +207,10 @@ async function shutdown(signal) {
   notificationScanScheduler?.stop();
   alertScanScheduler?.stop();
   copyTradeScanScheduler?.stop();
+  snapshotScheduler?.stop();
+  snapshotRetentionScheduler?.stop();
   orderWorker?.stop();
-  snapshotWorker.stop();
+  snapshotWorker?.stop();
   leaderboardWorker.stop();
   achievementWorker.stop();
   leagueCompletionWorker.stop();
@@ -181,6 +219,7 @@ async function shutdown(signal) {
   await closeQueueWorker(notificationQueueWorker, "Notification queue worker");
   await closeQueueWorker(alertQueueWorker, "Alert queue worker");
   await closeQueueWorker(copyTradeQueueWorker, "Copy-trade queue worker");
+  await closeQueueWorker(snapshotQueueWorker, "Portfolio snapshot queue worker");
 
   try {
     await withTimeout(closeQueues(), SHUTDOWN_TIMEOUT_MS, {
