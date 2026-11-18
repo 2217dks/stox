@@ -262,6 +262,34 @@ describe("cacheService signals and metrics", () => {
     );
   });
 
+  test("increments Redis error counter on cache failure and reflects in detailed signals response", async () => {
+    // 1. Simulate failure during normal cache get
+    fakeRedis.get.mockRejectedValueOnce(new Error("Connection reset by peer"));
+
+    const result = await cacheService.getPrice("STOCK", "AAPL");
+    expect(result).toBeNull();
+
+    // Verify safe() incremented the redis error counter
+    expect(fakeRedis.incr).toHaveBeenCalledWith("stox:v1:metrics:cache:errors");
+
+    // 2. Subsequent getSignals() reads from Redis counters
+    fakeRedis.get
+      .mockResolvedValueOnce("10") // hits
+      .mockResolvedValueOnce("4")  // misses
+      .mockResolvedValueOnce("2")  // bypasses
+      .mockResolvedValueOnce("1"); // errors (incremented)
+
+    const signals = await cacheService.getSignals();
+    expect(signals).toEqual({
+      hits: 10,
+      misses: 4,
+      bypasses: 2,
+      errors: 1,
+      total: 14,
+      hitRate: Number((10 / 14).toFixed(4)),
+    });
+  });
+
   test("getSignals returns detailed metrics with hits, misses, bypasses, errors, and hitRate", async () => {
     fakeRedis.get
       .mockResolvedValueOnce("8")   // hits

@@ -96,6 +96,48 @@ describe("quoteFreshness", () => {
       });
     });
 
+    test("evaluates 60,000 ms with a 60-second threshold as fresh", () => {
+      const quote = {
+        symbol: "BTCUSDT",
+        assetClass: "CRYPTO",
+        price: "60000.00",
+        timestamp: new Date(baseTime - 60000).toISOString(), // exactly 60,000 ms
+      };
+
+      const evaluated = evaluateQuoteFreshness(quote, {
+        now,
+        thresholdSeconds: 60,
+      });
+
+      expect(evaluated).toMatchObject({
+        isStale: false,
+        freshness: "FRESH",
+        ageSeconds: 60,
+        ageMs: 60000,
+      });
+    });
+
+    test("evaluates 60,001 ms with a 60-second threshold as stale", () => {
+      const quote = {
+        symbol: "BTCUSDT",
+        assetClass: "CRYPTO",
+        price: "60000.00",
+        timestamp: new Date(baseTime - 60001).toISOString(), // 60,001 ms
+      };
+
+      const evaluated = evaluateQuoteFreshness(quote, {
+        now,
+        thresholdSeconds: 60,
+      });
+
+      expect(evaluated).toMatchObject({
+        isStale: true,
+        freshness: "STALE",
+        ageSeconds: 60,
+        ageMs: 60001,
+      });
+    });
+
     test("marks quote fresh with ageSeconds = 0 when timestamp is ahead within acceptable clock skew (<= 5s)", () => {
       const quote = {
         symbol: "BTCUSDT",
@@ -196,6 +238,31 @@ describe("quoteFreshness", () => {
       expect(() =>
         assertQuoteFreshness(quote, { now, maxAgeSeconds: 10 }),
       ).toThrow("Market data quote is stale or delayed.");
+    });
+
+    test("throws 503 when quote is slightly older than maxAgeSeconds (e.g. 10,001 ms vs 10s)", () => {
+      const quote = {
+        symbol: "BTCUSDT",
+        assetClass: "CRYPTO",
+        timestamp: new Date(baseTime - 10001).toISOString(), // 10,001 ms
+      };
+
+      expect(() =>
+        assertQuoteFreshness(quote, { now, maxAgeSeconds: 10 }),
+      ).toThrow("Market data quote is stale or delayed.");
+    });
+
+    test("passes when quote is exactly at maxAgeSeconds (e.g. 10,000 ms vs 10s)", () => {
+      const quote = {
+        symbol: "BTCUSDT",
+        assetClass: "CRYPTO",
+        timestamp: new Date(baseTime - 10000).toISOString(), // exactly 10,000 ms
+      };
+
+      const result = assertQuoteFreshness(quote, { now, maxAgeSeconds: 10 });
+      expect(result.isStale).toBe(false);
+      expect(result.freshness).toBe("FRESH");
+      expect(result.ageSeconds).toBe(10);
     });
 
     test("throws 503 when quote timestamp is missing and maxAgeSeconds is specified", () => {

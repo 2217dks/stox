@@ -9,11 +9,23 @@ jest.mock("../../../src/config/database", () => ({
 }));
 
 jest.mock("../../../src/config/marketDataConfig", () => ({
+  DEFAULT_FRESHNESS_THRESHOLDS: {
+    STOCK: 300,
+    CRYPTO: 60,
+    DEFAULT: 120,
+  },
+  DEFAULT_MAX_CLOCK_SKEW_SECONDS: 5,
   loadMarketDataConfig: jest.fn(() => ({
     providerByAssetClass: {
       STOCK: "stocks",
       CRYPTO: "crypto",
     },
+    freshnessThresholds: {
+      STOCK: 300,
+      CRYPTO: 60,
+      DEFAULT: 120,
+    },
+    maxClockSkewSeconds: 5,
   })),
 }));
 
@@ -135,6 +147,109 @@ describe("marketData quote caching", () => {
         }),
       }),
     );
+  });
+});
+
+describe("marketData quote freshness on cache hits", () => {
+  let cacheStore;
+  let currentTime;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    cacheStore = new Map();
+    currentTime = 1793577600000; // Reference epoch ms
+
+    createMarketDataService.mockReturnValue(baseMarketDataService);
+
+    cacheService.getOrSetPrice.mockImplementation(
+      async (assetClass, symbol, loader, options) => {
+        const key = `${assetClass}:${symbol}`;
+        if (!options?.bypass && cacheStore.has(key)) {
+          return cacheStore.get(key);
+        }
+        const fresh = await loader();
+        if (fresh) {
+          cacheStore.set(key, fresh);
+        }
+        return fresh;
+      },
+    );
+  });
+
+  test("re-evaluates quote freshness, ageSeconds, isStale, rejectStale, and maxAgeSeconds on cache hits", async () => {
+    // 1. Initial fetch and cache a fresh quote
+    const initialTimestamp = new Date(currentTime - 10 * 1000).toISOString(); // 10s old
+    baseMarketDataService.getQuote.mockResolvedValueOnce({
+      symbol: "AAPL",
+      assetClass: "STOCK",
+      price: "150.00",
+      timestamp: initialTimestamp,
+      isStale: false,
+      freshness: "FRESH",
+      ageSeconds: 10,
+    });
+
+    const quote1 = await marketData.getQuote("AAPL", {
+      now: () => currentTime,
+    });
+    expect(quote1.ageSeconds).toBe(10);
+    expect(quote1.isStale).toBe(false);
+    expect(quote1.freshness).toBe("FRESH");
+    expect(baseMarketDataService.getQuote).toHaveBeenCalledTimes(1);
+
+    // 2. Advance the reference clock until quote becomes stale (> 300s threshold for STOCK)
+    currentTime += 400 * 1000; // 400 seconds later (total 410s old)
+
+    // 3. Request the same quote without bypassing Redis
+    const cachedQuote = await marketData.getQuote("AAPL", {
+      now: () => currentTime,
+    });
+
+    // Verify cache hit: underlying provider was not invoked again
+    expect(baseMarketDataService.getQuote).toHaveBeenCalledTimes(1);
+
+    // Verify that ageSeconds is updated
+    expect(cachedQuote.ageSeconds).toBe(410);
+
+    // Verify that isStale and freshness are updated
+    expect(cachedQuote.isStale).toBe(true);
+    expect(cachedQuote.freshness).toBe("STALE");
+
+    // 4. Verify that rejectStale=true rejects the cached quote
+    await expect(
+      marketData.getQuote("AAPL", {
+        rejectStale: true,
+        now: () => currentTime,
+      }),
+    ).rejects.toThrow("Market data quote is stale or delayed.");
+
+    try {
+      await marketData.getQuote("AAPL", {
+        rejectStale: true,
+        now: () => currentTime,
+      });
+    } catch (err) {
+      expect(err.statusCode).toBe(503);
+      expect(err.code).toBe("MARKET_DATA_STALE_QUOTE");
+    }
+
+    // 5. Verify that maxAgeSeconds is enforced on cache hits
+    await expect(
+      marketData.getQuote("AAPL", {
+        maxAgeSeconds: 60,
+        now: () => currentTime,
+      }),
+    ).rejects.toThrow("Market data quote is stale or delayed.");
+
+    try {
+      await marketData.getQuote("AAPL", {
+        maxAgeSeconds: 60,
+        now: () => currentTime,
+      });
+    } catch (err) {
+      expect(err.statusCode).toBe(503);
+      expect(err.code).toBe("MARKET_DATA_STALE_QUOTE");
+    }
   });
 });
 
