@@ -12,22 +12,25 @@ import {
 import { Logo } from "@/components/ui/logo";
 import { Tooltip } from "@/components/ui/tooltip";
 import { PortfolioSwitcher } from "@/components/layout/portfolio-switcher";
+import { useActivePortfolio } from "@/lib/hooks";
 import {
   communityNav,
   isNavActive,
   primaryNav,
+  resolveNavHref,
 } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 import { useSession } from "@/store/use-session";
 import { useUI } from "@/store/use-ui";
 
-function NavLink({ item, collapsed }) {
+function NavLink({ item, collapsed, portfolioId }) {
   const pathname = usePathname();
   const active = isNavActive(pathname, item.href);
+  const href = resolveNavHref(item, portfolioId);
 
   const link = (
     <Link
-      href={item.href}
+      href={href}
       aria-current={active ? "page" : undefined}
       className={cn(
         "group relative flex h-9 items-center gap-2.5 rounded-[8px] px-2.5 text-[13px] font-medium transition-[background-color,color] duration-[var(--dur-fast)] ease-[var(--ease-out)]",
@@ -63,14 +66,19 @@ function NavLink({ item, collapsed }) {
   return link;
 }
 
-function NavGroup({ label, items, collapsed }) {
+function NavGroup({ label, items, collapsed, portfolioId }) {
   if (!items.length) return null;
 
   return (
     <div className="space-y-1">
       {!collapsed ? <p className="eyebrow px-2.5 pb-1.5">{label}</p> : null}
       {items.map((item) => (
-        <NavLink key={item.href} item={item} collapsed={collapsed} />
+        <NavLink
+          key={item.href}
+          item={item}
+          collapsed={collapsed}
+          portfolioId={portfolioId}
+        />
       ))}
     </div>
   );
@@ -80,6 +88,8 @@ export function Sidebar() {
   const collapsed = useUI((state) => state.sidebarCollapsed);
   const toggleSidebar = useUI((state) => state.toggleSidebar);
   const user = useSession((state) => state.user);
+  // The "Portfolio" entry follows the portfolio shown in the switcher above it.
+  const { portfolioId } = useActivePortfolio();
 
   const accountItems = [
     { href: "/settings", label: "Settings", icon: Settings },
@@ -131,7 +141,12 @@ export function Sidebar() {
         className="mt-5 flex-1 space-y-6 overflow-y-auto px-3 pb-4 no-scrollbar"
         aria-label="Main navigation"
       >
-        <NavGroup label="Trade" items={primaryNav} collapsed={collapsed} />
+        <NavGroup
+          label="Trade"
+          items={primaryNav}
+          collapsed={collapsed}
+          portfolioId={portfolioId}
+        />
         <NavGroup label="Community" items={communityNav} collapsed={collapsed} />
         <NavGroup label="Account" items={accountItems} collapsed={collapsed} />
       </nav>

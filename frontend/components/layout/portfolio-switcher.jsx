@@ -1,7 +1,7 @@
 "use client";
 
 import { Check, ChevronsUpDown, Plus, Wallet } from "lucide-react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 import {
   DropdownMenu,
@@ -18,12 +18,30 @@ import { cn } from "@/lib/utils";
 
 export function PortfolioSwitcher({ collapsed = false }) {
   const router = useRouter();
+  const pathname = usePathname();
   const {
     activePortfolios,
     portfolio,
     loading,
     setActivePortfolioId,
   } = useActivePortfolio();
+
+  /**
+   * Select a portfolio from the switcher.
+   *
+   * The detail page derives its id from the route (`/portfolios/:id`), so a
+   * switch made while viewing one must move the URL too — otherwise the page
+   * keeps rendering the old portfolio. `replace` is deliberate: switching
+   * accounts is a context change, not a destination, so it should not stack
+   * history entries the back button has to walk through.
+   */
+  function selectPortfolio(portfolioId) {
+    setActivePortfolioId(portfolioId);
+
+    if (/^\/portfolios\/[^/]+$/.test(pathname)) {
+      router.replace(`/portfolios/${portfolioId}`);
+    }
+  }
 
   if (loading && !portfolio) {
     return (
@@ -90,7 +108,7 @@ export function PortfolioSwitcher({ collapsed = false }) {
         {activePortfolios.map((item) => (
           <DropdownMenuItem
             key={item.id}
-            onSelect={() => setActivePortfolioId(item.id)}
+            onSelect={() => selectPortfolio(item.id)}
             className="justify-between gap-3"
           >
             <span className="min-w-0">

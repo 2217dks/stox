@@ -10,6 +10,7 @@ import {
   MoreHorizontal,
   Pencil,
   Plus,
+  RotateCcw,
   Trash2,
   Wallet,
 } from "lucide-react";
@@ -35,6 +36,7 @@ import {
   usePortfolios,
   usePortfolioSummary,
   useQuotes,
+  useReactivatePortfolio,
 } from "@/lib/hooks";
 import {
   formatCurrency,
@@ -45,6 +47,7 @@ import {
 import { cn } from "@/lib/utils";
 
 function PortfolioCard({ portfolio }) {
+  const { reactivate, pendingId } = useReactivatePortfolio();
   const { data: summaryData, loading } = usePortfolioSummary(portfolio.id);
   const { data: holdingsData } = useHoldings(portfolio.id);
   const summary = summaryData?.portfolio;
@@ -124,19 +127,32 @@ function PortfolioCard({ portfolio }) {
                 }
               />
               <DropdownMenuSeparator />
-              <DeactivatePortfolioDialog
-                portfolio={portfolio}
-                trigger={
-                  <DropdownMenuItem
-                    danger
-                    disabled={portfolio.isDefault}
-                    onSelect={(event) => event.preventDefault()}
-                  >
-                    <Trash2 className="size-3.5" aria-hidden="true" />
-                    Deactivate
-                  </DropdownMenuItem>
-                }
-              />
+              {portfolio.isActive === false ? (
+                <DropdownMenuItem
+                  disabled={pendingId === portfolio.id}
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    reactivate(portfolio.id);
+                  }}
+                >
+                  <RotateCcw className="size-3.5" aria-hidden="true" />
+                  Reactivate
+                </DropdownMenuItem>
+              ) : (
+                <DeactivatePortfolioDialog
+                  portfolio={portfolio}
+                  trigger={
+                    <DropdownMenuItem
+                      danger
+                      disabled={portfolio.isDefault}
+                      onSelect={(event) => event.preventDefault()}
+                    >
+                      <Trash2 className="size-3.5" aria-hidden="true" />
+                      Deactivate
+                    </DropdownMenuItem>
+                  }
+                />
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

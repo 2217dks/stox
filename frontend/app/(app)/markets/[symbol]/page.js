@@ -263,14 +263,31 @@ function MarketDetail() {
       {quoteError ? (
         <ErrorState
           compact
-          code={quoteError.code}
-          title="Quote unavailable"
-          description={quoteError.message}
+          code={quoteError.code === "MARKET_DATA_NOT_FOUND" ? null : quoteError.code}
+          title={
+            quoteError.code === "MARKET_DATA_NOT_FOUND"
+              ? "No live quote for this symbol"
+              : "Quote unavailable"
+          }
+          description={
+            quoteError.code === "MARKET_DATA_NOT_FOUND"
+              ? "The provider does not publish a quote for this ticker. It may be an international or OTC listing without live coverage."
+              : quoteError.message
+          }
           action={
-            <Button variant="secondary" size="sm" onClick={() => mutateQuote()}>
-              <RefreshCw className="size-3.5" aria-hidden="true" />
-              Retry
-            </Button>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => mutateQuote()}
+              >
+                <RefreshCw className="size-3.5" aria-hidden="true" />
+                Retry
+              </Button>
+              <Button asChild variant="ghost" size="sm">
+                <Link href="/markets">Back to markets</Link>
+              </Button>
+            </div>
           }
         />
       ) : null}
@@ -329,7 +346,7 @@ function MarketDetail() {
                   }
                   description={
                     stockHistoryUnavailable
-                      ? "Live quotes and trading still work. The current market-data plan does not include historical stock candles."
+                      ? "Live quotes and trading still work. Historical stock candles are temporarily unavailable from the data providers."
                       : historyError.message
                   }
                   action={

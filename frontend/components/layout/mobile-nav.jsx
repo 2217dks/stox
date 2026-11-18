@@ -3,11 +3,14 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-import { bottomNav, isNavActive } from "@/lib/navigation";
+import { useActivePortfolio } from "@/lib/hooks";
+import { bottomNav, isNavActive, resolveNavHref } from "@/lib/navigation";
 import { cn } from "@/lib/utils";
 
 export function MobileNav() {
   const pathname = usePathname();
+  // Mirror the desktop sidebar: "Portfolio" opens the active portfolio.
+  const { portfolioId } = useActivePortfolio();
 
   return (
     <nav
@@ -21,7 +24,7 @@ export function MobileNav() {
           return (
             <Link
               key={item.href}
-              href={item.href}
+              href={resolveNavHref(item, portfolioId)}
               aria-current={active ? "page" : undefined}
               className={cn(
                 "relative flex flex-col items-center justify-center gap-1 text-[10px] font-medium transition-colors",

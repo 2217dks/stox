@@ -16,7 +16,11 @@ import {
 export const primaryNav = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/markets", label: "Markets", icon: ChartCandlestick },
-  { href: "/portfolios", label: "Portfolios", icon: Wallet },
+  // `portfolioScoped` resolves to the currently selected portfolio's detail
+  // page (see resolveNavHref) so the sidebar entry opens the portfolio the
+  // switcher above it is showing, not the portfolio list. The list stays
+  // reachable from the switcher's "Manage portfolios" item.
+  { href: "/portfolios", label: "Portfolio", icon: Wallet, portfolioScoped: true },
   { href: "/orders", label: "Orders", icon: ListOrdered },
   { href: "/trades", label: "Trades", icon: ArrowLeftRight },
   { href: "/alerts", label: "Alerts", icon: Bell },
@@ -33,7 +37,7 @@ export const communityNav = [
 export const bottomNav = [
   { href: "/dashboard", label: "Home", icon: LayoutDashboard },
   { href: "/markets", label: "Markets", icon: ChartCandlestick },
-  { href: "/portfolios", label: "Portfolio", icon: Wallet },
+  { href: "/portfolios", label: "Portfolio", icon: Wallet, portfolioScoped: true },
   { href: "/orders", label: "Orders", icon: ListOrdered },
   { href: "/social", label: "Social", icon: Users },
 ];
@@ -99,4 +103,16 @@ export function getPageMeta(pathname = "") {
 export function isNavActive(pathname, href) {
   if (href === "/dashboard") return pathname === href;
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+/**
+ * Resolve a nav item's destination. Items marked `portfolioScoped` follow the
+ * active portfolio and fall back to the portfolio list when no portfolio
+ * exists yet (or while portfolios are still loading).
+ */
+export function resolveNavHref(item, portfolioId) {
+  if (item?.portfolioScoped && portfolioId) {
+    return `/portfolios/${portfolioId}`;
+  }
+  return item?.href || "/";
 }
