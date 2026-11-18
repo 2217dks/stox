@@ -7,11 +7,12 @@ import {
   useState,
   useSyncExternalStore,
 } from "react";
+import { toast } from "sonner";
 import useSWR, { mutate as globalMutate } from "swr";
 
-import { apiFetch } from "./api";
+import { apiFetch, errorMessage } from "./api";
 import { isCrypto } from "./format";
-import { marketApi } from "./endpoints";
+import { marketApi, portfoliosApi } from "./endpoints";
 import {
   getSocket,
   releaseMarketSymbol,
@@ -329,6 +330,43 @@ export function useInvalidateTrading() {
         ),
     ]);
   };
+}
+
+/**
+ * Reactivate a soft-deleted portfolio.
+ *
+ * Returns `{ reactivate, pendingId }` so callers can disable the control while
+ * the request is in flight. Portfolio-scoped SWR keys are revalidated, which
+ * flips the calling surface (and the sidebar switcher) back to the active
+ * state without a reload.
+ */
+export function useReactivatePortfolio() {
+  const [pendingId, setPendingId] = useState(null);
+
+  async function reactivate(portfolioId) {
+    if (!portfolioId) return false;
+
+    try {
+      setPendingId(portfolioId);
+      await portfoliosApi.reactivate(portfolioId);
+      toast.success("Portfolio reactivated", {
+        description: "It can receive new orders again.",
+      });
+      await globalMutate(
+        (key) => typeof key === "string" && key.startsWith("/portfolios"),
+      );
+      return true;
+    } catch (error) {
+      toast.error("Could not reactivate portfolio", {
+        description: errorMessage(error, "Try again in a moment."),
+      });
+      return false;
+    } finally {
+      setPendingId(null);
+    }
+  }
+
+  return { reactivate, pendingId };
 }
 
 /**

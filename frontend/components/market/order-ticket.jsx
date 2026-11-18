@@ -99,6 +99,9 @@ export function OrderTicket({
   const estimated =
     Number(quantity) > 0 && price > 0 ? Number(quantity) * price : 0;
   const availableCash = Number(portfolio?.availableCash ?? portfolio?.cashBalance ?? 0);
+  // Deactivated portfolios are read-only: the API rejects new orders, so the
+  // ticket blocks submission instead of letting the user discover it on error.
+  const portfolioInactive = portfolio?.isActive === false;
   const insuffientCash =
     side === "BUY" && estimated > 0 && estimated > availableCash;
   const priceLabel =
@@ -129,6 +132,14 @@ export function OrderTicket({
     if (!portfolioId) {
       setError("root", {
         message: "Choose a portfolio before placing an order.",
+      });
+      return;
+    }
+
+    if (portfolioInactive) {
+      setError("root", {
+        message:
+          "This portfolio is deactivated. Reactivate it to place new orders.",
       });
       return;
     }
@@ -203,6 +214,12 @@ export function OrderTicket({
       ) : null}
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-3.5" noValidate>
+        {portfolioInactive ? (
+          <Alert tone="warning" title="Portfolio deactivated">
+            Reactivate this portfolio from its portfolio page to place new
+            orders.
+          </Alert>
+        ) : null}
         {errors.root?.message ? (
           <Alert tone="danger">{errors.root.message}</Alert>
         ) : null}
@@ -429,6 +446,7 @@ export function OrderTicket({
           size={compact ? "md" : "lg"}
           fullWidth
           loading={isSubmitting}
+          disabled={portfolioInactive}
         >
           {isSubmitting
             ? "Placing order…"

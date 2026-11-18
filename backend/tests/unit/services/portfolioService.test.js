@@ -1,12 +1,14 @@
 jest.mock("../../../src/config/database", () => ({
   user: { findUnique: jest.fn() },
-  portfolio: { findFirst: jest.fn() },
+  portfolio: { findFirst: jest.fn(), update: jest.fn() },
   holding: { aggregate: jest.fn() },
 }));
 
 jest.mock("../../../src/services/cacheService", () => ({
   getOrSetPortfolioSummary: jest.fn(),
   invalidatePortfolio: jest.fn().mockResolvedValue(1),
+  invalidatePortfolioAnalytics: jest.fn().mockResolvedValue(1),
+  invalidateUserAnalytics: jest.fn().mockResolvedValue(1),
 }));
 
 const { Prisma } = require("@prisma/client");
@@ -167,5 +169,84 @@ describe("getPortfolioSummary", () => {
     );
 
     expect(prisma.holding.aggregate).not.toHaveBeenCalled();
+  });
+});
+
+describe("reactivatePortfolio", () => {
+  function mockInactivePortfolio(overrides = {}) {
+    return {
+      id: PORTFOLIO_ID,
+      userId: USER_ID,
+      name: "Archived portfolio",
+      description: null,
+      startingBalance: new Prisma.Decimal("10000"),
+      cashBalance: new Prisma.Decimal("10000"),
+      reservedCash: new Prisma.Decimal("0"),
+      isDefault: false,
+      isActive: false,
+      createdAt: CREATED_AT,
+      updatedAt: CREATED_AT,
+      ...overrides,
+    };
+  }
+
+  test("reactivates an inactive portfolio and invalidates its caches", async () => {
+    const inactive = mockInactivePortfolio();
+    prisma.portfolio.findFirst.mockResolvedValue(inactive);
+    prisma.portfolio.update.mockResolvedValue({ ...inactive, isActive: true });
+
+    const portfolio = await portfolioService.reactivatePortfolio(
+      USER_ID,
+      PORTFOLIO_ID,
+    );
+
+    expect(portfolio.isActive).toBe(true);
+    expect(portfolio.id).toBe(PORTFOLIO_ID);
+
+    expect(prisma.portfolio.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: PORTFOLIO_ID,
+        userId: USER_ID,
+      },
+    });
+
+    expect(prisma.portfolio.update).toHaveBeenCalledWith({
+      where: { id: PORTFOLIO_ID },
+      data: { isActive: true },
+    });
+
+    expect(cacheService.invalidatePortfolio).toHaveBeenCalledWith(PORTFOLIO_ID);
+    expect(cacheService.invalidatePortfolioAnalytics).toHaveBeenCalledWith(
+      PORTFOLIO_ID,
+    );
+    expect(cacheService.invalidateUserAnalytics).toHaveBeenCalledWith(USER_ID);
+  });
+
+  test("is idempotent when the portfolio is already active", async () => {
+    prisma.portfolio.findFirst.mockResolvedValue(
+      mockInactivePortfolio({ isActive: true }),
+    );
+
+    const portfolio = await portfolioService.reactivatePortfolio(
+      USER_ID,
+      PORTFOLIO_ID,
+    );
+
+    expect(portfolio.isActive).toBe(true);
+    expect(prisma.portfolio.update).not.toHaveBeenCalled();
+    expect(cacheService.invalidatePortfolio).toHaveBeenCalledWith(PORTFOLIO_ID);
+  });
+
+  test("rejects portfolios that are not owned by the user", async () => {
+    prisma.portfolio.findFirst.mockResolvedValue(null);
+
+    await expect(
+      portfolioService.reactivatePortfolio(USER_ID, PORTFOLIO_ID),
+    ).rejects.toMatchObject({
+      code: "PORTFOLIO_NOT_FOUND",
+      statusCode: 404,
+    });
+
+    expect(prisma.portfolio.update).not.toHaveBeenCalled();
   });
 });

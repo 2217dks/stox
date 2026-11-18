@@ -437,4 +437,84 @@ describe("Portfolio integration API", () => {
     expect(response.body.success).toBe(false);
     expect(response.body.error.code).toBe("PORTFOLIO_NOT_FOUND");
   });
+
+  test("reactivates a deactivated portfolio", async () => {
+    const created = await request(app)
+      .post("/api/v1/portfolios")
+      .set("Authorization", `Bearer ${user1AccessToken}`)
+      .send({ name: "Lifecycle Portfolio" });
+
+    expect(created.status).toBe(201);
+    const portfolioId = created.body.data.portfolio.id;
+
+    const deactivated = await request(app)
+      .delete(`/api/v1/portfolios/${portfolioId}`)
+      .set("Authorization", `Bearer ${user1AccessToken}`);
+
+    expect(deactivated.status).toBe(200);
+    expect(deactivated.body.data.portfolio.isActive).toBe(false);
+
+    const reactivated = await request(app)
+      .post(`/api/v1/portfolios/${portfolioId}/reactivate`)
+      .set("Authorization", `Bearer ${user1AccessToken}`);
+
+    expect(reactivated.status).toBe(200);
+    expect(reactivated.body.success).toBe(true);
+    expect(reactivated.body.data.portfolio.id).toBe(portfolioId);
+    expect(reactivated.body.data.portfolio.isActive).toBe(true);
+
+    const stored = await prisma.portfolio.findUnique({
+      where: { id: portfolioId },
+    });
+
+    expect(stored.isActive).toBe(true);
+  });
+
+  test("treats reactivation of an active portfolio as idempotent", async () => {
+    const created = await request(app)
+      .post("/api/v1/portfolios")
+      .set("Authorization", `Bearer ${user1AccessToken}`)
+      .send({ name: "Already Active Portfolio" });
+
+    expect(created.status).toBe(201);
+    const portfolioId = created.body.data.portfolio.id;
+
+    const response = await request(app)
+      .post(`/api/v1/portfolios/${portfolioId}/reactivate`)
+      .set("Authorization", `Bearer ${user1AccessToken}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.portfolio.isActive).toBe(true);
+  });
+
+  test("rejects reactivating another user's portfolio", async () => {
+    const created = await request(app)
+      .post("/api/v1/portfolios")
+      .set("Authorization", `Bearer ${user1AccessToken}`)
+      .send({ name: "Owned by user one" });
+
+    expect(created.status).toBe(201);
+    const portfolioId = created.body.data.portfolio.id;
+
+    await request(app)
+      .delete(`/api/v1/portfolios/${portfolioId}`)
+      .set("Authorization", `Bearer ${user1AccessToken}`);
+
+    const response = await request(app)
+      .post(`/api/v1/portfolios/${portfolioId}/reactivate`)
+      .set("Authorization", `Bearer ${user2AccessToken}`);
+
+    expect(response.status).toBe(404);
+    expect(response.body.success).toBe(false);
+    expect(response.body.error.code).toBe("PORTFOLIO_NOT_FOUND");
+  });
+
+  test("rejects unauthenticated portfolio reactivation", async () => {
+    const response = await request(app).post(
+      `/api/v1/portfolios/${user1MainPortfolioId}/reactivate`,
+    );
+
+    expect(response.status).toBe(401);
+    expect(response.body.success).toBe(false);
+  });
 });

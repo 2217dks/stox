@@ -30,6 +30,8 @@ export const portfoliosApi = {
     call(`/portfolios/${portfolioId}`, { method: "PATCH", body }),
   remove: (portfolioId) =>
     call(`/portfolios/${portfolioId}`, { method: "DELETE" }),
+  reactivate: (portfolioId) =>
+    call(`/portfolios/${portfolioId}/reactivate`, { method: "POST" }),
   holdings: (portfolioId) => call(`/portfolios/${portfolioId}/holdings`),
   cashBalance: (portfolioId) =>
     call(`/portfolios/${portfolioId}/cash-balance`),

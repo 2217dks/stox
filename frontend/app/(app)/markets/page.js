@@ -64,14 +64,14 @@ function MarketsContent() {
   );
   const [sort, setSort] = useState("movers");
 
-  // Crypto is always live. Stock quotes are fetched only when the Stocks tab
-  // is selected, so the default view does not spend the API budget on a
-  // provider that may not be configured.
+  // Both lists load on "All"; the Crypto tab avoids stock requests entirely.
+  // The HTTP call is a single snapshot per mount — live prices arrive over the
+  // socket — so this does not become a polling loop.
   const quoteSymbols = useMemo(
     () =>
-      filter === "STOCK"
-        ? [...CURATED_SYMBOLS.CRYPTO, ...CURATED_SYMBOLS.STOCK]
-        : CURATED_SYMBOLS.CRYPTO,
+      filter === "CRYPTO"
+        ? CURATED_SYMBOLS.CRYPTO
+        : [...CURATED_SYMBOLS.CRYPTO, ...CURATED_SYMBOLS.STOCK],
     [filter],
   );
 
@@ -200,7 +200,7 @@ function MarketsContent() {
             {[
               ["Assets", rows.length || "—"],
               ["Crypto", "24/7"],
-              ["Refresh", "15s"],
+              ["Refresh", "Live"],
             ].map(([label, value]) => (
               <div
                 key={label}
@@ -220,10 +220,9 @@ function MarketsContent() {
 
       {filter !== "CRYPTO" &&
       rows.some((row) => row.assetType === "STOCK" && !row.quote?.price) ? (
-        <Alert tone="info" title="Stock quotes are not loaded yet">
-          {filter === "STOCK"
-            ? "The stock market-data provider is unavailable right now. Crypto markets are live and tradable."
-            : "Open the Stocks tab to load equity quotes. Crypto markets are live and tradable."}
+        <Alert tone="info" title="Some stock quotes are unavailable">
+          The stock market-data provider did not return a price for every
+          symbol. Crypto markets remain live and tradable.
         </Alert>
       ) : null}
 

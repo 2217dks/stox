@@ -13,6 +13,7 @@ import {
   Pencil,
   Plus,
   RefreshCw,
+  RotateCcw,
   ShieldAlert,
   Target,
   TrendingDown,
@@ -26,6 +27,7 @@ import { LineChart } from "@/components/charts/line-chart";
 import { PnlHeatmap } from "@/components/charts/pnl-heatmap";
 import { DeactivatePortfolioDialog } from "@/components/portfolios/deactivate-portfolio-dialog";
 import { PortfolioDialog } from "@/components/portfolios/portfolio-dialog";
+import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -42,7 +44,7 @@ import { SegmentedControl } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Stat } from "@/components/ui/stat";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useApi, useHoldings, useQuotes } from "@/lib/hooks";
+import { useApi, useHoldings, useQuotes, useReactivatePortfolio } from "@/lib/hooks";
 import { ORDER_STATUS } from "@/lib/constants";
 import {
   formatCurrency,
@@ -112,6 +114,7 @@ export default function PortfolioDetailPage() {
   const portfolioId = params.portfolioId;
   const [tab, setTab] = useState("overview");
   const [period, setPeriod] = useState("1M");
+  const { reactivate, pendingId } = useReactivatePortfolio();
 
   const {
     data: portfolioData,
@@ -308,17 +311,46 @@ export default function PortfolioDetailPage() {
               </Button>
             }
           />
-          {portfolio?.isDefault ? null : (
+          {portfolio?.isActive === false ? (
+            <Button
+              variant="secondary"
+              size="md"
+              loading={pendingId === portfolioId}
+              onClick={() => reactivate(portfolioId)}
+            >
+              <RotateCcw className="size-3.5" aria-hidden="true" />
+              Reactivate
+            </Button>
+          ) : portfolio?.isDefault ? null : (
             <DeactivatePortfolioDialog portfolio={portfolio} />
           )}
-          <Button asChild variant="primary" size="md">
-            <Link href={`/orders?new=1&portfolioId=${portfolioId}`}>
+          {portfolio?.isActive === false ? (
+            <Button
+              variant="primary"
+              size="md"
+              disabled
+              title="Reactivate this portfolio to place new orders."
+            >
               <Plus className="size-4" aria-hidden="true" />
               New order
-            </Link>
-          </Button>
+            </Button>
+          ) : (
+            <Button asChild variant="primary" size="md">
+              <Link href={`/orders?new=1&portfolioId=${portfolioId}`}>
+                <Plus className="size-4" aria-hidden="true" />
+                New order
+              </Link>
+            </Button>
+          )}
         </div>
       </div>
+
+      {portfolio?.isActive === false ? (
+        <Alert tone="warning" title="Portfolio deactivated">
+          Holdings, orders and history are preserved, but this portfolio cannot
+          place new orders. Reactivate it to trade again.
+        </Alert>
+      ) : null}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         {summaryLoading && !summary ? (
@@ -782,7 +814,7 @@ export default function PortfolioDetailPage() {
                     }
                     description={
                       benchmarkHistoryUnavailable
-                        ? "SPY comparison requires historical stock candles, which the current market-data plan does not include."
+                        ? "SPY comparison requires historical stock candles, which are temporarily unavailable from the data providers."
                         : benchmarkError.message
                     }
                   />

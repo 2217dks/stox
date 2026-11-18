@@ -45,6 +45,13 @@ router.delete(
   portfolioController.deletePortfolio,
 );
 
+router.post(
+  "/:portfolioId/reactivate",
+  authMiddleware,
+  validate(portfolioIdParamsSchema, "params", "validatedParams"),
+  portfolioController.reactivatePortfolio,
+);
+
 router.get(
   "/:portfolioId/holdings",
   authMiddleware,
