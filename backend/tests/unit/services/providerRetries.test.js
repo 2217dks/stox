@@ -97,6 +97,15 @@ describe("Provider transient retry and backoff", () => {
       });
       expect(delay).toBe(750);
     });
+
+    test("returns null when retryAfterMs exceeds maxDelayMs to prevent early retry", () => {
+      const delay = calculateBackoffDelay(0, {
+        baseDelayMs: 100,
+        maxDelayMs: 2000,
+        retryAfterMs: 5000,
+      });
+      expect(delay).toBeNull();
+    });
   });
 
   describe("getData retries", () => {
@@ -178,6 +187,107 @@ describe("Provider transient retry and backoff", () => {
 
       expect(client.get).toHaveBeenCalledTimes(1);
       expect(sleep).not.toHaveBeenCalled();
+    });
+
+    test("fails immediately without retrying early when provider Retry-After exceeds maxDelayMs", async () => {
+      const client = {
+        get: jest.fn().mockRejectedValue({
+          response: {
+            status: 429,
+            headers: { "retry-after": "60" }, // 60 seconds = 60,000ms
+            data: { msg: "rate limited" },
+          },
+        }),
+      };
+      const sleep = jest.fn();
+
+      await expect(
+        getData(
+          client,
+          "/quote",
+          { symbol: "AAPL" },
+          { retries: 3, sleep, maxDelayMs: 2000 },
+        ),
+      ).rejects.toMatchObject({
+        statusCode: 429,
+        code: "MARKET_DATA_RATE_LIMITED",
+      });
+
+      // Crucial: Must NEVER retry early when provider requested 60s but maxDelayMs was only 2s!
+      expect(client.get).toHaveBeenCalledTimes(1);
+      expect(sleep).not.toHaveBeenCalled();
+    });
+
+    test("honors retry configuration wired on client.retryConfig", async () => {
+      const client = {
+        retryConfig: {
+          maxRetries: 4,
+          baseDelayMs: 25,
+          maxDelayMs: 200,
+        },
+        get: jest
+          .fn()
+          .mockRejectedValueOnce({ response: { status: 503, data: { msg: "busy" } } })
+          .mockRejectedValueOnce({ response: { status: 503, data: { msg: "busy" } } })
+          .mockRejectedValueOnce({ response: { status: 503, data: { msg: "busy" } } })
+          .mockResolvedValueOnce({ data: { c: 200.5 } }),
+      };
+      const sleep = jest.fn().mockResolvedValue();
+
+      const result = await getData(
+        client,
+        "/quote",
+        { symbol: "AAPL" },
+        { sleep, jitter: false },
+      );
+
+      expect(result).toEqual({ c: 200.5 });
+      expect(client.get).toHaveBeenCalledTimes(4); // 1 initial + 3 retries
+      expect(sleep).toHaveBeenCalledTimes(3);
+      expect(sleep).toHaveBeenNthCalledWith(1, 25);
+      expect(sleep).toHaveBeenNthCalledWith(2, 50);
+      expect(sleep).toHaveBeenNthCalledWith(3, 100);
+    });
+
+    test("honors environment-driven retry configuration from environment variables", async () => {
+      const originalRetries = process.env.MARKET_DATA_MAX_RETRIES;
+      const originalBase = process.env.MARKET_DATA_RETRY_BASE_DELAY_MS;
+      const originalMax = process.env.MARKET_DATA_RETRY_MAX_DELAY_MS;
+
+      try {
+        process.env.MARKET_DATA_MAX_RETRIES = "3";
+        process.env.MARKET_DATA_RETRY_BASE_DELAY_MS = "40";
+        process.env.MARKET_DATA_RETRY_MAX_DELAY_MS = "500";
+
+        const client = {
+          get: jest
+            .fn()
+            .mockRejectedValueOnce({ response: { status: 503, data: { msg: "busy" } } })
+            .mockRejectedValueOnce({ response: { status: 503, data: { msg: "busy" } } })
+            .mockResolvedValueOnce({ data: { c: 300 } }),
+        };
+        const sleep = jest.fn().mockResolvedValue();
+
+        const result = await getData(
+          client,
+          "/quote",
+          { symbol: "AAPL" },
+          { sleep, jitter: false },
+        );
+
+        expect(result).toEqual({ c: 300 });
+        expect(client.get).toHaveBeenCalledTimes(3);
+        expect(sleep).toHaveBeenCalledTimes(2);
+        expect(sleep).toHaveBeenNthCalledWith(1, 40);
+        expect(sleep).toHaveBeenNthCalledWith(2, 80);
+      } finally {
+        if (originalRetries !== undefined) process.env.MARKET_DATA_MAX_RETRIES = originalRetries;
+        else delete process.env.MARKET_DATA_MAX_RETRIES;
+        if (originalBase !== undefined) process.env.MARKET_DATA_RETRY_BASE_DELAY_MS = originalBase;
+        else delete process.env.MARKET_DATA_RETRY_BASE_DELAY_MS;
+        if (originalMax !== undefined) process.env.MARKET_DATA_RETRY_MAX_DELAY_MS = originalMax;
+        else delete process.env.MARKET_DATA_RETRY_MAX_DELAY_MS;
+      }
     });
 
     test("exhausts retry attempts on persistent transient error", async () => {

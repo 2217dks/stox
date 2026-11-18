@@ -109,7 +109,10 @@ function calculateBackoffDelay(
   } = {},
 ) {
   if (typeof retryAfterMs === "number" && retryAfterMs > 0) {
-    return Math.min(maxDelayMs, retryAfterMs);
+    if (retryAfterMs > maxDelayMs) {
+      return null;
+    }
+    return retryAfterMs;
   }
 
   const exponential = baseDelayMs * Math.pow(2, attempt);
@@ -123,21 +126,54 @@ function calculateBackoffDelay(
   return Math.floor(Math.random() * capped);
 }
 
-function createHttpClient({ baseURL, timeoutMs, headers = {} }) {
-  return axios.create({
+function createHttpClient({ baseURL, timeoutMs, headers = {}, retry = {} }) {
+  const client = axios.create({
     baseURL,
     timeout: timeoutMs,
     headers,
   });
+  client.retryConfig = retry;
+  return client;
 }
 
 async function getData(client, path, params, options = {}) {
   const isTest = process.env.NODE_ENV === "test";
-  const maxRetries = options.retries !== undefined ? options.retries : 2;
+  const clientRetry = client?.retryConfig || {};
+
+  const hasEnvMaxRetries = Boolean(process.env.MARKET_DATA_MAX_RETRIES);
+  const hasEnvBaseDelay = Boolean(process.env.MARKET_DATA_RETRY_BASE_DELAY_MS);
+  const hasEnvMaxDelay = Boolean(process.env.MARKET_DATA_RETRY_MAX_DELAY_MS);
+
+  let envRetry = null;
+  const getEnvRetry = () => {
+    if (!envRetry) {
+      try {
+        const { loadMarketDataConfig } = require("../config/marketDataConfig");
+        envRetry = loadMarketDataConfig().retry;
+      } catch {
+        envRetry = {};
+      }
+    }
+    return envRetry;
+  };
+
+  const maxRetries =
+    options.retries !== undefined
+      ? options.retries
+      : (options.maxRetries ??
+        (clientRetry.maxRetries ??
+          (isTest && !hasEnvMaxRetries ? 2 : getEnvRetry().maxRetries ?? 2)));
+
   const baseDelayMs =
-    options.baseDelayMs ?? (isTest ? 10 : 200);
+    options.baseDelayMs ??
+    (clientRetry.baseDelayMs ??
+      (isTest && !hasEnvBaseDelay ? 10 : getEnvRetry().baseDelayMs ?? 200));
+
   const maxDelayMs =
-    options.maxDelayMs ?? (isTest ? 50 : 2000);
+    options.maxDelayMs ??
+    (clientRetry.maxDelayMs ??
+      (isTest && !hasEnvMaxDelay ? 50 : getEnvRetry().maxDelayMs ?? 2000));
+
   const jitter = options.jitter ?? (isTest ? false : true);
   const sleepFn = options.sleep ?? sleep;
 
@@ -160,6 +196,21 @@ async function getData(client, path, params, options = {}) {
         jitter,
         retryAfterMs,
       });
+
+      if (delayMs === null) {
+        if (logger && typeof logger.warn === "function") {
+          logger.warn(
+            `Market data retry-after of ${retryAfterMs}ms exceeds maximum allowed delay of ${maxDelayMs}ms on ${path}; failing request without early retry.`,
+            {
+              path,
+              retryAfterMs,
+              maxDelayMs,
+              status: error.response?.status,
+            },
+          );
+        }
+        throw mapProviderError(error);
+      }
 
       if (logger && typeof logger.warn === "function") {
         logger.warn(

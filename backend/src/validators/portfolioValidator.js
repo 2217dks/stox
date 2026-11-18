@@ -1,3 +1,4 @@
+
 const { z } = require("zod");
 
 // Path parameter used by GET / PATCH / DELETE /portfolios/:portfolioId.
@@ -51,6 +52,7 @@ const benchmarkSymbolSchema = z
 
 const riskFreeRateSchema = z.preprocess((val) => {
   if (val === undefined || val === null || val === "") return 0.02;
+
   const num = Number(val);
   return Number.isFinite(num) ? num : val;
 }, z.number().min(0, "Risk-free rate must be non-negative.").max(1, "Risk-free rate must not exceed 1.0 (100%).").default(0.02));
@@ -63,18 +65,22 @@ const UTC_OFFSET_PATTERN = /(?:Z|[+-]\d{2}:?\d{2})$/i;
 
 function parseYearMonthUtc(value, isUpper) {
   const [year, month] = value.split("-").map(Number);
+
   if (month < 1 || month > 12) {
     return new Date(NaN);
   }
+
   if (!isUpper) {
     return new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
   }
+
   return new Date(Date.UTC(year, month, 0, 23, 59, 59, 999));
 }
 
 function parseDateOnlyUtc(value, isUpper) {
   const [year, month, day] = value.split("-").map(Number);
   const original = new Date(Date.UTC(year, month - 1, day));
+
   if (
     original.getUTCFullYear() !== year ||
     original.getUTCMonth() !== month - 1 ||
@@ -82,9 +88,11 @@ function parseDateOnlyUtc(value, isUpper) {
   ) {
     return new Date(NaN);
   }
+
   if (isUpper) {
     return new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999));
   }
+
   return new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0));
 }
 
@@ -103,9 +111,11 @@ function monthlyDateBoundSchema(isUpper = false) {
       if (YEAR_MONTH_PATTERN.test(value)) {
         return parseYearMonthUtc(value, isUpper);
       }
+
       if (DATE_ONLY_PATTERN.test(value)) {
         return parseDateOnlyUtc(value, isUpper);
       }
+
       return value;
     })
     .pipe(z.coerce.date());
@@ -113,6 +123,7 @@ function monthlyDateBoundSchema(isUpper = false) {
 
 const yearSchema = z.preprocess((val) => {
   if (val === undefined || val === null || val === "") return undefined;
+
   const num = parseInt(val, 10);
   return Number.isInteger(num) ? num : val;
 }, z.number().int().min(1970).max(2100).optional());
@@ -173,17 +184,32 @@ const realizedPnlQuerySchema = z
 
 const unrealizedPnlQuerySchema = z.object({
   rejectStale: z.preprocess((val) => {
-    if (typeof val === "string") return val.toLowerCase() === "true" || val === "1";
-    if (typeof val === "boolean") return val;
+    if (typeof val === "string") {
+      return val.toLowerCase() === "true" || val === "1";
+    }
+
+    if (typeof val === "boolean") {
+      return val;
+    }
+
     return false;
   }, z.boolean().default(false)),
+
   allowStale: z.preprocess((val) => {
-    if (typeof val === "string") return val.toLowerCase() === "true" || val === "1";
-    if (typeof val === "boolean") return val;
+    if (typeof val === "string") {
+      return val.toLowerCase() === "true" || val === "1";
+    }
+
+    if (typeof val === "boolean") {
+      return val;
+    }
+
     return false;
   }, z.boolean().default(false)),
+
   maxAgeSeconds: z.preprocess((val) => {
     if (val === undefined || val === null || val === "") return undefined;
+
     const num = Number(val);
     return Number.isFinite(num) ? num : val;
   }, z.number().int().min(1).max(86400).optional()),
@@ -195,6 +221,7 @@ const portfolioSnapshotsQuerySchema = z
     to: dateBoundSchema(1).optional(),
     limit: z.preprocess((val) => {
       if (val === undefined || val === null || val === "") return 100;
+
       const num = Number(val);
       return Number.isFinite(num) ? num : val;
     }, z.number().int().min(1).max(365).default(100)),
@@ -215,18 +242,34 @@ const aggregatePnlQuerySchema = z
     from: dateBoundSchema(0).optional(),
     to: dateBoundSchema(1).optional(),
     symbol: symbolField.optional(),
+
     rejectStale: z.preprocess((val) => {
-      if (typeof val === "string") return val.toLowerCase() === "true" || val === "1";
-      if (typeof val === "boolean") return val;
+      if (typeof val === "string") {
+        return val.toLowerCase() === "true" || val === "1";
+      }
+
+      if (typeof val === "boolean") {
+        return val;
+      }
+
       return false;
     }, z.boolean().default(false)),
+
     allowStale: z.preprocess((val) => {
-      if (typeof val === "string") return val.toLowerCase() === "true" || val === "1";
-      if (typeof val === "boolean") return val;
+      if (typeof val === "string") {
+        return val.toLowerCase() === "true" || val === "1";
+      }
+
+      if (typeof val === "boolean") {
+        return val;
+      }
+
       return false;
     }, z.boolean().default(false)),
+
     maxAgeSeconds: z.preprocess((val) => {
       if (val === undefined || val === null || val === "") return undefined;
+
       const num = Number(val);
       return Number.isFinite(num) ? num : val;
     }, z.number().int().min(1).max(86400).optional()),

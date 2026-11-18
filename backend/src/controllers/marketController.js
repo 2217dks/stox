@@ -5,7 +5,15 @@ async function getCryptoQuote(req, res, next) {
     const { symbol } = req.validatedParams;
     const quote = await marketDataService.getQuote(symbol, {
       assetClass: "CRYPTO",
+      ...(req.validatedQuery || {}),
     });
+
+    if (quote.freshness) {
+      res.setHeader("X-Quote-Freshness", quote.freshness);
+    }
+    if (quote.ageSeconds !== null && quote.ageSeconds !== undefined) {
+      res.setHeader("X-Quote-Age-Seconds", String(quote.ageSeconds));
+    }
 
     return res.status(200).json({
       success: true,
@@ -21,7 +29,15 @@ async function getStockQuote(req, res, next) {
     const { symbol } = req.validatedParams;
     const quote = await marketDataService.getQuote(symbol, {
       assetClass: "STOCK",
+      ...(req.validatedQuery || {}),
     });
+
+    if (quote.freshness) {
+      res.setHeader("X-Quote-Freshness", quote.freshness);
+    }
+    if (quote.ageSeconds !== null && quote.ageSeconds !== undefined) {
+      res.setHeader("X-Quote-Age-Seconds", String(quote.ageSeconds));
+    }
 
     return res.status(200).json({
       success: true,
