@@ -79,7 +79,10 @@ async function handleGeneratePortfolioSnapshots(job, options = {}) {
       });
     }
   } catch (err) {
-    log.warn(`Failed inspecting active portfolio snapshots for ${targetDateStr}: ${err.message}`);
+    log.error(
+      `Failed inspecting active portfolio snapshots for ${targetDateStr}: ${err.message}`,
+    );
+    throw err;
   }
 
   const existingSet = new Set(existingSnapshots.map((s) => s.portfolioId));

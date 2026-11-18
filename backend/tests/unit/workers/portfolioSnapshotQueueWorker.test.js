@@ -195,6 +195,49 @@ describe("portfolioSnapshotQueueWorker unit tests (Task 48.1)", () => {
         }),
       ).rejects.toThrow("Snapshot generation for 2026-11-17 failed for 1/1 portfolios.");
     });
+
+    test("rejects and propagates database error when client.portfolio.findMany rejects during inspection", async () => {
+      const dbError = new Error("Database connection lost");
+      mockClient.portfolio.findMany.mockRejectedValue(dbError);
+
+      const job = {
+        name: SNAPSHOT_JOB_NAMES.GENERATE_PORTFOLIO_SNAPSHOTS,
+        data: { targetDate: "2026-11-17", force: false },
+      };
+
+      await expect(
+        handleGeneratePortfolioSnapshots(job, {
+          client: mockClient,
+          now: () => new Date("2026-11-18T01:00:00.000Z"),
+        }),
+      ).rejects.toThrow("Database connection lost");
+
+      expect(mockClient.portfolio.findMany).toHaveBeenCalled();
+      expect(mockClient.performanceSnapshot.findMany).not.toHaveBeenCalled();
+      expect(captureDailyPortfolioSnapshots).not.toHaveBeenCalled();
+    });
+
+    test("rejects and propagates database error when client.performanceSnapshot.findMany rejects during inspection", async () => {
+      mockClient.portfolio.findMany.mockResolvedValue([{ id: "port-1" }]);
+      const dbError = new Error("Performance snapshot table query failed");
+      mockClient.performanceSnapshot.findMany.mockRejectedValue(dbError);
+
+      const job = {
+        name: SNAPSHOT_JOB_NAMES.GENERATE_PORTFOLIO_SNAPSHOTS,
+        data: { targetDate: "2026-11-17", force: false },
+      };
+
+      await expect(
+        handleGeneratePortfolioSnapshots(job, {
+          client: mockClient,
+          now: () => new Date("2026-11-18T01:00:00.000Z"),
+        }),
+      ).rejects.toThrow("Performance snapshot table query failed");
+
+      expect(mockClient.portfolio.findMany).toHaveBeenCalled();
+      expect(mockClient.performanceSnapshot.findMany).toHaveBeenCalled();
+      expect(captureDailyPortfolioSnapshots).not.toHaveBeenCalled();
+    });
   });
 
   describe("handlePruneSnapshotRetention", () => {
