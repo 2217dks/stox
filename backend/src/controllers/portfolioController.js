@@ -6,6 +6,11 @@ const benchmarkComparisonService = require("../services/benchmarkComparisonServi
 const {
   getPortfolioMonthlyPerformance,
 } = require("../services/portfolioMonthlyService");
+const { getPortfolioRealizedPnl } = require("../services/realizedPnlService");
+const { getPortfolioUnrealizedPnl } = require("../services/unrealizedPnlService");
+const { getPortfolioAggregatePnl } = require("../services/portfolioPnlAggregateService");
+const { getPortfolioDashboard } = require("../services/dashboardService");
+const portfolioSnapshotService = require("../services/portfolioSnapshotService");
 const cacheService = require("../services/cacheService");
 
 async function listPortfolios(req, res, next) {
@@ -317,6 +322,103 @@ async function getMonthlyPerformance(req, res, next) {
   }
 }
 
+async function getRealizedPnl(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+    const { period, from, to, symbol } = req.validatedQuery || {};
+
+    const result = await getPortfolioRealizedPnl(userId, portfolioId, {
+      period,
+      from,
+      to,
+      symbol,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getUnrealizedPnl(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+    const { rejectStale, allowStale, maxAgeSeconds } = req.validatedQuery || {};
+
+    const result = await getPortfolioUnrealizedPnl(userId, portfolioId, {
+      rejectStale,
+      allowStale,
+      maxAgeSeconds,
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getPortfolioSnapshots(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+    const { from, to, limit } = req.validatedQuery || {};
+
+    const result = await portfolioSnapshotService.getPortfolioDailySnapshots(
+      userId,
+      portfolioId,
+      { from, to, limit },
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getAggregatePnl(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+    const options = req.validatedQuery || {};
+
+    const result = await getPortfolioAggregatePnl(userId, portfolioId, options);
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getDashboardSummary(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+
+    const result = await getPortfolioDashboard(userId, portfolioId);
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   listPortfolios,
   createPortfolio,
@@ -331,4 +433,9 @@ module.exports = {
   getBenchmark,
   getBenchmarkComparison,
   getMonthlyPerformance,
+  getRealizedPnl,
+  getUnrealizedPnl,
+  getPortfolioSnapshots,
+  getAggregatePnl,
+  getDashboardSummary,
 };

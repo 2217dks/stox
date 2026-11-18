@@ -4,6 +4,10 @@ const {
   riskMetricsQuerySchema,
   benchmarkComparisonQuerySchema,
   monthlyPerformanceQuerySchema,
+  realizedPnlQuerySchema,
+  unrealizedPnlQuerySchema,
+  portfolioSnapshotsQuerySchema,
+  aggregatePnlQuerySchema,
 } = require("../../../src/validators/portfolioValidator");
 
 describe("Portfolio Analytics Validators Unit Tests", () => {
@@ -214,6 +218,147 @@ describe("Portfolio Analytics Validators Unit Tests", () => {
       });
       expect(reversedIso.success).toBe(false);
       expect(reversedIso.error.issues[0].path).toContain("to");
+    });
+  });
+
+  describe("realizedPnlQuerySchema", () => {
+    test("allows empty query and defaults period when provided", () => {
+      const parsed = realizedPnlQuerySchema.parse({});
+      expect(parsed).toEqual({ period: "1M" });
+
+      const withPeriod = realizedPnlQuerySchema.parse({ period: "3m" });
+      expect(withPeriod.period).toBe("3M");
+    });
+
+    test("accepts valid symbol and date range", () => {
+      const parsed = realizedPnlQuerySchema.parse({
+        symbol: "aapl",
+        from: "2026-01-01T00:00:00Z",
+        to: "2026-01-10T00:00:00Z",
+      });
+      expect(parsed.symbol).toBe("AAPL");
+      expect(parsed.from).toBeInstanceOf(Date);
+      expect(parsed.to).toBeInstanceOf(Date);
+    });
+
+    test("rejects reversed from/to range", () => {
+      const result = realizedPnlQuerySchema.safeParse({
+        from: "2026-01-15T00:00:00Z",
+        to: "2026-01-10T00:00:00Z",
+      });
+      expect(result.success).toBe(false);
+      expect(result.error.issues[0].path).toContain("to");
+    });
+  });
+
+  describe("unrealizedPnlQuerySchema", () => {
+    test("defaults rejectStale and allowStale to false", () => {
+      const parsed = unrealizedPnlQuerySchema.parse({});
+      expect(parsed).toEqual({
+        rejectStale: false,
+        allowStale: false,
+        maxAgeSeconds: undefined,
+      });
+    });
+
+    test("parses string booleans and integer maxAgeSeconds", () => {
+      const parsed = unrealizedPnlQuerySchema.parse({
+        rejectStale: "true",
+        allowStale: "1",
+        maxAgeSeconds: "120",
+      });
+      expect(parsed).toEqual({
+        rejectStale: true,
+        allowStale: true,
+        maxAgeSeconds: 120,
+      });
+    });
+
+    test("rejects invalid maxAgeSeconds", () => {
+      expect(() =>
+        unrealizedPnlQuerySchema.parse({ maxAgeSeconds: "0" }),
+      ).toThrow();
+      expect(() =>
+        unrealizedPnlQuerySchema.parse({ maxAgeSeconds: "not-a-number" }),
+      ).toThrow();
+    });
+  });
+
+  describe("portfolioSnapshotsQuerySchema", () => {
+    test("applies default limit of 100", () => {
+      const parsed = portfolioSnapshotsQuerySchema.parse({});
+      expect(parsed).toEqual({
+        limit: 100,
+      });
+    });
+
+    test("parses valid date bounds and custom limit", () => {
+      const parsed = portfolioSnapshotsQuerySchema.parse({
+        from: "2026-10-01",
+        to: "2026-11-01",
+        limit: "50",
+      });
+      expect(parsed.limit).toBe(50);
+      expect(parsed.from).toBeInstanceOf(Date);
+      expect(parsed.to).toBeInstanceOf(Date);
+    });
+
+    test("rejects when 'from' is later than 'to'", () => {
+      const result = portfolioSnapshotsQuerySchema.safeParse({
+        from: "2026-11-05",
+        to: "2026-11-01",
+      });
+      expect(result.success).toBe(false);
+      expect(result.error.issues[0].path).toContain("to");
+    });
+
+    test("rejects limit greater than 365 or less than 1", () => {
+      expect(() =>
+        portfolioSnapshotsQuerySchema.parse({ limit: "500" }),
+      ).toThrow();
+      expect(() =>
+        portfolioSnapshotsQuerySchema.parse({ limit: "0" }),
+      ).toThrow();
+    });
+  });
+
+  describe("aggregatePnlQuerySchema", () => {
+    test("applies default period 1M and default boolean flags", () => {
+      const parsed = aggregatePnlQuerySchema.parse({});
+      expect(parsed).toEqual({
+        period: "1M",
+        rejectStale: false,
+        allowStale: false,
+        maxAgeSeconds: undefined,
+      });
+    });
+
+    test("parses full options including symbol, date bounds, and boolean strings", () => {
+      const parsed = aggregatePnlQuerySchema.parse({
+        period: "3m",
+        symbol: "msft",
+        from: "2026-08-01",
+        to: "2026-11-01",
+        rejectStale: "true",
+        allowStale: "false",
+        maxAgeSeconds: "60",
+      });
+      expect(parsed.period).toBe("3M");
+      expect(parsed.symbol).toBe("MSFT");
+      expect(parsed.from).toBeInstanceOf(Date);
+      expect(parsed.to).toBeInstanceOf(Date);
+      expect(parsed.rejectStale).toBe(true);
+      expect(parsed.allowStale).toBe(false);
+      expect(parsed.maxAgeSeconds).toBe(60);
+    });
+
+    test("rejects reversed from/to date range", () => {
+      const result = aggregatePnlQuerySchema.safeParse({
+        from: "2026-11-10",
+        to: "2026-11-01",
+      });
+      expect(result.success).toBe(false);
+      expect(result.error.issues[0].path).toContain("to");
     });
   });
 });
