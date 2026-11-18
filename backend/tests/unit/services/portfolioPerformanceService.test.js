@@ -312,4 +312,126 @@ describe("Portfolio Performance Service (Task 37.2)", () => {
     expect(histResult.metadata.requestedRange.from).toBe("2026-11-01");
     expect(histResult.metadata.requestedRange.to).toBe("2026-11-15");
   });
+
+  test("aligns TWR with selected baseline and does not compound first snapshot return when first snapshot is the baseline", async () => {
+    mockClient.portfolio.findFirst.mockResolvedValue({
+      id: portfolioId,
+      name: "TWR Baseline Alignment",
+      startingBalance: new Prisma.Decimal("10000.00000000"),
+      cashBalance: new Prisma.Decimal("10000.00000000"),
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    });
+
+    // No prior snapshot before requested window
+    mockClient.performanceSnapshot.findFirst.mockResolvedValue(null);
+
+    // Snapshots inside period:
+    // First snapshot has totalValue = 10,000, and a non-zero dailyPnl = 1000, dailyPnlPct = 0.10 (from before the window)
+    // Second snapshot has totalValue = 10,500, dailyPnl = 500, dailyPnlPct = 0.05 (+5%)
+    // Third snapshot has totalValue = 11,025, dailyPnl = 525, dailyPnlPct = 0.05 (+5%)
+    mockClient.performanceSnapshot.findMany.mockResolvedValue([
+      {
+        id: "snap-baseline-1",
+        portfolioId,
+        snapshotDate: new Date("2026-11-01T00:00:00.000Z"),
+        totalValue: new Prisma.Decimal("10000.00000000"),
+        cashBalance: new Prisma.Decimal("5000.00000000"),
+        holdingsValue: new Prisma.Decimal("5000.00000000"),
+        dailyPnl: new Prisma.Decimal("1000.00000000"),
+        dailyPnlPct: new Prisma.Decimal("0.1000"), // 10% occurred before or on baseline
+      },
+      {
+        id: "snap-baseline-2",
+        portfolioId,
+        snapshotDate: new Date("2026-11-02T00:00:00.000Z"),
+        totalValue: new Prisma.Decimal("10500.00000000"),
+        cashBalance: new Prisma.Decimal("5000.00000000"),
+        holdingsValue: new Prisma.Decimal("5500.00000000"),
+        dailyPnl: new Prisma.Decimal("500.00000000"),
+        dailyPnlPct: new Prisma.Decimal("0.0500"), // +5%
+      },
+      {
+        id: "snap-baseline-3",
+        portfolioId,
+        snapshotDate: new Date("2026-11-03T00:00:00.000Z"),
+        totalValue: new Prisma.Decimal("11025.00000000"),
+        cashBalance: new Prisma.Decimal("5000.00000000"),
+        holdingsValue: new Prisma.Decimal("6025.00000000"),
+        dailyPnl: new Prisma.Decimal("525.00000000"),
+        dailyPnlPct: new Prisma.Decimal("0.0500"), // +5%
+      },
+    ]);
+
+    mockClient.trade.aggregate.mockResolvedValue({
+      _sum: { realizedPnl: null, fees: null },
+      _count: { id: 0 },
+    });
+
+    const result = await getPortfolioPerformance(userId, portfolioId, {
+      from: "2026-11-01",
+      to: "2026-11-03",
+      client: mockClient,
+    });
+
+    // 1. Verify reported baseline is correct
+    expect(result.baseline.source).toBe("period_start_snapshot");
+    expect(result.baseline.date).toBe("2026-11-01");
+    expect(result.baseline.totalValue).toBe("10000.00000000");
+
+    // 2. Verify returnPct uses that baseline: (11025 - 10000) / 10000 = 10.2500%
+    expect(result.performance.startValue).toBe("10000.00000000");
+    expect(result.performance.endValue).toBe("11025.00000000");
+    expect(result.performance.netPnl).toBe("1025.00000000");
+    expect(result.performance.returnPct).toBe("10.2500");
+
+    // 3. Verify timeWeightedReturnPct does not include performance from before baseline:
+    // (1 + 0.05) * (1 + 0.05) - 1 = 1.1025 - 1 = 10.2500%
+    // (If the first snapshot's 10% was erroneously compounded, it would be 21.2750%)
+    expect(result.performance.timeWeightedReturnPct).toBe("10.2500");
+
+    // 4. Verify both returns describe identical period boundaries
+    expect(result.performance.returnPct).toBe(result.performance.timeWeightedReturnPct);
+  });
+
+  test("returns zero returnPct and timeWeightedReturnPct when single snapshot serves as baseline", async () => {
+    mockClient.portfolio.findFirst.mockResolvedValue({
+      id: portfolioId,
+      name: "Single Snapshot Portfolio",
+      startingBalance: new Prisma.Decimal("10000.00000000"),
+      cashBalance: new Prisma.Decimal("10000.00000000"),
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    });
+
+    mockClient.performanceSnapshot.findFirst.mockResolvedValue(null);
+    mockClient.performanceSnapshot.findMany.mockResolvedValue([
+      {
+        id: "single-snap",
+        portfolioId,
+        snapshotDate: new Date("2026-11-01T00:00:00.000Z"),
+        totalValue: new Prisma.Decimal("10500.00000000"),
+        cashBalance: new Prisma.Decimal("5000.00000000"),
+        holdingsValue: new Prisma.Decimal("5500.00000000"),
+        dailyPnl: new Prisma.Decimal("500.00000000"),
+        dailyPnlPct: new Prisma.Decimal("0.0500"), // non-zero daily return before baseline
+      },
+    ]);
+
+    mockClient.trade.aggregate.mockResolvedValue({
+      _sum: { realizedPnl: null, fees: null },
+      _count: { id: 0 },
+    });
+
+    const result = await getPortfolioPerformance(userId, portfolioId, {
+      from: "2026-11-01",
+      to: "2026-11-01",
+      client: mockClient,
+    });
+
+    expect(result.baseline.source).toBe("period_start_snapshot");
+    expect(result.baseline.totalValue).toBe("10500.00000000");
+    expect(result.performance.startValue).toBe("10500.00000000");
+    expect(result.performance.endValue).toBe("10500.00000000");
+    expect(result.performance.returnPct).toBe("0.0000");
+    expect(result.performance.timeWeightedReturnPct).toBe("0.0000");
+  });
 });

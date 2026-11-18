@@ -347,4 +347,131 @@ describe("Portfolio Allocation Service (Task 37.4)", () => {
     expect(stockBucket.hasEstimatedPrice).toBe(false);
     expect(stockBucket.isPriceEstimated).toBe(false);
   });
+
+  test("does not treat positive stale quote as live price and marks allocation estimated (symbol dimension)", async () => {
+    mockClient.portfolio.findFirst.mockResolvedValue({
+      id: portfolioId,
+      name: "Stale Quote Test",
+      cashBalance: new Prisma.Decimal("1000.00000000"),
+    });
+
+    mockClient.holding.findMany.mockResolvedValue([
+      {
+        id: "h-stale",
+        symbol: "STALE_STOCK",
+        assetType: "STOCK",
+        quantity: new Prisma.Decimal("10.00000000"),
+        averageBuyPrice: new Prisma.Decimal("100.00000000"),
+        totalInvested: new Prisma.Decimal("1000.00000000"),
+      },
+      {
+        id: "h-fresh",
+        symbol: "FRESH_STOCK",
+        assetType: "STOCK",
+        quantity: new Prisma.Decimal("10.00000000"),
+        averageBuyPrice: new Prisma.Decimal("50.00000000"),
+        totalInvested: new Prisma.Decimal("500.00000000"),
+      },
+    ]);
+
+    // Positive price but isStale: true
+    mockMarketData.getQuote.mockImplementation(async (symbol) => {
+      if (symbol === "STALE_STOCK") {
+        return {
+          symbol: "STALE_STOCK",
+          price: "180.00000000",
+          isStale: true,
+          freshness: "STALE",
+          ageSeconds: 400,
+        };
+      }
+      if (symbol === "FRESH_STOCK") {
+        return {
+          symbol: "FRESH_STOCK",
+          price: "60.00000000",
+          isStale: false,
+          freshness: "FRESH",
+          ageSeconds: 10,
+        };
+      }
+      return null;
+    });
+
+    const result = await getPortfolioAllocation(userId, portfolioId, {
+      dimension: "symbol",
+      marketDataProvider: mockMarketData,
+      client: mockClient,
+    });
+
+    // 1. Verify stale quote is not classified as live price and is marked estimated
+    const staleItem = result.allocations.find((a) => a.key === "STALE_STOCK");
+    expect(staleItem).toBeDefined();
+    expect(staleItem.priceSource).not.toBe("live");
+    expect(staleItem.priceSource).toBe("cost_basis");
+    expect(staleItem.isPriceEstimated).toBe(true);
+    expect(staleItem.price).toBe("100.00000000"); // fell back to avgBuyPrice
+
+    // 2. Verify fresh quote continues to be classified as live
+    const freshItem = result.allocations.find((a) => a.key === "FRESH_STOCK");
+    expect(freshItem).toBeDefined();
+    expect(freshItem.priceSource).toBe("live");
+    expect(freshItem.isPriceEstimated).toBe(false);
+    expect(freshItem.price).toBe("60.00000000");
+
+    // 3. Verify root-level isEstimated, pricingSummary, and reconciliation remain consistent
+    expect(result.isEstimated).toBe(true);
+    expect(result.valuationMethod).toBe("estimated");
+    expect(result.pricingSummary).toEqual({
+      totalHoldings: 2,
+      liveQuotes: 1,
+      estimatedQuotes: 1,
+      hasEstimatedPrices: true,
+    });
+    expect(result.reconciliation.isEstimated).toBe(true);
+    expect(result.reconciliation.valuationMethod).toBe("estimated");
+    expect(result.reconciliation.isReconciled).toBe(true);
+  });
+
+  test("does not treat positive stale quote as live price in asset dimension", async () => {
+    mockClient.portfolio.findFirst.mockResolvedValue({
+      id: portfolioId,
+      name: "Stale Asset Dimension",
+      cashBalance: new Prisma.Decimal("500.00000000"),
+    });
+
+    mockClient.holding.findMany.mockResolvedValue([
+      {
+        id: "h-crypto-stale",
+        symbol: "BTC",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("1.00000000"),
+        averageBuyPrice: new Prisma.Decimal("50000.00000000"),
+        totalInvested: new Prisma.Decimal("50000.00000000"),
+      },
+    ]);
+
+    mockMarketData.getQuote.mockResolvedValue({
+      symbol: "BTC",
+      price: "65000.00000000",
+      isStale: true,
+      freshness: "STALE",
+      ageSeconds: 120,
+    });
+
+    const result = await getPortfolioAllocation(userId, portfolioId, {
+      dimension: "asset",
+      marketDataProvider: mockMarketData,
+      client: mockClient,
+    });
+
+    expect(result.isEstimated).toBe(true);
+    expect(result.valuationMethod).toBe("estimated");
+    expect(result.reconciliation.isEstimated).toBe(true);
+    expect(result.reconciliation.valuationMethod).toBe("estimated");
+
+    const cryptoBucket = result.allocations.find((a) => a.key === "CRYPTO");
+    expect(cryptoBucket.hasEstimatedPrice).toBe(true);
+    expect(cryptoBucket.isPriceEstimated).toBe(true);
+    expect(cryptoBucket.value).toBe("50000.00000000"); // fell back to avgBuyPrice
+  });
 });
