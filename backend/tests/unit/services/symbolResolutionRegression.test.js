@@ -571,4 +571,247 @@ describe("Symbol Resolution & Mapping Regression Suite", () => {
       expect(resolved.canonicalSymbol).toBe("BTCUSDT");
     });
   });
+
+  describe("Item 5: Provider Prefix Validation and Database Precedence (7-step hierarchy)", () => {
+    test("resolves FINNHUB:XYZUSDT to Finnhub STOCK when registered in database as a stock", async () => {
+      mockPrisma.symbol.findUnique.mockResolvedValue({
+        id: "sym-xyzusdt",
+        symbol: "XYZUSDT",
+        name: "XYZ Holdings Inc",
+        assetType: "STOCK",
+        exchange: "NASDAQ",
+        currency: "USD",
+        isActive: true,
+      });
+
+      const resolved = await resolveSymbol("FINNHUB:XYZUSDT", {
+        prisma: mockPrisma,
+      });
+      expect(resolved.source).toBe("database");
+      expect(resolved.assetClass).toBe("STOCK");
+      expect(resolved.provider).toBe("finnhub");
+      expect(resolved.canonicalSymbol).toBe("XYZUSDT");
+      expect(resolved.providerSymbol).toBe("XYZUSDT");
+
+      const quote = await service.getQuote("FINNHUB:XYZUSDT", {
+        prisma: mockPrisma,
+      });
+      expect(mockStockProvider.getQuote).toHaveBeenCalledWith("XYZUSDT");
+      expect(mockCryptoProvider.getQuote).not.toHaveBeenCalled();
+      expect(quote.assetClass).toBe("STOCK");
+    });
+
+    test("rejects BINANCE:XYZUSDT with 400 when registered in database as a stock", async () => {
+      mockPrisma.symbol.findUnique.mockResolvedValue({
+        id: "sym-xyzusdt",
+        symbol: "XYZUSDT",
+        name: "XYZ Holdings Inc",
+        assetType: "STOCK",
+        exchange: "NASDAQ",
+        currency: "USD",
+        isActive: true,
+      });
+
+      await expect(
+        resolveSymbol("BINANCE:XYZUSDT", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: "MARKET_DATA_INVALID_REQUEST",
+        message: "The cryptocurrency symbol format is invalid.",
+      });
+
+      await expect(
+        service.getQuote("BINANCE:XYZUSDT", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: "MARKET_DATA_INVALID_REQUEST",
+      });
+      expect(mockCryptoProvider.getQuote).not.toHaveBeenCalled();
+      expect(mockStockProvider.getQuote).not.toHaveBeenCalled();
+    });
+
+    test("rejects BINANCE:AAPL with 400 when registered in database as a stock", async () => {
+      mockPrisma.symbol.findUnique.mockResolvedValue({
+        id: "sym-aapl",
+        symbol: "AAPL",
+        name: "Apple Inc.",
+        assetType: "STOCK",
+        exchange: "NASDAQ",
+        currency: "USD",
+        isActive: true,
+      });
+
+      await expect(
+        resolveSymbol("BINANCE:AAPL", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: "MARKET_DATA_INVALID_REQUEST",
+        message: "The cryptocurrency symbol format is invalid.",
+      });
+    });
+
+    test("rejects FINNHUB:BTCUSDT with 400 when registered in database as crypto", async () => {
+      mockPrisma.symbol.findUnique.mockResolvedValue({
+        id: "sym-btcusdt",
+        symbol: "BTCUSDT",
+        name: "Bitcoin / Tether",
+        assetType: "CRYPTO",
+        exchange: "BINANCE",
+        currency: "USDT",
+        isActive: true,
+      });
+
+      await expect(
+        resolveSymbol("FINNHUB:BTCUSDT", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: "MARKET_DATA_INVALID_REQUEST",
+        message: "A valid stock ticker symbol is required.",
+      });
+    });
+
+    test("resolves BINANCE:BTCUSDT to Binance CRYPTO when registered in database as crypto", async () => {
+      mockPrisma.symbol.findUnique.mockResolvedValue({
+        id: "sym-btcusdt",
+        symbol: "BTCUSDT",
+        name: "Bitcoin / Tether",
+        assetType: "CRYPTO",
+        exchange: "BINANCE",
+        currency: "USDT",
+        isActive: true,
+      });
+
+      const resolved = await resolveSymbol("BINANCE:BTCUSDT", {
+        prisma: mockPrisma,
+      });
+      expect(resolved.source).toBe("database");
+      expect(resolved.assetClass).toBe("CRYPTO");
+      expect(resolved.provider).toBe("binance");
+      expect(resolved.canonicalSymbol).toBe("BTCUSDT");
+
+      const quote = await service.getQuote("BINANCE:BTCUSDT", {
+        prisma: mockPrisma,
+      });
+      expect(mockCryptoProvider.getQuote).toHaveBeenCalledWith("BTCUSDT");
+      expect(mockStockProvider.getQuote).not.toHaveBeenCalled();
+      expect(quote.assetClass).toBe("CRYPTO");
+    });
+
+    test("resolves FINNHUB:AAPL to Finnhub STOCK when registered in database as stock", async () => {
+      mockPrisma.symbol.findUnique.mockResolvedValue({
+        id: "sym-aapl",
+        symbol: "AAPL",
+        name: "Apple Inc.",
+        assetType: "STOCK",
+        exchange: "NASDAQ",
+        currency: "USD",
+        isActive: true,
+      });
+
+      const resolved = await resolveSymbol("FINNHUB:AAPL", {
+        prisma: mockPrisma,
+      });
+      expect(resolved.source).toBe("database");
+      expect(resolved.assetClass).toBe("STOCK");
+      expect(resolved.provider).toBe("finnhub");
+      expect(resolved.canonicalSymbol).toBe("AAPL");
+
+      const quote = await service.getQuote("FINNHUB:AAPL", {
+        prisma: mockPrisma,
+      });
+      expect(mockStockProvider.getQuote).toHaveBeenCalledWith("AAPL");
+      expect(mockCryptoProvider.getQuote).not.toHaveBeenCalled();
+      expect(quote.assetClass).toBe("STOCK");
+    });
+
+    test("handles unregistered symbols with prefixes via syntax fallback", async () => {
+      mockPrisma.symbol.findUnique.mockResolvedValue(null);
+
+      // FINNHUB:XYZUSDT (unknown) -> infers CRYPTO -> FINNHUB conflicts with CRYPTO -> 400
+      await expect(
+        resolveSymbol("FINNHUB:XYZUSDT", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: "MARKET_DATA_INVALID_REQUEST",
+        message: "A valid stock ticker symbol is required.",
+      });
+
+      // BINANCE:XYZUSDT (unknown) -> infers CRYPTO -> matches BINANCE -> resolves rule CRYPTO
+      const binanceXyz = await resolveSymbol("BINANCE:XYZUSDT", {
+        prisma: mockPrisma,
+      });
+      expect(binanceXyz.source).toBe("rule");
+      expect(binanceXyz.assetClass).toBe("CRYPTO");
+
+      // FINNHUB:AAPL (unknown) -> infers STOCK -> matches FINNHUB -> resolves rule STOCK
+      const finnhubAapl = await resolveSymbol("FINNHUB:AAPL", {
+        prisma: mockPrisma,
+      });
+      expect(finnhubAapl.source).toBe("rule");
+      expect(finnhubAapl.assetClass).toBe("STOCK");
+
+      // BINANCE:AAPL (unknown) -> infers STOCK -> BINANCE conflicts with STOCK -> 400
+      await expect(
+        resolveSymbol("BINANCE:AAPL", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: "MARKET_DATA_INVALID_REQUEST",
+        message: "The cryptocurrency symbol format is invalid.",
+      });
+
+      // FINNHUB:BTCUSDT (unknown) -> infers CRYPTO -> FINNHUB conflicts with CRYPTO -> 400
+      await expect(
+        resolveSymbol("FINNHUB:BTCUSDT", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: "MARKET_DATA_INVALID_REQUEST",
+        message: "A valid stock ticker symbol is required.",
+      });
+    });
+
+    test("propagates DATABASE_ERROR when database lookup fails during prefixed symbol resolution", async () => {
+      mockPrisma.symbol.findUnique.mockRejectedValue(
+        new Error("PostgreSQL connection terminated unexpectedly"),
+      );
+
+      // FINNHUB:XYZUSDT must fail with 500 DATABASE_ERROR, NOT syntax 400
+      await expect(
+        resolveSymbol("FINNHUB:XYZUSDT", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 500,
+        code: "DATABASE_ERROR",
+        message: "Symbol resolution failed due to a database error.",
+      });
+
+      // BINANCE:XYZUSDT must also fail with 500 DATABASE_ERROR
+      await expect(
+        resolveSymbol("BINANCE:XYZUSDT", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 500,
+        code: "DATABASE_ERROR",
+      });
+
+      // FINNHUB:BTCUSDT must also query DB and fail with 500 DATABASE_ERROR
+      await expect(
+        resolveSymbol("FINNHUB:BTCUSDT", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 500,
+        code: "DATABASE_ERROR",
+      });
+    });
+
+    test("rejects unsupported provider prefixes with 400 MARKET_DATA_INVALID_REQUEST", async () => {
+      await expect(resolveSymbol("UNKNOWN:AAPL")).rejects.toMatchObject({
+        statusCode: 400,
+        code: "MARKET_DATA_INVALID_REQUEST",
+        message: "The symbol format is invalid.",
+      });
+
+      await expect(resolveSymbol("POLYGON:BTCUSDT")).rejects.toMatchObject({
+        statusCode: 400,
+        code: "MARKET_DATA_INVALID_REQUEST",
+        message: "The symbol format is invalid.",
+      });
+    });
+  });
 });

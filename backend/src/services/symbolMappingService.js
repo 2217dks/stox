@@ -88,10 +88,10 @@ function getDefaultPrisma() {
 }
 
 /**
- * Validate and normalize a raw symbol string.
- * Ensures non-empty, trimmed, uppercase, and valid characters.
+ * Parse a raw symbol into its provider prefix (if any) and clean symbol ticker.
+ * Validates basic characters and ensures only supported prefixes are present.
  */
-function normalizeSymbol(symbol) {
+function parseProviderPrefix(symbol) {
   if (typeof symbol !== "string" || !symbol.trim()) {
     throw createMarketDataError(
       "A symbol is required.",
@@ -108,36 +108,67 @@ function normalizeSymbol(symbol) {
     );
   }
 
-  // Reject conflicting provider prefixes based on symbol syntax
+  let prefix = null;
+  let clean = value;
+
   if (value.startsWith("FINNHUB:")) {
-    const clean = value.slice("FINNHUB:".length);
-    if (
-      clean.includes("/") ||
-      (CRYPTO_PAIR_PATTERN.test(clean) && !KNOWN_AMBIGUOUS_STOCKS.has(clean))
-    ) {
-      throw createMarketDataError(
-        "A valid stock ticker symbol is required.",
-        400,
-        "MARKET_DATA_INVALID_REQUEST",
-      );
+    prefix = "FINNHUB";
+    clean = value.slice("FINNHUB:".length);
+  } else if (value.startsWith("BINANCE:")) {
+    prefix = "BINANCE";
+    clean = value.slice("BINANCE:".length);
+  } else if (value.includes(":")) {
+    throw createMarketDataError(
+      "The symbol format is invalid.",
+      400,
+      "MARKET_DATA_INVALID_REQUEST",
+    );
+  }
+
+  if (!clean || !/^[A-Z0-9._/-]{1,25}$/.test(clean)) {
+    throw createMarketDataError(
+      "The symbol format is invalid.",
+      400,
+      "MARKET_DATA_INVALID_REQUEST",
+    );
+  }
+
+  return { raw: value, prefix, clean };
+}
+
+/**
+ * Validate and normalize a raw symbol string.
+ * Ensures non-empty, trimmed, uppercase, and valid characters.
+ */
+function normalizeSymbol(symbol, options = {}) {
+  const { raw, prefix, clean } = parseProviderPrefix(symbol);
+
+  if (!options.skipPrefixValidation) {
+    if (prefix === "FINNHUB") {
+      if (clean.includes("/") || isUnambiguousCryptoSymbol(clean)) {
+        throw createMarketDataError(
+          "A valid stock ticker symbol is required.",
+          400,
+          "MARKET_DATA_INVALID_REQUEST",
+        );
+      }
+    }
+
+    if (prefix === "BINANCE") {
+      const isCryptoSlash = CRYPTO_SLASH_PATTERN.test(clean);
+      const isCryptoPair =
+        CRYPTO_PAIR_PATTERN.test(clean) && !KNOWN_AMBIGUOUS_STOCKS.has(clean);
+      if (!isCryptoSlash && !isCryptoPair) {
+        throw createMarketDataError(
+          "The cryptocurrency symbol format is invalid.",
+          400,
+          "MARKET_DATA_INVALID_REQUEST",
+        );
+      }
     }
   }
 
-  if (value.startsWith("BINANCE:")) {
-    const clean = value.slice("BINANCE:".length);
-    const isCryptoSlash = CRYPTO_SLASH_PATTERN.test(clean);
-    const isCryptoPair =
-      CRYPTO_PAIR_PATTERN.test(clean) && !KNOWN_AMBIGUOUS_STOCKS.has(clean);
-    if (!isCryptoSlash && !isCryptoPair) {
-      throw createMarketDataError(
-        "The cryptocurrency symbol format is invalid.",
-        400,
-        "MARKET_DATA_INVALID_REQUEST",
-      );
-    }
-  }
-
-  return value;
+  return raw;
 }
 
 /**
@@ -453,8 +484,15 @@ function parseSymbol(symbol, options = {}) {
  * Handles active/inactive status, asset type consistency, and provider mapping.
  */
 async function resolveSymbol(symbol, options = {}) {
-  const normalized = normalizeSymbol(symbol);
-  const canonicalSymbol = toCanonicalSymbol(symbol, options);
+  // Step 1: Basic symbol syntax validation and normalization
+  const { prefix, clean } = parseProviderPrefix(symbol);
+
+  // Step 2: Separate provider prefix and get underlying canonical symbol
+  const slashMatch = CRYPTO_SLASH_PATTERN.exec(clean);
+  const canonicalSymbol = slashMatch
+    ? `${slashMatch[1]}${slashMatch[2]}`
+    : clean;
+
   const requestedAssetClass = options.assetClass
     ? String(options.assetClass).trim().toUpperCase()
     : null;
@@ -467,11 +505,27 @@ async function resolveSymbol(symbol, options = {}) {
     );
   }
 
+  // Reject contradictory provider prefixes and explicit asset classes upfront
+  if (prefix === "FINNHUB" && requestedAssetClass === "CRYPTO") {
+    throw createMarketDataError(
+      "Market data is not supported for this asset class.",
+      422,
+      "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
+    );
+  }
+
+  if (prefix === "BINANCE" && requestedAssetClass === "STOCK") {
+    throw createMarketDataError(
+      "Market data is not supported for this asset class.",
+      422,
+      "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
+    );
+  }
+
+  // Reject unambiguous crypto notation with explicit STOCK override
   if (
     requestedAssetClass === "STOCK" &&
-    (isUnambiguousCryptoSymbol(normalized) ||
-      canonicalSymbol.includes("/") ||
-      CRYPTO_SLASH_PATTERN.test(canonicalSymbol))
+    (isUnambiguousCryptoSymbol(clean) || clean.includes("/"))
   ) {
     throw createMarketDataError(
       "Market data is not supported for this asset class.",
@@ -480,6 +534,7 @@ async function resolveSymbol(symbol, options = {}) {
     );
   }
 
+  // Step 3: Database lookup for underlying canonical symbol
   const prisma = options.prisma || getDefaultPrisma();
   let dbRecord = null;
   let dbError = null;
@@ -508,18 +563,26 @@ async function resolveSymbol(symbol, options = {}) {
     }
   }
 
+  // Step 4 & 5: When database record exists
   if (dbRecord) {
     if (!dbRecord.isActive && !options.includeInactive) {
       throw AppError.notFound("Active symbol not found.", "SYMBOL_NOT_FOUND");
     }
 
-    if (
-      requestedAssetClass &&
-      requestedAssetClass !== dbRecord.assetType
-    ) {
-      throw AppError.badRequest(
-        "Asset type does not match the selected symbol.",
-        "ASSET_TYPE_MISMATCH",
+    // Step 4: Validate provider prefix against DB asset class
+    if (prefix === "FINNHUB" && dbRecord.assetType !== "STOCK") {
+      throw createMarketDataError(
+        "A valid stock ticker symbol is required.",
+        400,
+        "MARKET_DATA_INVALID_REQUEST",
+      );
+    }
+
+    if (prefix === "BINANCE" && dbRecord.assetType !== "CRYPTO") {
+      throw createMarketDataError(
+        "The cryptocurrency symbol format is invalid.",
+        400,
+        "MARKET_DATA_INVALID_REQUEST",
       );
     }
 
@@ -534,19 +597,14 @@ async function resolveSymbol(symbol, options = {}) {
       );
     }
 
-    if (normalized.startsWith("FINNHUB:") && dbRecord.assetType !== "STOCK") {
-      throw createMarketDataError(
-        "A valid stock ticker symbol is required.",
-        400,
-        "MARKET_DATA_INVALID_REQUEST",
-      );
-    }
-
-    if (normalized.startsWith("BINANCE:") && dbRecord.assetType !== "CRYPTO") {
-      throw createMarketDataError(
-        "The cryptocurrency symbol format is invalid.",
-        400,
-        "MARKET_DATA_INVALID_REQUEST",
+    // Step 5: Validate explicit asset class against DB metadata
+    if (
+      requestedAssetClass &&
+      requestedAssetClass !== dbRecord.assetType
+    ) {
+      throw AppError.badRequest(
+        "Asset type does not match the selected symbol.",
+        "ASSET_TYPE_MISMATCH",
       );
     }
 
@@ -587,11 +645,60 @@ async function resolveSymbol(symbol, options = {}) {
     };
   }
 
+  // Step 6 & 7: When NO database record exists
   if (options.strict) {
     throw AppError.notFound("Active symbol not found.", "SYMBOL_NOT_FOUND");
   }
 
-  const assetClass = normalizeAssetClass(requestedAssetClass, canonicalSymbol);
+  // Step 6: Syntax-based inference
+  const inferredClass = inferAssetClass(canonicalSymbol);
+  const assetClass =
+    requestedAssetClass ||
+    (prefix === "FINNHUB"
+      ? "STOCK"
+      : prefix === "BINANCE"
+        ? "CRYPTO"
+        : inferredClass);
+
+  // Step 7: Reject contradictory provider prefixes and asset classes against syntax/inference
+  if (prefix === "FINNHUB") {
+    if (
+      clean.includes("/") ||
+      isUnambiguousCryptoSymbol(clean) ||
+      inferredClass === "CRYPTO"
+    ) {
+      throw createMarketDataError(
+        "A valid stock ticker symbol is required.",
+        400,
+        "MARKET_DATA_INVALID_REQUEST",
+      );
+    }
+  }
+
+  if (prefix === "BINANCE") {
+    const isCryptoSlash = CRYPTO_SLASH_PATTERN.test(clean);
+    const isCryptoPair =
+      CRYPTO_PAIR_PATTERN.test(clean) && !KNOWN_AMBIGUOUS_STOCKS.has(clean);
+    if (!isCryptoSlash && !isCryptoPair) {
+      throw createMarketDataError(
+        "The cryptocurrency symbol format is invalid.",
+        400,
+        "MARKET_DATA_INVALID_REQUEST",
+      );
+    }
+  }
+
+  if (
+    assetClass === "STOCK" &&
+    (isUnambiguousCryptoSymbol(canonicalSymbol) || clean.includes("/"))
+  ) {
+    throw createMarketDataError(
+      "Market data is not supported for this asset class.",
+      422,
+      "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
+    );
+  }
+
   const provider = DEFAULT_PROVIDER_BY_ASSET_CLASS[assetClass] || null;
   const providerSymbol = provider
     ? toProviderSymbol(canonicalSymbol, provider, { assetClass })
@@ -644,6 +751,7 @@ module.exports = {
   toProviderSymbol,
   toDisplaySymbol,
   parseSymbol,
+  parseProviderPrefix,
   resolveSymbol,
   resolveSymbols,
   isUnambiguousCryptoSymbol,

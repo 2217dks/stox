@@ -3,6 +3,7 @@ const {
   toProviderSymbol,
   toDisplaySymbol,
   parseSymbol,
+  parseProviderPrefix,
   inferAssetClass,
   normalizeAssetClass,
   normalizeSymbol,
@@ -13,6 +14,57 @@ const {
 } = require("../../../src/services/symbolMappingService");
 
 describe("symbolMappingService", () => {
+  describe("parseProviderPrefix", () => {
+    test("parses prefixed symbols into prefix, clean ticker, and raw value", () => {
+      expect(parseProviderPrefix("FINNHUB:AAPL")).toEqual({
+        prefix: "FINNHUB",
+        clean: "AAPL",
+        raw: "FINNHUB:AAPL",
+      });
+      expect(parseProviderPrefix("binance:btc/usdt")).toEqual({
+        prefix: "BINANCE",
+        clean: "BTC/USDT",
+        raw: "BINANCE:BTC/USDT",
+      });
+      expect(parseProviderPrefix("  finnhub:xyzusdt  ")).toEqual({
+        prefix: "FINNHUB",
+        clean: "XYZUSDT",
+        raw: "FINNHUB:XYZUSDT",
+      });
+    });
+
+    test("handles non-prefixed symbols returning prefix: null", () => {
+      expect(parseProviderPrefix("AAPL")).toEqual({
+        prefix: null,
+        clean: "AAPL",
+        raw: "AAPL",
+      });
+      expect(parseProviderPrefix("BTCUSDT")).toEqual({
+        prefix: null,
+        clean: "BTCUSDT",
+        raw: "BTCUSDT",
+      });
+    });
+
+    test("rejects unsupported provider prefixes with 400", () => {
+      expect(() => parseProviderPrefix("POLYGON:AAPL")).toThrow(
+        "The symbol format is invalid.",
+      );
+      expect(() => parseProviderPrefix("UNKNOWN:BTCUSDT")).toThrow(
+        "The symbol format is invalid.",
+      );
+      expect(() => parseProviderPrefix(":AAPL")).toThrow(
+        "The symbol format is invalid.",
+      );
+    });
+
+    test("rejects invalid characters with 400", () => {
+      expect(() => parseProviderPrefix("AAPL$")).toThrow(
+        "The symbol format is invalid.",
+      );
+      expect(() => parseProviderPrefix("")).toThrow("A symbol is required.");
+    });
+  });
   describe("normalizeSymbol", () => {
     test("normalizes a valid symbol to trimmed uppercase", () => {
       expect(normalizeSymbol("  aapl  ")).toBe("AAPL");
