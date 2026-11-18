@@ -68,16 +68,17 @@ function validateAsOfDate(asOf) {
  *
  * Retention policy & invariants:
  * - Cadence & Retention: Snapshots older than `retentionDays` relative to `asOf` (in UTC)
- *   are safely pruned for inactive portfolios to keep the database bounded.
- * - ALL-Time Analytics Preservation: Historical snapshots of active portfolios are preserved
- *   to ensure ALL-time performance, time-weighted returns (TWR), and historical return series
- *   remain intact and consistent with contract guarantees.
+ *   can be safely pruned when preservation options permit.
+ * - ALL-Time Analytics Preservation: Historical snapshots of active and inactive portfolios
+ *   are preserved by default to ensure ALL-time performance, time-weighted returns (TWR),
+ *   and historical return series remain intact and consistent with contract guarantees.
  * - Idempotency: Multiple pruning runs with the same cutoff produce consistent, harmless results.
  *
  * @param {Object} [options]
  * @param {number|string} [options.retentionDays] - Number of days to retain (positive integer, max 3650)
  * @param {Date|string|number} [options.asOf] - Reference evaluation date
  * @param {boolean} [options.preserveActive=true] - Preserve historical snapshots for active portfolios
+ * @param {boolean} [options.preserveInactive] - Preserve historical snapshots for inactive portfolios (defaults to preserveActive)
  * @param {string} [options.portfolioId] - Target specific portfolio UUID
  * @param {Object} [options.client] - Prisma client override
  * @returns {Promise<{
@@ -92,11 +93,17 @@ async function pruneExpiredSnapshots({
   retentionDays,
   asOf,
   preserveActive = true,
+  preserveInactive,
   portfolioId,
   client = prisma,
 } = {}) {
   const effectiveDays = validateRetentionDays(retentionDays);
   const refDate = validateAsOfDate(asOf);
+
+  const shouldPreserveActive = Boolean(preserveActive);
+  const shouldPreserveInactive = preserveInactive !== undefined
+    ? Boolean(preserveInactive)
+    : shouldPreserveActive;
 
   const cutoffDate = new Date(Date.UTC(
     refDate.getUTCFullYear(),
@@ -108,15 +115,39 @@ async function pruneExpiredSnapshots({
     0,
   ));
 
+  // If both active and inactive portfolio histories are preserved to protect
+  // all-time performance, time-weighted returns, and historical series, no snapshots are pruned.
+  if (shouldPreserveActive && shouldPreserveInactive) {
+    logger.info("Historical snapshot retention pruning completed: all portfolio history preserved for analytics", {
+      cutoffDate: cutoffDate.toISOString().slice(0, 10),
+      deletedCount: 0,
+      retentionDays: effectiveDays,
+      preserveActive: shouldPreserveActive,
+      preserveInactive: shouldPreserveInactive,
+    });
+
+    return {
+      pruned: true,
+      cutoffDate: cutoffDate.toISOString().slice(0, 10),
+      deletedCount: 0,
+      retentionDays: effectiveDays,
+      asOf: refDate.toISOString(),
+    };
+  }
+
   const where = {
     snapshotDate: {
       lt: cutoffDate,
     },
   };
 
-  if (preserveActive) {
+  if (shouldPreserveActive && !shouldPreserveInactive) {
     where.portfolio = {
       isActive: false,
+    };
+  } else if (!shouldPreserveActive && shouldPreserveInactive) {
+    where.portfolio = {
+      isActive: true,
     };
   }
 
@@ -132,7 +163,8 @@ async function pruneExpiredSnapshots({
     cutoffDate: cutoffDate.toISOString().slice(0, 10),
     deletedCount: result.count,
     retentionDays: effectiveDays,
-    preserveActive,
+    preserveActive: shouldPreserveActive,
+    preserveInactive: shouldPreserveInactive,
   });
 
   return {
