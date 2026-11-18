@@ -37,6 +37,10 @@ const DOMAIN_ERROR_DEFINITIONS = Object.freeze({
     statusCode: 503,
     message: "Market data provider is temporarily unavailable.",
   },
+  MARKET_DATA_STALE_QUOTE: {
+    statusCode: 503,
+    message: "Market data quote is stale or delayed.",
+  },
 });
 
 function createMarketDataError(message, statusCode, code) {

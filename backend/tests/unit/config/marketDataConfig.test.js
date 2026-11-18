@@ -1,5 +1,6 @@
 const {
   DEFAULT_TIMEOUT_MS,
+  DEFAULT_MAX_CLOCK_SKEW_SECONDS,
   loadMarketDataConfig,
 } = require("../../../src/config/marketDataConfig");
 
@@ -12,15 +13,17 @@ describe("market data configuration", () => {
       CRYPTO: "binance",
     });
     expect(config.timeoutMs).toBe(DEFAULT_TIMEOUT_MS);
+    expect(config.maxClockSkewSeconds).toBe(DEFAULT_MAX_CLOCK_SKEW_SECONDS);
     expect(config.providers.finnhub.apiKey).toBeNull();
     expect(config.providers.binance.baseUrl).toBe("https://api.binance.com");
   });
 
-  test("reads explicit provider selection, credentials, URLs, and timeout", () => {
+  test("reads explicit provider selection, credentials, URLs, timeout, and clock skew", () => {
     const config = loadMarketDataConfig({
       MARKET_DATA_STOCK_PROVIDER: "custom-stock",
       MARKET_DATA_CRYPTO_PROVIDER: "custom-crypto",
       MARKET_DATA_REQUEST_TIMEOUT_MS: "2500",
+      MARKET_DATA_MAX_CLOCK_SKEW_SECONDS: "10",
       FINNHUB_API_KEY: "  test-key  ",
       FINNHUB_API_URL: "https://example.test/market",
       BINANCE_API_URL: "https://example.test/binance",
@@ -31,6 +34,7 @@ describe("market data configuration", () => {
       CRYPTO: "custom-crypto",
     });
     expect(config.timeoutMs).toBe(2500);
+    expect(config.maxClockSkewSeconds).toBe(10);
     expect(config.providers.finnhub).toEqual({
       apiKey: "test-key",
       baseUrl: "https://example.test/market",

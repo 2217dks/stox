@@ -353,6 +353,10 @@ registry.describe(
   "notification_deliveries_total",
   "Notification delivery attempts by channel and outcome.",
 );
+registry.describe(
+  "cache_operations_total",
+  "Total cache operations by resource and outcome (hit, miss, bypass, error).",
+);
 
 module.exports = {
   DEFAULT_BUCKETS,

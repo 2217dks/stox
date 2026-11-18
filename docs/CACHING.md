@@ -262,29 +262,33 @@ async function getPortfolio(id) {
 
 ## 📊 Metrics & Monitoring
 
-**Expose metrics endpoint:**
+### Prometheus Cache Signals
+
+stox emits measurable cache signals for all Redis-backed paths into the central Prometheus metrics registry:
+- **Metric**: `cache_operations_total` (counter)
+- **Labels**:
+  - `resource`: Low-cardinality resource namespace (`price`, `historical_prices`, `symbol_search`, `portfolio_summary`, `analytics`, `default`).
+  - `outcome`: Strictly one of `hit`, `miss`, `bypass`, `error`.
+- **Privacy & Cardinality Guardrails**: Never indexes raw symbol identifiers, user IDs, or query strings in Prometheus labels. Never logs authorization tokens or cached payload bodies.
+
+### Signals API & Reporting
 
 ```javascript
-// routes/adminRoutes.js
-router.get("/admin/cache-metrics", async (req, res) => {
-    const metrics = await cacheService.getMetrics();
-    const memory = await cacheService.redis.info("memory");
-    const keys = await cacheService.redis.dbsize();
-
-    res.json({
-        hits: metrics.hits,
-        misses: metrics.misses,
-        hitRate: metrics.hitRate,
-        totalKeys: keys,
-        memoryUsage: memory,
-    });
-});
+// Retrieve aggregate signals including bypasses and errors
+const signals = await cacheService.getSignals();
+// -> {
+//      hits: 120,
+//      misses: 15,
+//      bypasses: 4,
+//      errors: 0,
+//      total: 135,
+//      hitRate: 0.8889
+//    }
 ```
 
-**Dashboard display:**
+### Cache Bypass & Fail-Open Resilience
 
-- Cache hit rate (live)
-- Total cached keys
-- Memory usage
-- Response time comparison (with/without cache)
-- Top cached symbols
+Clients and internal workers can selectively bypass Redis caching (e.g. forced quote refresh during order placement) by passing `bypassCache: true`, `skipCache: true`, or `noCache: true`.
+- **Non-eviction Guarantee**: Bypasses trigger `outcome="bypass"` metric and log signals without reading from or evicting existing valid cached keys.
+- **Consistent Application**: Honored across all market cache operations (`get`, `getPrice`, `getHistoricalPrices`, `getMarketSearch`, and `getOrSet`).
+- **Fail-Open Resilience**: Redis connection or command failures record `outcome="error"` signals while gracefully falling back to provider loaders, ensuring upstream client requests succeed.
