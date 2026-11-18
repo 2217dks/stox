@@ -12,6 +12,8 @@ const {
   monthlyPerformanceQuerySchema,
   realizedPnlQuerySchema,
   unrealizedPnlQuerySchema,
+  portfolioSnapshotsQuerySchema,
+  aggregatePnlQuerySchema,
 } = require("../validators/portfolioValidator");
 const portfolioController = require("../controllers/portfolioController");
 
@@ -126,6 +128,29 @@ router.get(
   validate(portfolioIdParamsSchema, "params", "validatedParams"),
   validate(unrealizedPnlQuerySchema, "query", "validatedQuery"),
   portfolioController.getUnrealizedPnl,
+);
+
+router.get(
+  "/:portfolioId/snapshots",
+  authMiddleware,
+  validate(portfolioIdParamsSchema, "params", "validatedParams"),
+  validate(portfolioSnapshotsQuerySchema, "query", "validatedQuery"),
+  portfolioController.getPortfolioSnapshots,
+);
+
+router.get(
+  "/:portfolioId/pnl",
+  authMiddleware,
+  validate(portfolioIdParamsSchema, "params", "validatedParams"),
+  validate(aggregatePnlQuerySchema, "query", "validatedQuery"),
+  portfolioController.getAggregatePnl,
+);
+
+router.get(
+  "/:portfolioId/dashboard",
+  authMiddleware,
+  validate(portfolioIdParamsSchema, "params", "validatedParams"),
+  portfolioController.getDashboardSummary,
 );
 
 module.exports = router;

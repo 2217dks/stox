@@ -1,3 +1,4 @@
+
 const { randomUUID } = require("crypto");
 
 const { Prisma } = require("@prisma/client");
@@ -186,6 +187,7 @@ function toValidFee(fees) {
   }
 
   const decimal = toDecimal(fees);
+
   if (!decimal || !decimal.isFinite() || decimal.isNegative()) {
     throw AppError.badRequest(
       "Trade fee must be a non-negative finite number.",
@@ -430,8 +432,8 @@ async function applySell(tx, order, quantity, totalValue, fees = ZERO) {
   // Rounding the stored remainder at the column scale makes the remainder and
   // the removed basis add back to the original total exactly. A full close is
   // forced to zero in the `newTotalInvested` assignment above, so it can never
-  // retain a rounded residual. Realized P&L uses this same removed basis minus fees, so
-  // the trade record and the holding can never disagree about what was sold.
+  // retain a rounded residual. Realized P&L uses this same removed basis minus fees,
+  // so the trade record and the holding can never disagree about what was sold.
   const feesDecimal = toValidFee(fees);
   const removedCostBasis = currentTotalInvested.minus(newTotalInvested);
   const realizedPnl = totalValue.minus(removedCostBasis).minus(feesDecimal);
@@ -446,6 +448,7 @@ async function applySell(tx, order, quantity, totalValue, fees = ZERO) {
 
   // A sell credits net cash (totalValue - fees), so increment cashBalance.
   const netCashCredit = totalValue.minus(feesDecimal);
+
   await tx.portfolio.update({
     where: { id: order.portfolioId },
     data: {
@@ -492,6 +495,10 @@ async function executeOrder(
   const executionPrice = toExecutionPrice(price);
   const clock = now instanceof Date ? now : new Date(now);
 
+  if (Number.isNaN(clock.getTime())) {
+    throw AppError.badRequest("Invalid execution time.", "INVALID_EXECUTION_TIME");
+  }
+
   const { trade, order: executedOrder } = await prisma.$transaction(
     async (tx) => {
       const order = await tx.order.findUnique({
@@ -523,11 +530,11 @@ async function executeOrder(
       // A concurrent deactivatePortfolio() update must wait until this
       // transaction commits or rolls back.
       const portfolios = await tx.$queryRaw`
-            SELECT "id", "isActive", "cashBalance", "reservedCash"
-            FROM "Portfolio"
-            WHERE "id" = ${order.portfolioId}
-            FOR UPDATE
-          `;
+        SELECT "id", "isActive", "cashBalance", "reservedCash"
+        FROM "Portfolio"
+        WHERE "id" = ${order.portfolioId}
+        FOR UPDATE
+      `;
 
       const portfolio = portfolios[0];
 
@@ -544,7 +551,7 @@ async function executeOrder(
         );
       }
 
-      const executedAt = new Date();
+      const executedAt = clock;
 
       const transition = await tx.order.updateMany({
         where: {

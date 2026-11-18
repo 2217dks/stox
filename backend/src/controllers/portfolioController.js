@@ -8,6 +8,9 @@ const {
 } = require("../services/portfolioMonthlyService");
 const { getPortfolioRealizedPnl } = require("../services/realizedPnlService");
 const { getPortfolioUnrealizedPnl } = require("../services/unrealizedPnlService");
+const { getPortfolioAggregatePnl } = require("../services/portfolioPnlAggregateService");
+const { getPortfolioDashboard } = require("../services/dashboardService");
+const portfolioSnapshotService = require("../services/portfolioSnapshotService");
 const cacheService = require("../services/cacheService");
 
 async function listPortfolios(req, res, next) {
@@ -362,6 +365,60 @@ async function getUnrealizedPnl(req, res, next) {
   }
 }
 
+async function getPortfolioSnapshots(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+    const { from, to, limit } = req.validatedQuery || {};
+
+    const result = await portfolioSnapshotService.getPortfolioDailySnapshots(
+      userId,
+      portfolioId,
+      { from, to, limit },
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getAggregatePnl(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+    const options = req.validatedQuery || {};
+
+    const result = await getPortfolioAggregatePnl(userId, portfolioId, options);
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getDashboardSummary(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+
+    const result = await getPortfolioDashboard(userId, portfolioId);
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   listPortfolios,
   createPortfolio,
@@ -378,4 +435,7 @@ module.exports = {
   getMonthlyPerformance,
   getRealizedPnl,
   getUnrealizedPnl,
+  getPortfolioSnapshots,
+  getAggregatePnl,
+  getDashboardSummary,
 };
