@@ -152,3 +152,5 @@ docker-compose.override.yml
 # Root agent guide is local-only. The leading slash keeps
 # frontend/AGENTS.md (tracked project documentation) unaffected.
 /AGENTS.md
+.agents/
+skills-lock.json
