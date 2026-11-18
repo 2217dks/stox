@@ -164,7 +164,7 @@ is finite; a trade is never replayed to a follower added after it executed.
 | Job | Payload | Attempts | What it does |
 | --- | --- | --- | --- |
 | `generate-portfolio-snapshots` | `{ targetDate?, force?, portfolioIds? }` | 3 | Checks per-portfolio coverage for target date, enforces early morning UTC settlement window (00:00 - 02:00 UTC), and generates daily EOD closing valuation snapshots for missing active portfolios. Skips idempotently when all active portfolios are recorded. |
-| `prune-snapshot-retention` | `{ retentionDays? }` | 2 | Prunes historical `PerformanceSnapshot` records strictly older than the retention threshold (default 365 days / 1 year) relative to UTC now. |
+| `prune-snapshot-retention` | `{ retentionDays? }` | 2 | Prunes historical `PerformanceSnapshot` records strictly older than the retention threshold (default 365 days, strictly validated positive integer between 1 and 3650) relative to UTC now for inactive portfolios, safely keeping the database bounded while strictly preserving complete historical snapshot series and baselines required by active portfolios for ALL-time performance. |
 
 ### Idempotency keys
 
