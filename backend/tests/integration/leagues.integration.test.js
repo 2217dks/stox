@@ -1001,13 +1001,14 @@ describe("Leagues & Competitions Integration (#128)", () => {
     expect(lbRes.body.data.league.status).toBe("ACTIVE");
   });
 
-  test("Concurrent leaderboard completion calls finalize safely and idempotently", async () => {
+  test("GET /api/v1/leagues/:id/leaderboard is genuinely read-only for expired but unprocessed leagues", async () => {
+    // 1. Create an expired league (endDate in the past) with status ACTIVE
     const startDate = new Date(Date.now() - 10 * 86400000);
     const endDate = new Date(Date.now() - 86400000);
 
     const league = await prisma.league.create({
       data: {
-        name: "Concurrent Completion League",
+        name: "ReadOnly Leaderboard Test League",
         startingBalance: 10000,
         startDate,
         endDate,
@@ -1016,46 +1017,369 @@ describe("Leagues & Competitions Integration (#128)", () => {
     });
     createdLeagueIds.push(league.id);
 
-    const p = await prisma.portfolio.create({
+    // Member 1 (User 1): +20% return
+    const p1 = await prisma.portfolio.create({
       data: {
         userId: user1Id,
-        name: "Concurrent-Comp-P",
+        name: `ReadOnly-P1-${Date.now()}`,
         startingBalance: 10000,
         cashBalance: 10000,
         reservedCash: 0,
       },
     });
-
-    const member = await prisma.leagueMember.create({
+    const member1 = await prisma.leagueMember.create({
       data: {
         leagueId: league.id,
         userId: user1Id,
-        portfolioId: p.id,
+        portfolioId: p1.id,
         joinedAt: new Date(startDate.getTime() - 100000),
       },
     });
+    await createTestTrade({
+      portfolioId: p1.id,
+      symbol: "NVDA",
+      side: "BUY",
+      quantity: 10,
+      price: 100,
+      totalValue: 1000,
+      executedAt: new Date(startDate.getTime() + 3600000),
+    });
+    await createTestTrade({
+      portfolioId: p1.id,
+      symbol: "NVDA",
+      side: "SELL",
+      quantity: 10,
+      price: 300,
+      totalValue: 3000,
+      realizedPnl: 2000,
+      executedAt: new Date(startDate.getTime() + 7200000),
+    });
 
-    // Execute concurrent requests to leaderboard endpoint for ended league
-    const [res1, res2] = await Promise.all([
-      request(app).get(`/api/v1/leagues/${league.id}/leaderboard`),
-      request(app).get(`/api/v1/leagues/${league.id}/leaderboard`),
+    // Member 2 (User 2): +10% return
+    const p2 = await prisma.portfolio.create({
+      data: {
+        userId: user2Id,
+        name: `ReadOnly-P2-${Date.now()}`,
+        startingBalance: 10000,
+        cashBalance: 10000,
+        reservedCash: 0,
+      },
+    });
+    const member2 = await prisma.leagueMember.create({
+      data: {
+        leagueId: league.id,
+        userId: user2Id,
+        portfolioId: p2.id,
+        joinedAt: new Date(startDate.getTime() - 50000),
+      },
+    });
+    await createTestTrade({
+      portfolioId: p2.id,
+      symbol: "AAPL",
+      side: "BUY",
+      quantity: 10,
+      price: 100,
+      totalValue: 1000,
+      executedAt: new Date(startDate.getTime() + 3600000),
+    });
+    await createTestTrade({
+      portfolioId: p2.id,
+      symbol: "AAPL",
+      side: "SELL",
+      quantity: 10,
+      price: 200,
+      totalValue: 2000,
+      realizedPnl: 1000,
+      executedAt: new Date(startDate.getTime() + 7200000),
+    });
+
+    // Capture explicit DB state before calling GET leaderboard
+    const leagueBefore = await prisma.league.findUnique({ where: { id: league.id } });
+    const membersBefore = await prisma.leagueMember.findMany({
+      where: { leagueId: league.id },
+      orderBy: { id: "asc" },
+    });
+    const notifsBefore = await prisma.notification.count({
+      where: { eventKey: { startsWith: `league:${league.id}:` } },
+    });
+
+    expect(leagueBefore.status).toBe("ACTIVE");
+    expect(membersBefore.every((m) => m.rank === null)).toBe(true);
+    expect(membersBefore.every((m) => m.finalReturn === null)).toBe(true);
+    expect(notifsBefore).toBe(0);
+
+    // 2. Call GET leaderboard on the expired league
+    const res1 = await request(app).get(`/api/v1/leagues/${league.id}/leaderboard`);
+    expect(res1.status).toBe(200);
+    expect(res1.body.success).toBe(true);
+    expect(res1.body.data.league.status).toBe("COMPLETED"); // effective dynamic status
+    expect(res1.body.data.leaderboard).toHaveLength(2);
+    expect(res1.body.data.leaderboard[0]).toMatchObject({
+      rank: 1,
+      userId: user1Id,
+      returnPct: 20,
+    });
+    expect(res1.body.data.leaderboard[1]).toMatchObject({
+      rank: 2,
+      userId: user2Id,
+      returnPct: 10,
+    });
+
+    // 3. Verify DB state AFTER GET request: perfectly untouched!
+    const leagueAfter = await prisma.league.findUnique({ where: { id: league.id } });
+    const membersAfter = await prisma.leagueMember.findMany({
+      where: { leagueId: league.id },
+      orderBy: { id: "asc" },
+    });
+    const notifsAfter = await prisma.notification.count({
+      where: { eventKey: { startsWith: `league:${league.id}:` } },
+    });
+
+    expect(leagueAfter.status).toBe(leagueBefore.status); // STILL ACTIVE
+    expect(membersAfter.map((m) => ({ rank: m.rank, finalReturn: m.finalReturn }))).toEqual(
+      membersBefore.map((m) => ({ rank: m.rank, finalReturn: m.finalReturn })),
+    );
+    expect(notifsAfter).toBe(0); // NO notifications created
+
+    // 4. Now execute background completion processor (e.g. worker / processCompletedLeagues)
+    await processCompletedLeagues({ now: new Date(), leagueId: league.id });
+
+    // Verify DB state AFTER background completion: persisted
+    const leagueCompleted = await prisma.league.findUnique({ where: { id: league.id } });
+    const membersCompleted = await prisma.leagueMember.findMany({
+      where: { leagueId: league.id },
+      orderBy: { rank: "asc" },
+    });
+    const notifsCompleted = await prisma.notification.findMany({
+      where: { eventKey: { startsWith: `league:${league.id}:` } },
+    });
+
+    expect(leagueCompleted.status).toBe("COMPLETED");
+    expect(membersCompleted[0].userId).toBe(user1Id);
+    expect(membersCompleted[0].rank).toBe(1);
+    expect(Number(membersCompleted[0].finalReturn)).toBe(20);
+    expect(membersCompleted[1].userId).toBe(user2Id);
+    expect(membersCompleted[1].rank).toBe(2);
+    expect(Number(membersCompleted[1].finalReturn)).toBe(10);
+    expect(notifsCompleted).toHaveLength(2);
+
+    // 5. Subsequent GET request returns persisted final results
+    const res2 = await request(app).get(`/api/v1/leagues/${league.id}/leaderboard`);
+    expect(res2.status).toBe(200);
+    expect(res2.body.data.league.status).toBe("COMPLETED");
+    expect(res2.body.data.leaderboard[0]).toMatchObject({ rank: 1, userId: user1Id, returnPct: 20 });
+    expect(res2.body.data.leaderboard[1]).toMatchObject({ rank: 2, userId: user2Id, returnPct: 10 });
+
+    // 6. Repeated GET requests do not modify DB or create additional notifications
+    const res3 = await request(app).get(`/api/v1/leagues/${league.id}/leaderboard`);
+    const res4 = await request(app).get(`/api/v1/leagues/${league.id}/leaderboard`);
+    expect(res3.status).toBe(200);
+    expect(res4.status).toBe(200);
+
+    const finalNotifCount = await prisma.notification.count({
+      where: { eventKey: { startsWith: `league:${league.id}:` } },
+    });
+    expect(finalNotifCount).toBe(2);
+  });
+
+  test("concurrent completion processing safely serializes finalization and preserves rankings without duplicate notifications", async () => {
+    const startDate = new Date(Date.now() - 10 * 86400000);
+    const endDate = new Date(Date.now() - 86400000);
+
+    const league = await prisma.league.create({
+      data: {
+        name: "Concurrent Worker Safety League",
+        startingBalance: 10000,
+        startDate,
+        endDate,
+        status: "ACTIVE",
+      },
+    });
+    createdLeagueIds.push(league.id);
+
+    // Member 1 (User 1): +30% return
+    const p1 = await prisma.portfolio.create({
+      data: {
+        userId: user1Id,
+        name: `Concur-P1-${Date.now()}`,
+        startingBalance: 10000,
+        cashBalance: 10000,
+        reservedCash: 0,
+      },
+    });
+    const member1 = await prisma.leagueMember.create({
+      data: {
+        leagueId: league.id,
+        userId: user1Id,
+        portfolioId: p1.id,
+        joinedAt: new Date(startDate.getTime() - 100000),
+      },
+    });
+    await createTestTrade({
+      portfolioId: p1.id,
+      symbol: "TSLA",
+      side: "BUY",
+      quantity: 10,
+      price: 100,
+      totalValue: 1000,
+      executedAt: new Date(startDate.getTime() + 3600000),
+    });
+    await createTestTrade({
+      portfolioId: p1.id,
+      symbol: "TSLA",
+      side: "SELL",
+      quantity: 10,
+      price: 400,
+      totalValue: 4000,
+      realizedPnl: 3000,
+      executedAt: new Date(startDate.getTime() + 7200000),
+    });
+
+    // Member 2 (User 2): +15% return
+    const p2 = await prisma.portfolio.create({
+      data: {
+        userId: user2Id,
+        name: `Concur-P2-${Date.now()}`,
+        startingBalance: 10000,
+        cashBalance: 10000,
+        reservedCash: 0,
+      },
+    });
+    const member2 = await prisma.leagueMember.create({
+      data: {
+        leagueId: league.id,
+        userId: user2Id,
+        portfolioId: p2.id,
+        joinedAt: new Date(startDate.getTime() - 50000),
+      },
+    });
+    await createTestTrade({
+      portfolioId: p2.id,
+      symbol: "MSFT",
+      side: "BUY",
+      quantity: 10,
+      price: 100,
+      totalValue: 1000,
+      executedAt: new Date(startDate.getTime() + 3600000),
+    });
+    await createTestTrade({
+      portfolioId: p2.id,
+      symbol: "MSFT",
+      side: "SELL",
+      quantity: 10,
+      price: 250,
+      totalValue: 2500,
+      realizedPnl: 1500,
+      executedAt: new Date(startDate.getTime() + 7200000),
+    });
+
+    // Member 3 (Suspended user): should NOT receive notification or rank
+    const pSusp = await prisma.portfolio.create({
+      data: {
+        userId: suspendedUserId,
+        name: `Concur-PSusp-${Date.now()}`,
+        startingBalance: 10000,
+        cashBalance: 10000,
+        reservedCash: 0,
+      },
+    });
+    const memberSusp = await prisma.leagueMember.create({
+      data: {
+        leagueId: league.id,
+        userId: suspendedUserId,
+        portfolioId: pSusp.id,
+        joinedAt: new Date(startDate.getTime() - 20000),
+      },
+    });
+
+    // Simulate 3 concurrent workers running completeLeague simultaneously against real DB
+    const results = await Promise.all([
+      completeLeague(league.id, { now: new Date() }),
+      completeLeague(league.id, { now: new Date() }),
+      completeLeague(league.id, { now: new Date() }),
     ]);
 
-    expect(res1.status).toBe(200);
-    expect(res2.status).toBe(200);
-    expect(res1.body.data.league.status).toBe("COMPLETED");
-    expect(res2.body.data.league.status).toBe("COMPLETED");
+    // All 3 calls must succeed safely
+    for (const res of results) {
+      expect(res.completed).toBe(true);
+      expect(res.leagueId).toBe(league.id);
+    }
 
-    // Verify DB state
-    const dbLeague = await prisma.league.findUnique({
-      where: { id: league.id },
-    });
+    // Verify DB state: exactly one set of rankings, status COMPLETED
+    const dbLeague = await prisma.league.findUnique({ where: { id: league.id } });
     expect(dbLeague.status).toBe("COMPLETED");
 
-    const dbMember = await prisma.leagueMember.findUnique({
-      where: { id: member.id },
+    const dbMember1 = await prisma.leagueMember.findUnique({ where: { id: member1.id } });
+    const dbMember2 = await prisma.leagueMember.findUnique({ where: { id: member2.id } });
+    const dbMemberSusp = await prisma.leagueMember.findUnique({ where: { id: memberSusp.id } });
+
+    expect(dbMember1.rank).toBe(1);
+    expect(Number(dbMember1.finalReturn)).toBe(30);
+
+    expect(dbMember2.rank).toBe(2);
+    expect(Number(dbMember2.finalReturn)).toBe(15);
+
+    expect(dbMemberSusp.rank).toBeNull();
+
+    // Verify notifications: exactly 1 per eligible user, 0 for suspended user
+    const user1Notifs = await prisma.notification.findMany({
+      where: {
+        userId: user1Id,
+        eventKey: `league:${league.id}:member:${member1.id}:completed`,
+      },
     });
-    expect(dbMember.rank).toBe(1);
-    expect(dbMember.finalReturn).not.toBeNull();
+    expect(user1Notifs).toHaveLength(1);
+
+    const user2Notifs = await prisma.notification.findMany({
+      where: {
+        userId: user2Id,
+        eventKey: `league:${league.id}:member:${member2.id}:completed`,
+      },
+    });
+    expect(user2Notifs).toHaveLength(1);
+
+    const suspNotifs = await prisma.notification.findMany({
+      where: {
+        userId: suspendedUserId,
+        eventKey: `league:${league.id}:member:${memberSusp.id}:completed`,
+      },
+    });
+    expect(suspNotifs).toHaveLength(0);
+
+    const totalLeagueNotifs = await prisma.notification.count({
+      where: { eventKey: { startsWith: `league:${league.id}:` } },
+    });
+    expect(totalLeagueNotifs).toBe(2);
+
+    // Repeated execution does not overwrite final rankings or create duplicate notifications
+    await completeLeague(league.id, { now: new Date() });
+    const recheckedMember1 = await prisma.leagueMember.findUnique({ where: { id: member1.id } });
+    expect(recheckedMember1.rank).toBe(1);
+    expect(Number(recheckedMember1.finalReturn)).toBe(30);
+
+    const recheckedTotalNotifs = await prisma.notification.count({
+      where: { eventKey: { startsWith: `league:${league.id}:` } },
+    });
+    expect(recheckedTotalNotifs).toBe(2);
+
+    // Reconciliation: if a notification record was missing, it can still be reconciled without overwriting rankings
+    await prisma.notification.delete({ where: { eventKey: user1Notifs[0].eventKey } });
+    expect(
+      await prisma.notification.count({
+        where: { eventKey: user1Notifs[0].eventKey },
+      }),
+    ).toBe(0);
+
+    await completeLeague(league.id, { now: new Date() });
+    const reconciledUser1Notif = await prisma.notification.findFirst({
+      where: { eventKey: user1Notifs[0].eventKey },
+    });
+    expect(reconciledUser1Notif).not.toBeNull();
+    expect(reconciledUser1Notif.userId).toBe(user1Id);
+
+    // Verify rankings were STILL not overwritten or recalculated
+    const preservedMember1 = await prisma.leagueMember.findUnique({ where: { id: member1.id } });
+    expect(preservedMember1.rank).toBe(1);
+    expect(Number(preservedMember1.finalReturn)).toBe(30);
   });
 });

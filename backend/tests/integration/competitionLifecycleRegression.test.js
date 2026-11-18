@@ -4,7 +4,7 @@ const { Prisma } = require("@prisma/client");
 const app = require("../../src/app");
 const prisma = require("../../src/config/database");
 const marketDataService = require("../../src/services/marketData");
-const { getLeagueLeaderboard } = require("../../src/services/competitionService");
+const { getLeagueLeaderboard, completeLeague } = require("../../src/services/competitionService");
 
 const timestamp = Date.now();
 
@@ -281,11 +281,34 @@ describe("Task 47 Competition Scoring and Lifecycle Regressions (#128, PR #149)"
       getHistoricalPrice: jest.fn().mockResolvedValue({ symbol: "AAPL", price: "180" }),
     };
 
-    const finalLb = await getLeagueLeaderboard({
+    // 10. Calling GET leaderboard on expired league returns calculated results without persisting to DB
+    const previewLb = await getLeagueLeaderboard({
       leagueId,
       now: new Date(),
       priceProvider: validHistProvider,
       finalizeIfEnded: true,
+    });
+
+    expect(previewLb.league.status).toBe("COMPLETED");
+    expect(previewLb.leaderboard[0].rank).toBe(1);
+    expect(previewLb.leaderboard[0].returnPct).toBe(1.8667);
+
+    // Verify DB ranks are STILL null (getLeagueLeaderboard is genuinely read-only)
+    const dbBeforeCompletion = await prisma.leagueMember.findMany({
+      where: { leagueId },
+    });
+    expect(dbBeforeCompletion.every((m) => m.rank === null)).toBe(true);
+
+    // Complete the league via the completion service (worker flow)
+    await completeLeague(leagueId, {
+      now: new Date(),
+      priceProvider: validHistProvider,
+    });
+
+    const finalLb = await getLeagueLeaderboard({
+      leagueId,
+      now: new Date(),
+      priceProvider: validHistProvider,
     });
 
     expect(finalLb.league.status).toBe("COMPLETED");

@@ -315,8 +315,12 @@ async function joinLeague({ leagueId, userId, portfolioId, now = new Date() }) {
 /**
  * Calculate and return league leaderboard.
  *
- * Scoring:
- * - Mark-to-market percentage return:
+ * Requirements:
+ * - Genuinely read-only: does not modify league status, persist rankings,
+ *   persist returns, create notifications, or trigger background completion.
+ * - Score = mark-to-market percentage return valued at:
+ *   - Competition end time (if competition has ended)
+ *   - Current time (if competition is active)
  *   Return % = ((Current Valuation - startingBalance) / startingBalance) * 100
  * - Trades outside [startDate, endDate] are excluded from scoring calculation.
  * - Out-of-range trades are NOT rejected at order execution layer.
@@ -327,13 +331,13 @@ async function joinLeague({ leagueId, userId, portfolioId, now = new Date() }) {
  *   4. joinedAt ASC
  *   5. userId ASC
  * - Zero-trade participants are ranked normally according to approved score and tie-breakers.
- * - When competition completes (now >= endDate or COMPLETED), finalReturn and rank are persisted.
+ * - For completed leagues, returns persisted final rankings and returns.
  */
 async function getLeagueLeaderboard({
   leagueId,
   now = new Date(),
   priceProvider = defaultMarketData,
-  finalizeIfEnded = true,
+  finalizeIfEnded, // Retained for backwards compatibility with callers; no-op as endpoint is read-only
 } = {}) {
   const league = await prisma.league.findUnique({
     where: { id: leagueId },
@@ -372,14 +376,6 @@ async function getLeagueLeaderboard({
   const endDate = new Date(league.endDate);
   const effectiveStatus = getEffectiveLeagueStatus(league, currentDate);
 
-  if (league.status !== effectiveStatus && effectiveStatus === "ACTIVE") {
-    await prisma.league.update({
-      where: { id: league.id },
-      data: { status: "ACTIVE" },
-    });
-    league.status = "ACTIVE";
-  }
-
   // If already completed and members have finalReturn & rank, return stored results
   if (
     league.status === "COMPLETED" &&
@@ -404,7 +400,7 @@ async function getLeagueLeaderboard({
         userName: m.user?.name,
         userAvatar: m.user?.avatarUrl,
         portfolioId: m.portfolioId,
-        returnPct: Number(m.finalReturn),
+        returnPct: Number(Number(m.finalReturn).toFixed(4)),
         totalValue: null,
         tradeCount: (m.portfolio?.trades || []).filter(
           (t) => t.executedAt >= startDate && t.executedAt <= endDate,
@@ -435,57 +431,11 @@ async function getLeagueLeaderboard({
     priceProvider,
   });
 
-  // If ended and finalizeIfEnded is true, persist finalReturn and rank atomically.
-  // Note: getLeagueLeaderboard is a read endpoint and never generates notifications;
-  // completion notification delivery is managed by completeLeague / processCompletedLeagues.
-  if (isEnded && finalizeIfEnded && evaluatedMembers.length > 0) {
-    await prisma.$transaction(async (tx) => {
-      let lockedLeague;
-      if (typeof tx.$queryRaw === "function") {
-        const leagues = await tx.$queryRaw`
-          SELECT id, status FROM "League" WHERE id = ${league.id} FOR UPDATE
-        `;
-        if (!leagues || leagues.length === 0) return;
-        lockedLeague = leagues[0];
-      } else {
-        lockedLeague = await tx.league.findUnique({ where: { id: league.id } });
-        if (!lockedLeague) return;
-      }
-
-      const existingRankedCount = await tx.leagueMember.count({
-        where: {
-          leagueId: league.id,
-          rank: { not: null },
-          finalReturn: { not: null },
-        },
-      });
-
-      if (lockedLeague.status === "COMPLETED" && existingRankedCount >= evaluatedMembers.length) {
-        return;
-      }
-
-      await tx.league.update({
-        where: { id: league.id },
-        data: { status: "COMPLETED" },
-      });
-
-      for (const m of evaluatedMembers) {
-        await tx.leagueMember.update({
-          where: { id: m.id },
-          data: {
-            rank: m.rank,
-            finalReturn: m.returnPct,
-          },
-        });
-      }
-    });
-  }
-
   return {
     league: {
       id: league.id,
       name: league.name,
-      status: isEnded ? "COMPLETED" : league.status,
+      status: effectiveStatus,
       startDate: league.startDate,
       endDate: league.endDate,
     },
@@ -665,7 +615,8 @@ async function evaluateLeagueMembers(
 /**
  * Complete a league when its end time arrives or reconcile an already-ended league.
  * Calculates final rankings, persists results, and produces completion notifications atomically.
- * Idempotent: repeated runs will not overwrite final rankings or duplicate notifications.
+ * Concurrency-safe: database row lock protects the finalization decision; repeated runs or
+ * concurrent worker execution will not overwrite final rankings or duplicate notifications.
  */
 async function completeLeague(
   leagueId,
@@ -675,6 +626,8 @@ async function completeLeague(
     client = prisma,
   } = {},
 ) {
+  // Phase 1: Pre-fetch league state to check existence, end-date boundaries,
+  // and gather necessary market data outside the transaction.
   const league = await client.league.findUnique({
     where: { id: leagueId },
     include: {
@@ -715,47 +668,112 @@ async function completeLeague(
     return { completed: false, reason: "LEAGUE_NOT_ENDED", leagueId: league.id };
   }
 
-  // Check if members already have persisted final rankings
-  const hasPersistedRankings =
+  // Check if members already have persisted final rankings in the initial read
+  const alreadyPersisted =
     league.members.length > 0 &&
     league.members.every((m) => m.rank != null && m.finalReturn != null);
 
-  let memberResults = [];
-  if (hasPersistedRankings) {
-    // Preserve existing results - do not recalculate or overwrite
-    memberResults = league.members
-      .filter((m) => !m.user?.isSuspended)
-      .sort((a, b) => (a.rank || 0) - (b.rank || 0))
-      .map((m) => ({
+  // If rankings are not already persisted, evaluate member returns outside
+  // the transaction so we do not hold row locks while fetching external market data.
+  let precomputedEvaluated = null;
+  if (!alreadyPersisted && league.members.length > 0) {
+    precomputedEvaluated = await evaluateLeagueMembers(league, {
+      valuationDate: endDate,
+      priceProvider,
+    });
+  }
+
+  // Phase 2: Transaction with row-level locking to serialize finalization & reconciliation.
+  const transactionResult = await client.$transaction(async (tx) => {
+    // 1. Acquire row lock on League
+    let lockedLeague;
+    if (typeof tx.$queryRaw === "function") {
+      const leagues = await tx.$queryRaw`
+        SELECT id, status, "endDate" FROM "League" WHERE id = ${league.id} FOR UPDATE
+      `;
+      if (!leagues || leagues.length === 0) return { completionNotifications: [], memberCount: 0 };
+      lockedLeague = leagues[0];
+    } else {
+      lockedLeague = await tx.league.findUnique({ where: { id: league.id } });
+      if (!lockedLeague) return { completionNotifications: [], memberCount: 0 };
+    }
+
+    if (lockedLeague.status === "CANCELLED") {
+      return { completionNotifications: [], memberCount: 0 };
+    }
+
+    // 2. Re-read the latest participant state inside the transaction
+    const lockedMembers = await tx.leagueMember.findMany({
+      where: { leagueId: league.id },
+      include: {
+        user: {
+          select: {
+            id: true,
+            name: true,
+            avatarUrl: true,
+            isSuspended: true,
+          },
+        },
+      },
+    });
+
+    // 3. Check whether final rankings have already been persisted
+    const hasPersistedRankings =
+      lockedMembers.length > 0 &&
+      lockedMembers.every((m) => m.rank != null && m.finalReturn != null);
+
+    let memberResults = [];
+
+    if (hasPersistedRankings) {
+      // Final rankings ALREADY exist (persisted previously or by a concurrent worker that won the race).
+      // Preserve them! Do NOT recalculate or overwrite them.
+      const activeMembers = lockedMembers
+        .filter((m) => !m.user?.isSuspended)
+        .sort((a, b) => (a.rank || 0) - (b.rank || 0));
+
+      memberResults = activeMembers.map((m) => ({
         id: m.id,
         userId: m.userId,
         rank: m.rank,
         returnPct: m.finalReturn,
       }));
-  } else if (league.members.length > 0) {
-    const evaluated = await evaluateLeagueMembers(league, {
-      valuationDate: endDate,
-      priceProvider,
-    });
-    memberResults = evaluated.map((m) => ({
-      id: m.id,
-      userId: m.userId,
-      rank: m.rank,
-      returnPct: m.returnPct,
-    }));
-  }
+    } else if (lockedMembers.length > 0) {
+      // Rankings do not exist yet. Use precomputed results or compute them.
+      let evaluated = precomputedEvaluated;
+      if (!evaluated) {
+        const fullLeague = await tx.league.findUnique({
+          where: { id: league.id },
+          include: {
+            members: {
+              include: {
+                user: { select: { id: true, name: true, avatarUrl: true, isSuspended: true } },
+                portfolio: { include: { trades: { orderBy: { executedAt: "asc" } } } },
+              },
+            },
+          },
+        });
+        evaluated = await evaluateLeagueMembers(fullLeague, {
+          valuationDate: endDate,
+          priceProvider,
+        });
+      }
 
-  const completionNotifications = await client.$transaction(async (tx) => {
-    let lockedLeague;
-    if (typeof tx.$queryRaw === "function") {
-      const leagues = await tx.$queryRaw`
-        SELECT id, status FROM "League" WHERE id = ${league.id} FOR UPDATE
-      `;
-      if (!leagues || leagues.length === 0) return [];
-      lockedLeague = leagues[0];
-    } else {
-      lockedLeague = await tx.league.findUnique({ where: { id: league.id } });
-      if (!lockedLeague) return [];
+      for (const m of evaluated) {
+        await tx.leagueMember.update({
+          where: { id: m.id },
+          data: {
+            rank: m.rank,
+            finalReturn: m.returnPct,
+          },
+        });
+      }
+
+      memberResults = evaluated.map((m) => ({
+        id: m.id,
+        userId: m.userId,
+        rank: m.rank,
+        returnPct: m.returnPct,
+      }));
     }
 
     if (lockedLeague.status !== "COMPLETED") {
@@ -765,18 +783,7 @@ async function completeLeague(
       });
     }
 
-    if (!hasPersistedRankings && memberResults.length > 0) {
-      for (const m of memberResults) {
-        await tx.leagueMember.update({
-          where: { id: m.id },
-          data: {
-            rank: m.rank,
-            finalReturn: m.returnPct,
-          },
-        });
-      }
-    }
-
+    // Atomically create participant completion notification records
     const notifications = [];
     for (const m of memberResults) {
       const notif = await createNotificationEvent(
@@ -798,18 +805,22 @@ async function completeLeague(
       notifications.push(notif);
     }
 
-    return notifications;
+    return {
+      completionNotifications: notifications,
+      memberCount: memberResults.length,
+    };
   });
 
-  for (const notification of completionNotifications) {
+  // Post-commit: enqueue notification delivery after transaction successfully commits
+  for (const notification of transactionResult.completionNotifications) {
     enqueueNotificationEvent(notification.id);
   }
 
   return {
     completed: true,
     leagueId: league.id,
-    memberCount: memberResults.length,
-    notifications: completionNotifications,
+    memberCount: transactionResult.memberCount,
+    notifications: transactionResult.completionNotifications,
   };
 }
 
