@@ -23,6 +23,11 @@ async function getPortfolioDashboard(
     asOf = new Date(),
   } = {},
 ) {
+  const asOfDate = asOf instanceof Date ? asOf : new Date(asOf);
+  if (Number.isNaN(asOfDate.getTime())) {
+    throw AppError.badRequest("Invalid 'asOf' date parameter.", "INVALID_DATE");
+  }
+
   const db = client || prisma;
 
   // 1. Verify portfolio exists and ownership
@@ -108,7 +113,11 @@ async function getPortfolioDashboard(
 
   const formattedTrades = recentTradesRaw.map(serializeTrade);
 
-  const asOfDate = asOf instanceof Date ? asOf : new Date(asOf);
+  const snapshotDateStr = latestSnapshot
+    ? (latestSnapshot.snapshotDate instanceof Date
+        ? latestSnapshot.snapshotDate.toISOString().slice(0, 10)
+        : String(latestSnapshot.snapshotDate).slice(0, 10))
+    : null;
 
   return {
     portfolio: {
@@ -130,11 +139,8 @@ async function getPortfolioDashboard(
       accountPnlPct: aggregatePnl.accountPnlPct,
       dailyPnl: latestSnapshot ? latestSnapshot.dailyPnl.toString() : "0.00000000",
       dailyReturnPct: latestSnapshot ? latestSnapshot.dailyPnlPct.toString() : "0.0000",
-      lastSnapshotDate: latestSnapshot
-        ? (latestSnapshot.snapshotDate instanceof Date
-            ? latestSnapshot.snapshotDate.toISOString().slice(0, 10)
-            : String(latestSnapshot.snapshotDate).slice(0, 10))
-        : null,
+      snapshotDate: snapshotDateStr,
+      lastSnapshotDate: snapshotDateStr,
       realizedPnl: aggregatePnl.realized.pnl,
       realizedPnlPct: aggregatePnl.realized.pnlPct,
       unrealizedPnl: aggregatePnl.unrealized.pnl,
@@ -157,6 +163,7 @@ async function getPortfolioDashboard(
       recentOrders: formattedOrders,
       recentTrades: formattedTrades,
     },
+    // Explicitly distinguishes the live market valuation timestamp from historical snapshot valuation date
     asOf: asOfDate.toISOString(),
   };
 }

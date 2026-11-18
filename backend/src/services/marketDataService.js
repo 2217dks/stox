@@ -12,6 +12,10 @@ const {
   createMarketDataError,
   mapProviderError,
 } = require("../providers/marketDataErrors");
+const {
+  assertQuoteFreshness,
+  evaluateQuoteFreshness,
+} = require("../utils/quoteFreshness");
 
 const HISTORICAL_INTERVALS = new Set([
   "1m",
@@ -248,7 +252,11 @@ function createMarketDataService({ config, providers } = {}) {
       const result = await callAdapter(() =>
         provider.getQuote(providerSymbol),
       );
-      return assertQuote(result, resolved.assetClass);
+      const quote = assertQuote(result, resolved.assetClass);
+      return assertQuoteFreshness(quote, {
+        config: marketConfig,
+        ...options,
+      });
     },
 
     /**
@@ -365,6 +373,8 @@ module.exports = {
   createMarketDataService,
   normalizeAssetClass,
   normalizeSymbol,
+  assertQuoteFreshness,
+  evaluateQuoteFreshness,
   inferAssetClass,
   resolveSymbol,
 };

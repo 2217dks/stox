@@ -344,6 +344,33 @@ describe("executeOrder: BUY", () => {
     expect(portfolio.cashBalance.toString()).toBe("9800");
     expect(portfolio.reservedCash.toString()).toBe("0");
   });
+
+  test("reflects buy fees in portfolio cash balance and holding cost basis", async () => {
+    await resetPortfolioCash("10000");
+
+    const order = await createOrder({ quantity: "10" });
+    const trade = await tradeService.executeOrder(order, "100", { fees: "25" });
+
+    const [storedTrade, holding, portfolio] = await Promise.all([
+      prisma.trade.findUnique({ where: { id: trade.id } }),
+      prisma.holding.findUnique({
+        where: { portfolioId_symbol: { portfolioId, symbol: "AAPL" } },
+      }),
+      prisma.portfolio.findUnique({ where: { id: portfolioId } }),
+    ]);
+
+    // Trade records fee of 25
+    expect(storedTrade.fees.toString()).toBe("25");
+    expect(storedTrade.totalValue.toString()).toBe("1000");
+
+    // Portfolio cash deducted: totalValue (1000) + fees (25) = 1025. 10000 - 1025 = 8975
+    expect(portfolio.cashBalance.toString()).toBe("8975");
+
+    // Holding cost basis capitalized: totalInvested = 1000 + 25 = 1025. averageBuyPrice = 102.5
+    expect(holding.quantity.toString()).toBe("10");
+    expect(holding.totalInvested.toString()).toBe("1025");
+    expect(holding.averageBuyPrice.toString()).toBe("102.5");
+  });
 });
 
 describe("executeOrder: SELL", () => {
@@ -380,6 +407,39 @@ describe("executeOrder: SELL", () => {
     expect(holding.totalInvested.toString()).toBe("600");
     expect(holding.averageBuyPrice.toString()).toBe("100");
     expect(portfolio.cashBalance.toString()).toBe("9480");
+  });
+
+  test("derives realized P&L accurately when selling a holding bought with fees", async () => {
+    await resetPortfolioCash("10000");
+
+    // 1. Buy 10 AAPL @ 100 with $20 fee.
+    // Cash = 10000 - 1000 - 20 = 8980. Holding cost basis = 1020 ($102/share).
+    const buyOrder = await createOrder({ quantity: "10" });
+    await tradeService.executeOrder(buyOrder, "100", { fees: "20" });
+
+    // 2. Sell 5 AAPL @ 150 with $10 fee.
+    // Gross proceeds = 5 * 150 = 750.
+    // Removed cost basis = 5 * 102 = 510.
+    // Realized P&L = proceeds (750) - cost basis (510) - sell fee (10) = 230.
+    // Net cash credited = proceeds (750) - sell fee (10) = 740.
+    // Portfolio cash = 8980 + 740 = 9720.
+    const sellOrder = await createOrder({ side: "SELL", quantity: "5" });
+    const sellTrade = await tradeService.executeOrder(sellOrder, "150", { fees: "10" });
+
+    const [storedSellTrade, holding, portfolio] = await Promise.all([
+      prisma.trade.findUnique({ where: { id: sellTrade.id } }),
+      prisma.holding.findUnique({
+        where: { portfolioId_symbol: { portfolioId, symbol: "AAPL" } },
+      }),
+      prisma.portfolio.findUnique({ where: { id: portfolioId } }),
+    ]);
+
+    expect(storedSellTrade.realizedPnl.toString()).toBe("230");
+    expect(storedSellTrade.fees.toString()).toBe("10");
+    expect(portfolio.cashBalance.toString()).toBe("9720");
+    expect(holding.quantity.toString()).toBe("5");
+    expect(holding.totalInvested.toString()).toBe("510");
+    expect(holding.averageBuyPrice.toString()).toBe("102");
   });
 
   test("rejects a sell larger than the position and leaves all state untouched", async () => {

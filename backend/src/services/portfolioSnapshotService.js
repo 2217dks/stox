@@ -250,8 +250,42 @@ async function getPortfolioDailySnapshots(
     client = prisma,
   } = {},
 ) {
+  // 1. Validate query parameters before querying database
+  let parsedLimit = 100;
+  if (limit !== null && limit !== undefined) {
+    const num = Number(limit);
+    if (!Number.isInteger(num) || num <= 0) {
+      throw AppError.badRequest("Limit must be a positive integer.", "INVALID_LIMIT");
+    }
+    if (num > 1000) {
+      throw AppError.badRequest("Limit cannot exceed 1000.", "INVALID_LIMIT");
+    }
+    parsedLimit = num;
+  }
+
+  let fromDate = null;
+  if (from !== null && from !== undefined) {
+    fromDate = from instanceof Date ? from : new Date(from);
+    if (Number.isNaN(fromDate.getTime())) {
+      throw AppError.badRequest("Invalid 'from' date parameter.", "INVALID_DATE_RANGE");
+    }
+  }
+
+  let toDate = null;
+  if (to !== null && to !== undefined) {
+    toDate = to instanceof Date ? to : new Date(to);
+    if (Number.isNaN(toDate.getTime())) {
+      throw AppError.badRequest("Invalid 'to' date parameter.", "INVALID_DATE_RANGE");
+    }
+  }
+
+  if (fromDate && toDate && fromDate.getTime() > toDate.getTime()) {
+    throw AppError.badRequest("'from' date cannot be after 'to' date.", "INVALID_DATE_RANGE");
+  }
+
   const db = client || prisma;
 
+  // 2. Validate portfolio existence and caller ownership
   const portfolio = await db.portfolio.findFirst({
     where: {
       id: portfolioId,
@@ -269,9 +303,6 @@ async function getPortfolioDailySnapshots(
     throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
   }
 
-  let fromDate = from ? (from instanceof Date ? from : new Date(from)) : null;
-  let toDate = to ? (to instanceof Date ? to : new Date(to)) : null;
-
   const where = {
     portfolioId,
   };
@@ -282,13 +313,16 @@ async function getPortfolioDailySnapshots(
     if (toDate) where.snapshotDate.lte = toDate;
   }
 
+  // 3. Query the latest window of snapshots and return in chronological order (asc)
   const snapshots = await db.performanceSnapshot.findMany({
     where,
     orderBy: {
-      snapshotDate: "asc",
+      snapshotDate: "desc",
     },
-    take: limit,
+    take: parsedLimit,
   });
+
+  snapshots.reverse();
 
   const serialized = snapshots.map(serializeSnapshot);
 

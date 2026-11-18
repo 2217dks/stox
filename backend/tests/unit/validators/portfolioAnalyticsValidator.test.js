@@ -364,7 +364,6 @@ describe("Portfolio Analytics Validators Unit Tests", () => {
       expect(result.error.issues[0].path).toContain("to");
     });
   });
-
   describe("portfolioPerformanceQuerySchema", () => {
     test("applies default period 1M when query is empty", () => {
       const parsed = portfolioPerformanceQuerySchema.parse({});

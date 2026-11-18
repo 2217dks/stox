@@ -494,7 +494,8 @@ Retrieve chronological daily end-of-day performance snapshots for a caller-owned
 
 Guarantees:
 - Enforces strict user ownership (returns 404 for unowned or missing portfolios).
-- Results are strictly ordered chronologically (`snapshotDate ASC`).
+- Returns the most recent window of snapshots up to `limit` (default 100) while strictly preserving chronological ordering (`snapshotDate ASC`).
+- Validates query bounds at both route and service layers (rejects unparseable dates, reversed ranges `from > to`, non-positive limits, and limits exceeding 1000).
 - Missing snapshot dates are represented accurately without inventing synthetic values.
 
 ### Query Parameters
@@ -503,7 +504,7 @@ Guarantees:
 |-----------|--------|---------|-------------|
 | `from`    | string | -       | Date or ISO datetime lower bound (e.g. `2026-10-01`) |
 | `to`      | string | -       | Date or ISO datetime upper bound (e.g. `2026-11-01`) |
-| `limit`   | int    | `100`   | Maximum snapshots to return (1 to 365) |
+| `limit`   | int    | `100`   | Maximum snapshots to return (1 to 365 via HTTP route, up to 1000 via service) |
 
 ### Response
 
@@ -549,6 +550,8 @@ Unified portfolio dashboard summary endpoint composing portfolio metadata, perfo
 
 Scoped strictly to the authenticated user and portfolio.
 
+> [!NOTE]
+> **Timestamp Consistency**: `asOf` reflects the current live market valuation and quote evaluation clock, while `performance.lastSnapshotDate` / `performance.snapshotDate` reflects the date of the most recent recorded end-of-day snapshot. When the latest snapshot is older than the current valuation date (or if no snapshot has been captured yet), these timestamps will differ and should not be treated as a single synchronized point in time.
 ### Response
 
 ```json
@@ -574,6 +577,7 @@ Scoped strictly to the authenticated user and portfolio.
       "accountPnlPct": "5.0000",
       "dailyPnl": "120",
       "dailyReturnPct": "0.0115",
+      "snapshotDate": "2026-11-17",
       "lastSnapshotDate": "2026-11-17",
       "realizedPnl": "200.00000000",
       "realizedPnlPct": "10.0000",
@@ -1230,7 +1234,7 @@ All market data provider requests apply bounded retries with exponential backoff
   - Bounded to `MARKET_DATA_MAX_RETRIES` (default: 2 retries, 3 total attempts).
   - Exponential delay starting at `MARKET_DATA_RETRY_BASE_DELAY_MS` (default: 200ms) up to `MARKET_DATA_RETRY_MAX_DELAY_MS` (default: 2000ms).
   - Full jitter randomized to prevent synchronized thundering-herd spikes.
-  - Provider `Retry-After` headers (numeric seconds or HTTP dates) are respected when supplied.
+  - Provider `Retry-After` headers (numeric seconds or HTTP dates) are respected when supplied; if a requested retry delay exceeds `MARKET_DATA_RETRY_MAX_DELAY_MS`, the request fails immediately with `MARKET_DATA_RATE_LIMITED` rather than retrying early.
 
 ## `GET /market/search`
 
@@ -1287,13 +1291,26 @@ GET /api/v1/market/search?query=apple&assetClass=STOCK&limit=20
 
 ## `GET /market/quote/:symbol`
 
-Get a normalized Binance crypto quote.
+Get a normalized Binance crypto quote with explicit freshness metadata.
 
 This public, read-only endpoint does not require authentication and uses the global API rate limit.
 
 Supported symbol forms include `BTCUSDT`, `BINANCE:BTCUSDT`, and `BTC/USDT`. Quote assets follow the market-data service conventions (`USDT`, `BTC`, or `ETH`).
 
-The response uses the standard envelope, with the normalized quote DTO in `data`.
+### Query parameters
+
+| Name            | Required | Contract                                                                                                            |
+| --------------- | -------- | ------------------------------------------------------------------------------------------------------------------- |
+| `rejectStale`   | No       | Boolean (`true`/`false`); when `true`, rejects stale or future quotes with HTTP 503 `MARKET_DATA_STALE_QUOTE`        |
+| `maxAgeSeconds` | No       | Positive integer; when specified, rejects quotes older than this limit or quotes with null age with HTTP 503       |
+| `bypassCache`   | No       | Boolean (`true`/`false`); when `true`, bypasses Redis cache and fetches fresh provider data without evicting cache  |
+| `skipCache`     | No       | Alias for `bypassCache`                                                                                             |
+| `noCache`       | No       | Alias for `bypassCache`                                                                                             |
+
+### Response headers
+
+- `X-Quote-Freshness`: `"FRESH"`, `"STALE"`, or `"FUTURE"`.
+- `X-Quote-Age-Seconds`: Age of the quote in seconds relative to current time (omitted if age cannot be calculated).
 
 ### Response
 
@@ -1313,24 +1330,42 @@ The response uses the standard envelope, with the normalized quote DTO in `data`
         "volume": "1234.56",
         "currency": "USDT",
         "timestamp": "2026-11-02T12:00:00.000Z",
-        "source": "binance"
+        "source": "binance",
+        "isStale": false,
+        "freshness": "FRESH",
+        "ageSeconds": 4
     }
 }
 ```
 
-Prices and volume are canonical decimal strings.
+Prices and volume are canonical decimal strings. Freshness metadata (`isStale`, `freshness`, `ageSeconds`) distinguishes real-time quotes from delayed or future values. Clock skew up to 5 seconds (`MARKET_DATA_MAX_CLOCK_SKEW_SECONDS`) is tolerated as fresh (`ageSeconds = 0`). Quotes with timestamps ahead beyond tolerance are marked `freshness: "FUTURE"`, `ageSeconds: null`, and `isStale: true`. Quotes with missing or invalid timestamps are also marked stale (`ageSeconds: null`).
 
-Unsupported or invalid symbol formats return HTTP 400 `VALIDATION_ERROR`; unknown Binance pairs return HTTP 404 `MARKET_DATA_NOT_FOUND`.
+Unsupported or invalid symbol formats return HTTP 400 `VALIDATION_ERROR`; unknown Binance pairs return HTTP 404 `MARKET_DATA_NOT_FOUND`. Stale, future, or invalid-timestamp quotes with `rejectStale=true` or exceeding `maxAgeSeconds` return HTTP 503 `MARKET_DATA_STALE_QUOTE`.
 
 Provider timeouts, rate limits, and unavailable provider errors use the documented market-data domain error codes.
 
 ## `GET /market/quote/stock/:symbol`
 
-Get a normalized Finnhub stock quote.
+Get a normalized Finnhub stock quote with explicit freshness metadata.
 
 This public, read-only endpoint does not require authentication and uses the global API rate limit.
 
 Tickers are case-insensitive and may contain letters, digits, `.` or `-`, with a maximum length of 20 characters (for example, `AAPL` or `BRK.B`).
+
+### Query parameters
+
+| Name            | Required | Contract                                                                                                            |
+| --------------- | -------- | ------------------------------------------------------------------------------------------------------------------- |
+| `rejectStale`   | No       | Boolean (`true`/`false`); when `true`, rejects stale or future quotes with HTTP 503 `MARKET_DATA_STALE_QUOTE`        |
+| `maxAgeSeconds` | No       | Positive integer; when specified, rejects quotes older than this limit or quotes with null age with HTTP 503       |
+| `bypassCache`   | No       | Boolean (`true`/`false`); when `true`, bypasses Redis cache and fetches fresh provider data without evicting cache  |
+| `skipCache`     | No       | Alias for `bypassCache`                                                                                             |
+| `noCache`       | No       | Alias for `bypassCache`                                                                                             |
+
+### Response headers
+
+- `X-Quote-Freshness`: `"FRESH"`, `"STALE"`, or `"FUTURE"`.
+- `X-Quote-Age-Seconds`: Age of the quote in seconds relative to current time (omitted if age cannot be calculated).
 
 The response uses the same normalized quote DTO and standard envelope as the crypto quote route.
 
@@ -1354,7 +1389,10 @@ Finnhub does not return quote volume, so `volume` is `null`; optional quote fiel
         "volume": null,
         "currency": "USD",
         "timestamp": "2026-11-02T12:00:00.000Z",
-        "source": "finnhub"
+        "source": "finnhub",
+        "isStale": false,
+        "freshness": "FRESH",
+        "ageSeconds": 15
     }
 }
 ```

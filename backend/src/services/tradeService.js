@@ -1,3 +1,4 @@
+
 const { randomUUID } = require("crypto");
 
 const { Prisma } = require("@prisma/client");
@@ -180,6 +181,23 @@ function toDecimal(value) {
   }
 }
 
+function toValidFee(fees) {
+  if (fees === undefined) {
+    return ZERO;
+  }
+
+  const decimal = toDecimal(fees);
+
+  if (!decimal || !decimal.isFinite() || decimal.isNegative()) {
+    throw AppError.badRequest(
+      "Trade fee must be a non-negative finite number.",
+      "INVALID_TRADE_FEE",
+    );
+  }
+
+  return decimal;
+}
+
 function toExecutionPrice(price) {
   const decimal = toDecimal(price);
 
@@ -261,17 +279,29 @@ function evaluateOrder(order, currentPrice) {
   }
 }
 
-async function applyBuy(tx, order, quantity, price, totalValue, portfolio) {
+async function applyBuy(
+  tx,
+  order,
+  quantity,
+  price,
+  totalValue,
+  portfolio,
+  fees = ZERO,
+) {
+  const feesDecimal = toValidFee(fees);
   const orderReservedCash = new Prisma.Decimal(order.reservedCash ?? ZERO);
   const portfolioReservedCash = new Prisma.Decimal(
     portfolio.reservedCash ?? ZERO,
   );
   const cashBalance = new Prisma.Decimal(portfolio.cashBalance);
 
+  // Total cash outlay for buying includes both the purchase value and transaction fees.
+  const totalCashOutlay = totalValue.plus(feesDecimal);
+
   // Only the portion above this order's reservation needs additional
   // unreserved cash.
   const additionalCashRequired = Prisma.Decimal.max(
-    totalValue.minus(orderReservedCash),
+    totalCashOutlay.minus(orderReservedCash),
     ZERO,
   );
 
@@ -295,6 +325,10 @@ async function applyBuy(tx, order, quantity, price, totalValue, portfolio) {
     );
   }
 
+  // Acquisition fees are capitalized into the holding's cost basis.
+  const costBasis = totalValue.plus(feesDecimal);
+  const averageBuyPrice = costBasis.dividedBy(quantity);
+
   await tx.$executeRaw`
     INSERT INTO "Holding" (
       "id",
@@ -314,8 +348,8 @@ async function applyBuy(tx, order, quantity, price, totalValue, portfolio) {
       ${order.symbol},
       ${order.assetType}::"AssetType",
       ${quantity},
-      ${price},
-      ${totalValue},
+      ${averageBuyPrice},
+      ${costBasis},
       false,
       now(),
       now()
@@ -335,7 +369,7 @@ async function applyBuy(tx, order, quantity, price, totalValue, portfolio) {
     where: { id: order.portfolioId },
     data: {
       cashBalance: {
-        decrement: totalValue,
+        decrement: totalCashOutlay,
       },
       reservedCash: {
         decrement: orderReservedCash,
@@ -398,9 +432,9 @@ async function applySell(tx, order, quantity, totalValue, fees = ZERO) {
   // Rounding the stored remainder at the column scale makes the remainder and
   // the removed basis add back to the original total exactly. A full close is
   // forced to zero in the `newTotalInvested` assignment above, so it can never
-  // retain a rounded residual. Realized P&L uses this same removed basis minus fees, so
-  // the trade record and the holding can never disagree about what was sold.
-  const feesDecimal = toDecimal(fees) || ZERO;
+  // retain a rounded residual. Realized P&L uses this same removed basis minus fees,
+  // so the trade record and the holding can never disagree about what was sold.
+  const feesDecimal = toValidFee(fees);
   const removedCostBasis = currentTotalInvested.minus(newTotalInvested);
   const realizedPnl = totalValue.minus(removedCostBasis).minus(feesDecimal);
 
@@ -414,6 +448,7 @@ async function applySell(tx, order, quantity, totalValue, fees = ZERO) {
 
   // A sell credits net cash (totalValue - fees), so increment cashBalance.
   const netCashCredit = totalValue.minus(feesDecimal);
+
   await tx.portfolio.update({
     where: { id: order.portfolioId },
     data: {
@@ -445,16 +480,24 @@ async function applySell(tx, order, quantity, totalValue, fees = ZERO) {
  * `orderOrId` may be an order row (as in the worker) or a UUID, so callers
  * cannot accidentally execute a stale copy.
  */
-async function executeOrder(orderOrId, price, { now = new Date(), fees = 0 } = {}) {
+async function executeOrder(
+  orderOrId,
+  price,
+  { now = new Date(), fees = 0 } = {},
+) {
   const orderId = typeof orderOrId === "string" ? orderOrId : orderOrId?.id;
 
   if (!orderId) {
     throw AppError.badRequest("Order is required.", "INVALID_ORDER");
   }
 
+  const feesDecimal = toValidFee(fees);
   const executionPrice = toExecutionPrice(price);
   const clock = now instanceof Date ? now : new Date(now);
-  const feesDecimal = toDecimal(fees) || ZERO;
+
+  if (Number.isNaN(clock.getTime())) {
+    throw AppError.badRequest("Invalid execution time.", "INVALID_EXECUTION_TIME");
+  }
 
   const { trade, order: executedOrder } = await prisma.$transaction(
     async (tx) => {
@@ -487,11 +530,11 @@ async function executeOrder(orderOrId, price, { now = new Date(), fees = 0 } = {
       // A concurrent deactivatePortfolio() update must wait until this
       // transaction commits or rolls back.
       const portfolios = await tx.$queryRaw`
-            SELECT "id", "isActive", "cashBalance", "reservedCash"
-            FROM "Portfolio"
-            WHERE "id" = ${order.portfolioId}
-            FOR UPDATE
-          `;
+        SELECT "id", "isActive", "cashBalance", "reservedCash"
+        FROM "Portfolio"
+        WHERE "id" = ${order.portfolioId}
+        FOR UPDATE
+      `;
 
       const portfolio = portfolios[0];
 
@@ -508,7 +551,7 @@ async function executeOrder(orderOrId, price, { now = new Date(), fees = 0 } = {
         );
       }
 
-      const executedAt = new Date();
+      const executedAt = clock;
 
       const transition = await tx.order.updateMany({
         where: {
@@ -543,6 +586,7 @@ async function executeOrder(orderOrId, price, { now = new Date(), fees = 0 } = {
           executionPrice,
           totalValue,
           portfolio,
+          feesDecimal,
         );
       } else if (order.side === "SELL") {
         const realized = await applySell(

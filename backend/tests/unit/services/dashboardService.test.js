@@ -32,6 +32,20 @@ describe("Portfolio Dashboard Summary Service", () => {
     };
   });
 
+  test("rejects invalid asOf parameter before querying", async () => {
+    await expect(
+      getPortfolioDashboard(userId, portfolioId, {
+        asOf: "invalid-timestamp",
+        client: mockClient,
+      }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "INVALID_DATE",
+    });
+
+    expect(mockClient.portfolio.findFirst).not.toHaveBeenCalled();
+  });
+
   test("throws 404 when portfolio does not belong to user", async () => {
     mockClient.portfolio.findFirst.mockResolvedValue(null);
 
@@ -140,6 +154,7 @@ describe("Portfolio Dashboard Summary Service", () => {
     expect(result.performance.dailyPnl).toBe("120");
     expect(result.performance.dailyReturnPct).toBe("0.0115");
     expect(result.performance.lastSnapshotDate).toBe("2026-11-17");
+    expect(result.performance.snapshotDate).toBe("2026-11-17");
     expect(result.performance.winRate).toBe(0.8);
 
     // Check Positions Summary & Top Positions sorted by market value
@@ -152,5 +167,130 @@ describe("Portfolio Dashboard Summary Service", () => {
     expect(result.recentActivity.pendingOrdersCount).toBe(1);
     expect(result.recentActivity.recentOrders).toHaveLength(1);
     expect(result.recentActivity.recentTrades).toHaveLength(1);
+
+    // Check distinct live valuation asOf timestamp
+    expect(result.asOf).toBe("2026-11-18T10:00:00.000Z");
+  });
+
+  test("clearly distinguishes latest snapshot valuation date from live valuation asOf when snapshot is older", async () => {
+    mockClient.portfolio.findFirst.mockResolvedValue({
+      id: portfolioId,
+      name: "Long Term Fund",
+      currency: "USD",
+      isDefault: false,
+      createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    });
+
+    // Live valuation evaluated as of 2026-11-18T16:00:00.000Z
+    const liveAsOf = new Date("2026-11-18T16:00:00.000Z");
+
+    getPortfolioAggregatePnl.mockResolvedValue({
+      startingBalance: "50000.00000000",
+      cashBalance: "15000.00000000",
+      openHoldingsValue: "42000.00000000",
+      openHoldingsCostBasis: "38000.00000000",
+      totalPortfolioValue: "57000.00000000",
+      netPnl: "7000.00000000",
+      netPnlPct: "14.0000",
+      accountPnl: "7000.00000000",
+      accountPnlPct: "14.0000",
+      realized: {
+        pnl: "3000.00000000",
+        pnlPct: "15.0000",
+        winRate: 1.0,
+        winningTrades: 2,
+        losingTrades: 0,
+        tradeCount: 2,
+      },
+      unrealized: {
+        pnl: "4000.00000000",
+        pnlPct: "10.5263",
+        positionCount: 1,
+        isStale: false,
+        freshness: "FRESH",
+        positions: [{ symbol: "MSFT", marketValue: "42000.00000000", unrealizedPnl: "4000.00000000" }],
+      },
+    });
+
+    // The most recent stored snapshot is from 5 days ago (2026-11-13)
+    findLatestSnapshot.mockResolvedValue({
+      dailyPnl: new Prisma.Decimal("350.00000000"),
+      dailyPnlPct: new Prisma.Decimal("0.0065"),
+      snapshotDate: new Date("2026-11-13T00:00:00.000Z"),
+    });
+
+    mockClient.trade.findMany.mockResolvedValue([]);
+    mockClient.order.findMany.mockResolvedValue([]);
+    mockClient.order.count.mockResolvedValue(0);
+
+    const result = await getPortfolioDashboard(userId, portfolioId, {
+      client: mockClient,
+      asOf: liveAsOf,
+    });
+
+    // Response explicitly distinguishes live market valuation asOf vs historical snapshot date
+    expect(result.asOf).toBe("2026-11-18T16:00:00.000Z");
+    expect(result.performance.snapshotDate).toBe("2026-11-13");
+    expect(result.performance.lastSnapshotDate).toBe("2026-11-13");
+    expect(result.performance.snapshotDate).not.toBe(result.asOf.slice(0, 10));
+    expect(result.performance.dailyPnl).toBe("350");
+    expect(result.performance.dailyReturnPct).toBe("0.0065");
+  });
+
+  test("handles empty snapshot history and reports null snapshot dates with zero daily returns", async () => {
+    mockClient.portfolio.findFirst.mockResolvedValue({
+      id: portfolioId,
+      name: "New Portfolio",
+      currency: "USD",
+      isDefault: false,
+      createdAt: new Date("2026-11-18T00:00:00.000Z"),
+    });
+
+    getPortfolioAggregatePnl.mockResolvedValue({
+      startingBalance: "10000.00000000",
+      cashBalance: "10000.00000000",
+      openHoldingsValue: "0.00000000",
+      openHoldingsCostBasis: "0.00000000",
+      totalPortfolioValue: "10000.00000000",
+      netPnl: "0.00000000",
+      netPnlPct: "0.0000",
+      accountPnl: "0.00000000",
+      accountPnlPct: "0.0000",
+      realized: {
+        pnl: "0.00000000",
+        pnlPct: "0.0000",
+        winRate: 0,
+        winningTrades: 0,
+        losingTrades: 0,
+        tradeCount: 0,
+      },
+      unrealized: {
+        pnl: "0.00000000",
+        pnlPct: "0.0000",
+        positionCount: 0,
+        isStale: false,
+        freshness: "FRESH",
+        positions: [],
+      },
+    });
+
+    // No snapshot recorded yet
+    findLatestSnapshot.mockResolvedValue(null);
+
+    mockClient.trade.findMany.mockResolvedValue([]);
+    mockClient.order.findMany.mockResolvedValue([]);
+    mockClient.order.count.mockResolvedValue(0);
+
+    const asOfTime = new Date("2026-11-18T12:00:00.000Z");
+    const result = await getPortfolioDashboard(userId, portfolioId, {
+      client: mockClient,
+      asOf: asOfTime,
+    });
+
+    expect(result.asOf).toBe("2026-11-18T12:00:00.000Z");
+    expect(result.performance.snapshotDate).toBeNull();
+    expect(result.performance.lastSnapshotDate).toBeNull();
+    expect(result.performance.dailyPnl).toBe("0.00000000");
+    expect(result.performance.dailyReturnPct).toBe("0.0000");
   });
 });

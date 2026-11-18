@@ -10,6 +10,7 @@ const {
 } = require("../controllers/marketController");
 const {
   cryptoQuoteParamsSchema,
+  quoteQuerySchema,
   historicalPricesParamsSchema,
   historicalPricesQuerySchema,
   marketOverviewQuerySchema,
@@ -28,12 +29,14 @@ router.get(
 router.get(
   "/quote/:symbol",
   validate(cryptoQuoteParamsSchema, "params", "validatedParams"),
+  validate(quoteQuerySchema, "query", "validatedQuery"),
   getCryptoQuote,
 );
 
 router.get(
   "/quote/stock/:symbol",
   validate(stockQuoteParamsSchema, "params", "validatedParams"),
+  validate(quoteQuerySchema, "query", "validatedQuery"),
   getStockQuote,
 );
 
