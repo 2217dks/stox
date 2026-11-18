@@ -628,7 +628,7 @@ Expose portfolio performance for a requested period using the approved return me
 - **Return %**: Calculated as `(netPnl / startValue) * 100`, formatted to 4 decimal places. Returns `"0.0000"` when start value is zero.
 - **Realized P&L**: Sum of realized P&L from closed trades executed within `[from, to]`.
 - **Unrealized P&L**: Net valuation change minus realized P&L (`netPnl - realizedPnl`).
-- **Time-Weighted Return (TWR)**: Compounded product of daily snapshot return factors $\prod (1 + r_i) - 1$.
+- **Time-Weighted Return (TWR)**: Compounded product of daily snapshot return factors $\prod (1 + r_i) - 1$. When the earliest snapshot in the window serves as the baseline (`period_start_snapshot`), its daily return occurred at or prior to that baseline and is not compounded into post-baseline performance, guaranteeing consistent starting points and period boundaries between `returnPct` and `timeWeightedReturnPct` across presets, custom periods, and `ALL`.
 - **Best/Worst Day**: Identifies the single day with highest and lowest daily P&L and return.
 
 ### Response

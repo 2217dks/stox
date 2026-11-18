@@ -154,11 +154,25 @@ async function getPortfolioAllocation(
         });
 
         if (quote && quote.price) {
-          const fetchedPrice = new Prisma.Decimal(quote.price);
-          if (fetchedPrice.gt(ZERO)) {
-            price = fetchedPrice;
-            priceSource = "live";
-            isPriceEstimated = false;
+          const isStale = Boolean(
+            quote.isStale === true ||
+            quote.freshness === "STALE" ||
+            quote.freshness === "FUTURE",
+          );
+
+          if (!isStale) {
+            const fetchedPrice = new Prisma.Decimal(quote.price);
+            if (fetchedPrice.gt(ZERO)) {
+              price = fetchedPrice;
+              priceSource = "live";
+              isPriceEstimated = false;
+            }
+          } else {
+            // Stale market quotes must never be silently reported as live prices.
+            // Fall back to holding's average buy price and mark as estimated valuation.
+            price = avgBuyPrice;
+            priceSource = "cost_basis";
+            isPriceEstimated = true;
           }
         }
       }

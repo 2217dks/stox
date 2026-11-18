@@ -27,6 +27,11 @@ function toDecimalString(val, decimals = 8) {
  * - Baseline: Valuation is anchored to the latest snapshot strictly prior to period start.
  *   If no prior snapshot exists, falls back to the earliest recorded snapshot in the window
  *   or the portfolio's starting balance.
+ * - Time-Weighted Return (TWR): Compounded product of daily snapshot return factors.
+ *   When the earliest snapshot in the requested window is itself the baseline (period_start_snapshot),
+ *   its daily return occurred at or prior to that baseline valuation and is not compounded into
+ *   post-baseline performance, keeping returnPct and timeWeightedReturnPct aligned to identical
+ *   period boundaries across presets, custom ranges, and ALL.
  * - Net P&L: endValue - startValue.
  * - Return %: (netPnl / startValue) * 100, formatted to 4 decimal places.
  * - Realized P&L: Aggregated from closed trades executed within [startDate, endDate].
@@ -229,7 +234,9 @@ async function getPortfolioPerformance(
   let worstDay = null;
   let twrProduct = new Prisma.Decimal(1);
 
-  const series = snapshots.map((s) => {
+  const isBaselineFirstSnapshot = baseline?.source === "period_start_snapshot";
+
+  const series = snapshots.map((s, idx) => {
     const sDate = toIsoDateString(s.snapshotDate);
     const dailyPnl = new Prisma.Decimal(s.dailyPnl);
     const dailyReturn = s.dailyPnlPct !== null && s.dailyPnlPct !== undefined
@@ -237,7 +244,11 @@ async function getPortfolioPerformance(
       : ZERO;
 
     // Compound daily returns for TWR: (1 + r_1) * (1 + r_2)...
-    twrProduct = twrProduct.times(new Prisma.Decimal(1).plus(dailyReturn));
+    // When the earliest snapshot is itself the baseline, its return occurred at or before
+    // the baseline valuation and is not compounded into performance after the baseline.
+    if (!isBaselineFirstSnapshot || idx > 0) {
+      twrProduct = twrProduct.times(new Prisma.Decimal(1).plus(dailyReturn));
+    }
 
     if (!bestDay || dailyPnl.gt(new Prisma.Decimal(bestDay.pnl))) {
       bestDay = {
