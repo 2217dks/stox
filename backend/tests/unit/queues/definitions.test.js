@@ -2,6 +2,7 @@ const {
   QUEUE_NAMES,
   ORDER_JOB_NAMES,
   COPY_TRADE_JOB_NAMES,
+  SNAPSHOT_JOB_NAMES,
   QUEUE_POLICIES,
   jobOptionsFor,
 } = require("../../../src/queues/definitions");
@@ -13,6 +14,7 @@ describe("queue definitions", () => {
       NOTIFICATIONS: "notifications",
       ALERTS: "alerts",
       COPY_TRADES: "copy-trades",
+      SNAPSHOTS: "snapshots",
     });
   });
 
@@ -27,6 +29,13 @@ describe("queue definitions", () => {
     expect(COPY_TRADE_JOB_NAMES).toEqual({
       FAN_OUT: "fan-out-copy-trades",
       SCAN_PENDING: "scan-pending",
+    });
+  });
+
+  test("declares the snapshot job names", () => {
+    expect(SNAPSHOT_JOB_NAMES).toEqual({
+      GENERATE_PORTFOLIO_SNAPSHOTS: "generate-portfolio-snapshots",
+      PRUNE_SNAPSHOT_RETENTION: "prune-snapshot-retention",
     });
   });
 

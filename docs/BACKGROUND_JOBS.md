@@ -31,8 +31,8 @@ Slow operations (order execution, alerts, reports, emails) are pushed to **BullM
 
 ## ✅ Implementation status
 
-The BullMQ foundation and the **orders**, **notification**, **alert**, and
-**copy-trades** queues are implemented. All four run from the same worker
+The BullMQ foundation and the **orders**, **notification**, **alert**,
+**copy-trades**, and **snapshots** queues are implemented. All five run from the same worker
 process.
 
 ### Registered queues
@@ -43,6 +43,7 @@ process.
 | Notifications | `notifications` | 5 | exponential, 5s |
 | Alerts | `alerts` | 2 | exponential, 1s |
 | Copy trades | `copy-trades` | 3 | exponential, 2s |
+| Snapshots | `snapshots` | 3 | exponential, 5s |
 
 Redis keys are namespaced with `QUEUE_PREFIX` (default `stox`), so test runs
 can use a unique prefix without touching real queues. Queues use their own
@@ -158,6 +159,13 @@ finds trades whose marker is still null, which recovers a fan-out enqueue lost
 during a Redis outage. A trade with no followers is still marked, so the scan
 is finite; a trade is never replayed to a follower added after it executed.
 
+### Snapshot job contracts
+
+| Job | Payload | Attempts | What it does |
+| --- | --- | --- | --- |
+| `generate-portfolio-snapshots` | `{ targetDate?, force?, portfolioIds? }` | 3 | Checks per-portfolio coverage for target date, enforces early morning UTC settlement window (00:00 - 02:00 UTC), and generates daily EOD closing valuation snapshots for missing active portfolios. Skips idempotently when all active portfolios are recorded. |
+| `prune-snapshot-retention` | `{ retentionDays? }` | 2 | Prunes historical `PerformanceSnapshot` records strictly older than the retention threshold (default 365 days, strictly validated positive integer between 1 and 3650) relative to UTC now when preservation options permit, safely keeping the database bounded while strictly preserving complete historical snapshot series and baselines required by active and inactive portfolios for ALL-time performance. |
+
 ### Idempotency keys
 
 | Job | Key | Guard |
@@ -166,16 +174,20 @@ is finite; a trade is never replayed to a follower added after it executed.
 | `send-notification` | `jobId = notificationId` | `PENDING -> SENDING` is a conditional update; terminal statuses (`DELIVERED`, `SKIPPED`, `FAILED`) short-circuit a replay; per-channel results are persisted so a partial retry does not resend a successful email |
 | `evaluate-alert` | `jobId = alertId` | `ACTIVE -> TRIGGERED` is a conditional update; completed jobs are removed so a still-active alert can be evaluated again |
 | `fan-out-copy-trades` | `jobId = tradeId` | A durable unique `(sourceTradeId, copierId)` row guards every follower; `Order.copyTradeExecutionId` is unique, so a replay cannot create a second copied order even if the execution update was lost; `Trade.copyFanOutAt` marks a completed pass |
+| `generate-portfolio-snapshots` | `jobId = snapshots:${targetDate}` | Deduplicated by target date; checks DB snapshot coverage per active portfolio; skips if all active portfolios already have snapshots for that date. |
+| `prune-snapshot-retention` | none | Idempotent bulk deletion of expired snapshots strictly prior to the calculated UTC cutoff date. |
 | `scan-alerts` / `scan-pending` | none | Discovery jobs; duplicate scans are harmless because the downstream work is guarded |
 
 ### Schedulers
 
-| Scheduler id | Queue | Interval env var | Default |
+| Scheduler id | Queue | Cadence / Interval env var | Default |
 | --- | --- | --- | --- |
 | `orders:scan-pending` | `orders` | `ORDER_SCAN_INTERVAL_MS` | 5000 ms |
 | `notifications:scan-pending` | `notifications` | `NOTIFICATION_SCAN_INTERVAL_MS` | 30000 ms |
 | `alerts:scan` | `alerts` | `ALERT_SCAN_INTERVAL_MS` | 15000 ms |
 | `copy-trades:scan-pending` | `copy-trades` | `COPY_TRADE_SCAN_INTERVAL_MS` | 60000 ms |
+| `snapshots:daily-generate` | `snapshots` | `PORTFOLIO_SNAPSHOT_CRON`, `PORTFOLIO_SNAPSHOT_TZ` | `0 1 * * *` (01:00 UTC) |
+| `snapshots:retention-prune` | `snapshots` | `SNAPSHOT_RETENTION_CRON`, `PORTFOLIO_SNAPSHOT_TZ` | `0 3 * * *` (03:00 UTC) |
 
 Scheduler registration is retried with bounded backoff, so a worker that starts
 while Redis is briefly unavailable still registers once Redis returns.
