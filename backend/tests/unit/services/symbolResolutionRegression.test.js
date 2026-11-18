@@ -814,4 +814,80 @@ describe("Symbol Resolution & Mapping Regression Suite", () => {
       });
     });
   });
+
+  describe("Item 6: Deduplication of Database Symbol Lookups", () => {
+    test("skips redundant database queries when valid pre-resolved metadata (_resolved) is provided", async () => {
+      const preResolved = {
+        canonicalSymbol: "AAPL",
+        assetClass: "STOCK",
+        name: "Apple Inc.",
+        exchange: "NASDAQ",
+        currency: "USD",
+        isActive: true,
+        isTradable: true,
+        provider: "finnhub",
+        providerSymbol: "AAPL",
+        displaySymbol: "AAPL",
+        source: "database",
+      };
+
+      const result = await resolveSymbol("AAPL", {
+        prisma: mockPrisma,
+        _resolved: preResolved,
+      });
+
+      expect(result).toBe(preResolved);
+      expect(mockPrisma.symbol.findUnique).not.toHaveBeenCalled();
+    });
+
+    test("performs database query if _resolved canonicalSymbol does not match requested symbol", async () => {
+      mockPrisma.symbol.findUnique.mockResolvedValue({
+        id: "sym-msft",
+        symbol: "MSFT",
+        assetType: "STOCK",
+        name: "Microsoft Corporation",
+        isActive: true,
+      });
+
+      const mismatchResolved = {
+        canonicalSymbol: "AAPL",
+        assetClass: "STOCK",
+      };
+
+      const result = await resolveSymbol("MSFT", {
+        prisma: mockPrisma,
+        _resolved: mismatchResolved,
+      });
+
+      expect(result.canonicalSymbol).toBe("MSFT");
+      expect(mockPrisma.symbol.findUnique).toHaveBeenCalledWith({
+        where: { symbol: "MSFT" },
+      });
+    });
+
+    test("service.getQuote avoids duplicate prisma query when _resolved is passed", async () => {
+      const preResolved = {
+        canonicalSymbol: "BTCUSDT",
+        assetClass: "CRYPTO",
+        name: "BTC/USDT",
+        exchange: "BINANCE",
+        currency: "USDT",
+        isActive: true,
+        isTradable: true,
+        provider: "binance",
+        providerSymbol: "BTCUSDT",
+        displaySymbol: "BTC/USDT",
+        source: "database",
+      };
+
+      const quote = await service.getQuote("BTCUSDT", {
+        prisma: mockPrisma,
+        _resolved: preResolved,
+      });
+
+      expect(mockCryptoProvider.getQuote).toHaveBeenCalledWith("BTCUSDT");
+      expect(mockPrisma.symbol.findUnique).not.toHaveBeenCalled();
+      expect(quote.assetClass).toBe("CRYPTO");
+    });
+  });
 });

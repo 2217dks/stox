@@ -32,6 +32,7 @@ module.exports = {
         marketDataService.getQuote(resolved.canonicalSymbol, {
           ...options,
           assetClass: resolved.assetClass,
+          _resolved: resolved,
         }),
     );
   },
@@ -53,6 +54,7 @@ module.exports = {
         limit: 10,
         assetClass: resolved.assetClass,
         ...options,
+        _resolved: resolved,
       },
     );
 

@@ -77,4 +77,19 @@ describe("marketData quote caching", () => {
       expect.any(Function),
     );
   });
+
+  test("passes pre-resolved metadata (_resolved) to avoid duplicate symbol resolution", async () => {
+    await marketData.getQuote("AAPL");
+
+    expect(baseMarketDataService.getQuote).toHaveBeenCalledWith(
+      "AAPL",
+      expect.objectContaining({
+        assetClass: "STOCK",
+        _resolved: expect.objectContaining({
+          canonicalSymbol: "AAPL",
+          assetClass: "STOCK",
+        }),
+      }),
+    );
+  });
 });

@@ -109,28 +109,42 @@ const instrument = await resolveSymbol("AAPL", { prisma });
 ### Ambiguous Symbols & Disambiguation Rules
 
 A bare suffix is not enough: tickers such as `GBTC`, `METH`, `SOL`, `COIN`, `RIOT`, `BITO`, and `ETHE` end in crypto quote assets or overlap crypto tickers, but represent equities or ETFs.
-- Symbols in `KNOWN_AMBIGUOUS_STOCKS` default to `STOCK`.
-- Non-empty base assets of at least 2 characters before quote assets (`USDT`, `BTC`, `ETH`) infer `CRYPTO`.
-- Clients can pass an explicit `assetClass` (`STOCK` or `CRYPTO`) to override inference for ambiguous instruments.
+- **Ambiguous symbols** (e.g. `ETH`, `GBTC`, `SOL`, `XYZ`): Single-token symbols that cannot be unambiguously classified from syntax alone accept explicit asset-class overrides (`STOCK` or `CRYPTO`), subject to authoritative database validation.
+- **Unambiguous crypto instruments** (e.g. `BTCUSDT`, `ETHBTC`, `SOLUSDT`, `BTC/USDT`, `BINANCE:BTCUSDT`): Identified by major crypto base assets (`BTC`, `ETH`, `SOL`, `XRP`, `BNB`, etc.) or slash notation. An explicit `STOCK` override contradicting unambiguous crypto format is rejected with `422 MARKET_DATA_UNSUPPORTED_ASSET_CLASS`.
 
-### Database Precedence & Resolution Rules (`resolveSymbol`)
+### 7-Step Resolution Precedence Hierarchy (`resolveSymbol`)
 
-All market-data paths (`getQuote`, `getHistoricalPrices`, `getHistoricalPrice`) resolve instruments through `resolveSymbol()`:
+All market-data paths (`getQuote`, `getHistoricalPrices`, `getHistoricalPrice`) resolve instruments through `resolveSymbol()` according to a strict 7-step hierarchy:
 
-1. **Authoritative Database Precedence**:
-   - When a symbol exists in the PostgreSQL `Symbol` table, its database metadata (`assetType`, `exchange`, `currency`) takes absolute precedence over syntax-based inference.
-   - For example, an equity registered as `XYZUSDT` with `assetType: "STOCK"` routes to Finnhub as a stock despite ending in `USDT`.
-   - A single-token cryptocurrency registered as `ETH` with `assetType: "CRYPTO"` routes to Binance as crypto (`ETHUSDT`) despite having no slash or pair suffix.
-2. **Inactive Symbol Enforcement**:
-   - Inactive database records (`isActive: false`) are rejected with `404 SYMBOL_NOT_FOUND` ("Active symbol not found.") unless `includeInactive: true` is explicitly provided.
-3. **Unknown Symbols & Fallback**:
-   - Symbols without a database record fall back to deterministic rule-based inference (`source: "rule"`) by default.
-   - When `strict: true` is supplied, unknown symbols throw `404 SYMBOL_NOT_FOUND`.
-4. **Strict Prefix & Asset-Class Compatibility**:
-   - Conflicting provider prefixes (`FINNHUB:BTCUSDT`, `BINANCE:AAPL`, `BINANCE:GBTC`, `FINNHUB:BTC/USDT`) throw `400 MARKET_DATA_INVALID_REQUEST`.
-   - Explicit asset classes conflicting with prefixes (e.g. `FINNHUB:AAPL` with `assetClass: "CRYPTO"`, or `BINANCE:BTCUSDT` with `assetClass: "STOCK"`) throw `422 MARKET_DATA_UNSUPPORTED_ASSET_CLASS`.
-   - Slash-form crypto notation with conflicting explicit asset class (`BTC/USDT` with `assetClass: "STOCK"`) throws `422 MARKET_DATA_UNSUPPORTED_ASSET_CLASS`.
-   - Querying a database record with a conflicting explicit asset class (e.g. `AAPL` with `assetClass: "CRYPTO"`) throws `400 ASSET_TYPE_MISMATCH`.
+1. **Step 1 — Basic Syntax Validation**:
+   - Verify string type, non-empty, trimmed uppercase representation, and allowed character set (`[A-Z0-9._/:-]`).
+2. **Step 2 — Separate Provider Prefix**:
+   - Parse and extract provider prefix (`FINNHUB:`, `BINANCE:`, or none) via `parseProviderPrefix`. Unsupported prefixes (e.g. `UNKNOWN:`) are rejected with `400 MARKET_DATA_INVALID_REQUEST`.
+   - Derive the underlying canonical symbol (e.g. `BINANCE:BTC/USDT` -> `BTCUSDT`, `FINNHUB:XYZUSDT` -> `XYZUSDT`).
+   - Enforce prefix-level asset-class constraints upfront (`FINNHUB` + `CRYPTO` -> 422; `BINANCE` + `STOCK` -> 422).
+3. **Step 3 — Authoritative Database Lookup**:
+   - Query the PostgreSQL Prisma `Symbol` table for the underlying canonical symbol.
+   - **Database Error Handling**: Database failures (connection drops, query errors) throw `500 DATABASE_ERROR` and do **NOT** silently fall back to rule-based inference. An explicit opt-in (`allowFallbackOnError: true`) is required to allow fallback during DB degradation.
+4. **Step 4 — Validate Provider Prefix against DB Asset Class**:
+   - If a database record exists, enforce that `FINNHUB:` targets a `STOCK` and `BINANCE:` targets a `CRYPTO`. Mismatches throw `400 MARKET_DATA_INVALID_REQUEST`.
+   - Tickers like `FINNHUB:XYZUSDT` succeed when registered as `STOCK` in the database.
+   - Enforce active status: inactive symbols throw `404 SYMBOL_NOT_FOUND` unless `includeInactive: true` is passed.
+5. **Step 5 — Validate Explicit Asset Class against DB Metadata**:
+   - If an explicit `assetClass` was requested and contradicts the database `assetType`, throw `400 ASSET_TYPE_MISMATCH`.
+   - If all checks pass, return authoritative database metadata (`source: "database"`).
+6. **Step 6 — Syntax-Based Inference (No Database Record)**:
+   - If no database record exists (and `strict: true` is not set), apply deterministic syntax inference (`KNOWN_AMBIGUOUS_STOCKS`, `CRYPTO_PAIR_PATTERN`, `CRYPTO_SLASH_PATTERN`).
+7. **Step 7 — Reject Contradictory Prefixes and Asset Classes**:
+   - For unregistered symbols, reject prefixes that contradict inferred syntax (e.g. `FINNHUB:BTCUSDT` or unregistered `FINNHUB:XYZUSDT` where suffix infers crypto -> 400; `BINANCE:AAPL` -> 400).
+   - Reject explicit `STOCK` overrides on unambiguous crypto notation (`422 MARKET_DATA_UNSUPPORTED_ASSET_CLASS`).
+   - If valid, return rule-inferred metadata (`source: "rule"`).
+
+### Database Query Deduplication
+
+To prevent duplicate Prisma database lookups between `marketData.js` (caching wrapper) and `marketDataService.js` (provider execution service):
+- `marketData.getQuote` and `marketData.getHistoricalPrice` resolve the symbol once upfront.
+- Resolved metadata is passed into `marketDataService` via an internal `_resolved` property.
+- `resolveSymbol` validates that `_resolved` matches the requested symbol and asset class, reusing it directly and avoiding redundant database queries.
 
 ---
 

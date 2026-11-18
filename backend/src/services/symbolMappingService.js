@@ -497,6 +497,17 @@ async function resolveSymbol(symbol, options = {}) {
     ? String(options.assetClass).trim().toUpperCase()
     : null;
 
+  // Fast-path: if pre-resolved metadata is provided by a trusted caller (e.g. marketData -> marketDataService),
+  // verify it matches canonicalSymbol and requestedAssetClass before returning directly without redundant DB lookup.
+  if (
+    options._resolved &&
+    typeof options._resolved === "object" &&
+    options._resolved.canonicalSymbol === canonicalSymbol &&
+    (!requestedAssetClass || options._resolved.assetClass === requestedAssetClass)
+  ) {
+    return options._resolved;
+  }
+
   if (requestedAssetClass && !ASSET_CLASS_SET.has(requestedAssetClass)) {
     throw createMarketDataError(
       "Market data is not supported for this asset class.",
