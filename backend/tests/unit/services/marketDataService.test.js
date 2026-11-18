@@ -1,3 +1,9 @@
+jest.mock("../../../src/config/database", () => ({
+  symbol: {
+    findUnique: jest.fn().mockResolvedValue(null),
+  },
+}));
+
 const {
   createMarketDataService,
   normalizeAssetClass,

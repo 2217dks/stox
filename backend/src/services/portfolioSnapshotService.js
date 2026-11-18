@@ -8,6 +8,8 @@ const {
   serializeSnapshot,
 } = require("./portfolioSnapshotRepository");
 
+const { AppError } = require("../utils/errors");
+
 const ZERO = new Prisma.Decimal(0);
 
 function toUtcDateString(dateInput) {
@@ -235,9 +237,74 @@ async function captureAllPortfolioSnapshots({
   return results;
 }
 
+/**
+ * Retrieve chronological daily portfolio snapshots for a caller-owned portfolio.
+ */
+async function getPortfolioDailySnapshots(
+  userId,
+  portfolioId,
+  {
+    from = null,
+    to = null,
+    limit = 100,
+    client = prisma,
+  } = {},
+) {
+  const db = client || prisma;
+
+  const portfolio = await db.portfolio.findFirst({
+    where: {
+      id: portfolioId,
+      userId,
+    },
+    select: {
+      id: true,
+      name: true,
+      currency: true,
+      isActive: true,
+    },
+  });
+
+  if (!portfolio) {
+    throw AppError.notFound("Portfolio not found.", "PORTFOLIO_NOT_FOUND");
+  }
+
+  let fromDate = from ? (from instanceof Date ? from : new Date(from)) : null;
+  let toDate = to ? (to instanceof Date ? to : new Date(to)) : null;
+
+  const where = {
+    portfolioId,
+  };
+
+  if (fromDate || toDate) {
+    where.snapshotDate = {};
+    if (fromDate) where.snapshotDate.gte = fromDate;
+    if (toDate) where.snapshotDate.lte = toDate;
+  }
+
+  const snapshots = await db.performanceSnapshot.findMany({
+    where,
+    orderBy: {
+      snapshotDate: "asc",
+    },
+    take: limit,
+  });
+
+  const serialized = snapshots.map(serializeSnapshot);
+
+  return {
+    portfolioId: portfolio.id,
+    from: fromDate ? fromDate.toISOString().slice(0, 10) : null,
+    to: toDate ? toDate.toISOString().slice(0, 10) : null,
+    count: serialized.length,
+    snapshots: serialized,
+  };
+}
+
 module.exports = {
   toUtcDateString,
   getUtcEndOfDay,
   capturePortfolioSnapshot,
   captureAllPortfolioSnapshots,
+  getPortfolioDailySnapshots,
 };
