@@ -3,6 +3,7 @@ const {
   getLeagueLeaderboard,
   getEffectiveLeagueStatus,
   syncLeagueStatuses,
+  validateMembershipConsistency,
 } = require("../../../src/services/competitionService");
 const prisma = require("../../../src/config/database");
 
@@ -497,5 +498,75 @@ describe("competitionService - UTC Boundary Status Transitions (#128)", () => {
     const cancelled = { ...baseLeague, status: "CANCELLED" };
     expect(getEffectiveLeagueStatus(cancelled, startDate)).toBe("CANCELLED");
     expect(getEffectiveLeagueStatus(cancelled, endDate)).toBe("CANCELLED");
+  });
+});
+
+describe("competitionService - validateMembershipConsistency", () => {
+  test("returns isValid: true when precomputed and eligible locked members match exactly", () => {
+    const precomputed = [
+      { id: "m-1", userId: "u-1" },
+      { id: "m-2", userId: "u-2" },
+    ];
+    const locked = [
+      { id: "m-1", userId: "u-1" },
+      { id: "m-2", userId: "u-2" },
+    ];
+
+    const result = validateMembershipConsistency(precomputed, locked);
+    expect(result.isValid).toBe(true);
+    expect(result.missingMemberIds).toEqual([]);
+    expect(result.unexpectedMemberIds).toEqual([]);
+    expect(result.duplicateMemberIds).toEqual([]);
+  });
+
+  test("returns isValid: true for empty arrays", () => {
+    const result = validateMembershipConsistency([], []);
+    expect(result.isValid).toBe(true);
+    expect(result.missingMemberIds).toEqual([]);
+    expect(result.unexpectedMemberIds).toEqual([]);
+    expect(result.duplicateMemberIds).toEqual([]);
+  });
+
+  test("detects missing members when a participant joined during evaluation", () => {
+    const precomputed = [{ id: "m-1", userId: "u-1" }];
+    const locked = [
+      { id: "m-1", userId: "u-1" },
+      { id: "m-2", userId: "u-2" },
+    ];
+
+    const result = validateMembershipConsistency(precomputed, locked);
+    expect(result.isValid).toBe(false);
+    expect(result.missingMemberIds).toEqual(["m-2"]);
+    expect(result.unexpectedMemberIds).toEqual([]);
+  });
+
+  test("detects unexpected members when a participant left or was suspended", () => {
+    const precomputed = [
+      { id: "m-1", userId: "u-1" },
+      { id: "m-2", userId: "u-2" },
+    ];
+    const locked = [{ id: "m-1", userId: "u-1" }];
+
+    const result = validateMembershipConsistency(precomputed, locked);
+    expect(result.isValid).toBe(false);
+    expect(result.missingMemberIds).toEqual([]);
+    expect(result.unexpectedMemberIds).toEqual(["m-2"]);
+  });
+
+  test("detects duplicate member IDs in precomputed results", () => {
+    const precomputed = [
+      { id: "m-1", userId: "u-1" },
+      { id: "m-1", userId: "u-1" },
+    ];
+    const locked = [{ id: "m-1", userId: "u-1" }];
+
+    const result = validateMembershipConsistency(precomputed, locked);
+    expect(result.isValid).toBe(false);
+    expect(result.duplicateMemberIds).toEqual(["m-1"]);
+  });
+
+  test("handles non-array inputs safely", () => {
+    expect(validateMembershipConsistency(null, []).isValid).toBe(false);
+    expect(validateMembershipConsistency(undefined, []).isValid).toBe(false);
   });
 });

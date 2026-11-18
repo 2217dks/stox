@@ -1,53 +1,42 @@
-const prisma = require("../config/database");
-const { enqueueNotificationDelivery } = require("../queues/notificationQueue");
-const logger = require("../utils/logger");
+const { createNotificationEvent } = require("./notificationEventService");
 
-/**
- * Create the in-app notification for an executed order.
- *
- * Financial state has already committed before this is called. Delivery
- * failures must therefore never roll back or fail the trade.
- *
- * Kept separate from notificationService so the execution layer does not pull
- * in the auth module (and its startup env validation) just to write one row.
- *
- * The row is written first and is the source of truth. Enqueueing delivery is
- * best-effort: if Redis is unavailable the notification still appears in the
- * inbox, and the periodic pending-notification scan retries the outbound
- * channels once Redis returns.
- */
 async function createOrderExecutedNotification({ userId, order, trade }) {
-  const notification = await prisma.notification.create({
+  return createNotificationEvent({
+    eventKey: `order:${order.id}:executed`,
+    userId,
+    type: "ORDER_EXECUTED",
+    title: "Order executed",
+    message: `${order.side} ${order.quantity.toString()} ${order.symbol} executed at ${trade.price.toString()}.`,
     data: {
-      userId,
-      type: "ORDER_EXECUTED",
-      title: "Order executed",
-      message: `${order.side} ${order.quantity.toString()} ${order.symbol} executed at ${trade.price.toString()}.`,
-      data: {
-        orderId: order.id,
-        tradeId: trade.id,
-        symbol: order.symbol,
-        side: order.side,
-        quantity: order.quantity.toString(),
-        price: trade.price.toString(),
-        totalValue: trade.totalValue.toString(),
-      },
+      orderId: order.id,
+      tradeId: trade.id,
+      symbol: order.symbol,
+      side: order.side,
+      quantity: order.quantity.toString(),
+      price: trade.price.toString(),
+      totalValue: trade.totalValue.toString(),
     },
   });
+}
 
-  // Floating on purpose: a slow or disconnected Redis must not delay the trade
-  // response. The catch covers payload-validation failures so this can never
-  // become an unhandled rejection.
-  void enqueueNotificationDelivery({ notificationId: notification.id }).catch(
-    (error) => {
-      logger.warn("Notification delivery enqueue failed", {
-        notificationId: notification.id,
-        message: error.message,
-      });
+async function createCopyTradeExecutedNotification({ userId, order, trade }) {
+  return createNotificationEvent({
+    eventKey: `order:${order.id}:copy-trade-executed`,
+    userId,
+    type: "COPY_TRADE_EXECUTED",
+    title: "Copied trade executed",
+    message: `A copied ${order.side} ${order.quantity.toString()} ${order.symbol} trade executed at ${trade.price.toString()}.`,
+    data: {
+      orderId: order.id,
+      tradeId: trade.id,
+      copyTradeExecutionId: order.copyTradeExecutionId ?? null,
+      symbol: order.symbol,
+      side: order.side,
+      quantity: order.quantity.toString(),
+      price: trade.price.toString(),
+      totalValue: trade.totalValue.toString(),
     },
-  );
-
-  return notification;
+  });
 }
 
 async function createOrderCancelledNotification({
@@ -62,33 +51,21 @@ async function createOrderCancelledNotification({
         ? order.limitPrice.toString()
         : null;
 
-  const notification = await prisma.notification.create({
+  return createNotificationEvent({
+    eventKey: `order:${order.id}:cancelled`,
+    userId,
+    type: "ORDER_CANCELLED",
+    title: "Order cancelled",
+    message: `${order.side} ${order.quantity.toString()} ${order.symbol} order was cancelled.`,
     data: {
-      userId,
-      type: "ORDER_CANCELLED",
-      title: "Order cancelled",
-      message: `${order.side} ${order.quantity.toString()} ${order.symbol} order was cancelled.`,
-      data: {
-        orderId: order.id,
-        symbol: order.symbol,
-        side: order.side,
-        quantity: order.quantity.toString(),
-        price,
-        reason,
-      },
+      orderId: order.id,
+      symbol: order.symbol,
+      side: order.side,
+      quantity: order.quantity.toString(),
+      price,
+      reason,
     },
   });
-
-  void enqueueNotificationDelivery({ notificationId: notification.id }).catch(
-    (error) => {
-      logger.warn("Notification delivery enqueue failed", {
-        notificationId: notification.id,
-        message: error.message,
-      });
-    },
-  );
-
-  return notification;
 }
 
 async function createOrderRejectedNotification({
@@ -108,33 +85,21 @@ async function createOrderRejectedNotification({
         ? order.limitPrice.toString()
         : null;
 
-  const notification = await prisma.notification.create({
+  return createNotificationEvent({
+    eventKey: `order:${order.id}:rejected`,
+    userId,
+    type: "ORDER_REJECTED",
+    title: "Order rejected",
+    message: `${order.side} ${order.quantity.toString()} ${order.symbol} order was rejected: ${reasonText}.`,
     data: {
-      userId,
-      type: "ORDER_REJECTED",
-      title: "Order rejected",
-      message: `${order.side} ${order.quantity.toString()} ${order.symbol} order was rejected: ${reasonText}.`,
-      data: {
-        orderId: order.id,
-        symbol: order.symbol,
-        side: order.side,
-        quantity: order.quantity.toString(),
-        price,
-        reason: reasonText,
-      },
+      orderId: order.id,
+      symbol: order.symbol,
+      side: order.side,
+      quantity: order.quantity.toString(),
+      price,
+      reason: reasonText,
     },
   });
-
-  void enqueueNotificationDelivery({ notificationId: notification.id }).catch(
-    (error) => {
-      logger.warn("Notification delivery enqueue failed", {
-        notificationId: notification.id,
-        message: error.message,
-      });
-    },
-  );
-
-  return notification;
 }
 
 async function createOrderExpiredNotification({
@@ -149,37 +114,26 @@ async function createOrderExpiredNotification({
         ? order.limitPrice.toString()
         : null;
 
-  const notification = await prisma.notification.create({
+  return createNotificationEvent({
+    eventKey: `order:${order.id}:expired`,
+    userId,
+    type: "ORDER_EXPIRED",
+    title: "Order expired",
+    message: `${order.side} ${order.quantity.toString()} ${order.symbol} order expired.`,
     data: {
-      userId,
-      type: "ORDER_EXPIRED",
-      title: "Order expired",
-      message: `${order.side} ${order.quantity.toString()} ${order.symbol} order expired.`,
-      data: {
-        orderId: order.id,
-        symbol: order.symbol,
-        side: order.side,
-        quantity: order.quantity.toString(),
-        price,
-        reason,
-      },
+      orderId: order.id,
+      symbol: order.symbol,
+      side: order.side,
+      quantity: order.quantity.toString(),
+      price,
+      reason,
     },
   });
-
-  void enqueueNotificationDelivery({ notificationId: notification.id }).catch(
-    (error) => {
-      logger.warn("Notification delivery enqueue failed", {
-        notificationId: notification.id,
-        message: error.message,
-      });
-    },
-  );
-
-  return notification;
 }
 
 module.exports = {
   createOrderExecutedNotification,
+  createCopyTradeExecutedNotification,
   createOrderCancelledNotification,
   createOrderRejectedNotification,
   createOrderExpiredNotification,
