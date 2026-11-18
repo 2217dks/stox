@@ -4,6 +4,8 @@ const {
   riskMetricsQuerySchema,
   benchmarkComparisonQuerySchema,
   monthlyPerformanceQuerySchema,
+  realizedPnlQuerySchema,
+  unrealizedPnlQuerySchema,
 } = require("../../../src/validators/portfolioValidator");
 
 describe("Portfolio Analytics Validators Unit Tests", () => {
@@ -214,6 +216,69 @@ describe("Portfolio Analytics Validators Unit Tests", () => {
       });
       expect(reversedIso.success).toBe(false);
       expect(reversedIso.error.issues[0].path).toContain("to");
+    });
+  });
+
+  describe("realizedPnlQuerySchema", () => {
+    test("allows empty query and defaults period when provided", () => {
+      const parsed = realizedPnlQuerySchema.parse({});
+      expect(parsed).toEqual({ period: "1M" });
+
+      const withPeriod = realizedPnlQuerySchema.parse({ period: "3m" });
+      expect(withPeriod.period).toBe("3M");
+    });
+
+    test("accepts valid symbol and date range", () => {
+      const parsed = realizedPnlQuerySchema.parse({
+        symbol: "aapl",
+        from: "2026-01-01T00:00:00Z",
+        to: "2026-01-10T00:00:00Z",
+      });
+      expect(parsed.symbol).toBe("AAPL");
+      expect(parsed.from).toBeInstanceOf(Date);
+      expect(parsed.to).toBeInstanceOf(Date);
+    });
+
+    test("rejects reversed from/to range", () => {
+      const result = realizedPnlQuerySchema.safeParse({
+        from: "2026-01-15T00:00:00Z",
+        to: "2026-01-10T00:00:00Z",
+      });
+      expect(result.success).toBe(false);
+      expect(result.error.issues[0].path).toContain("to");
+    });
+  });
+
+  describe("unrealizedPnlQuerySchema", () => {
+    test("defaults rejectStale and allowStale to false", () => {
+      const parsed = unrealizedPnlQuerySchema.parse({});
+      expect(parsed).toEqual({
+        rejectStale: false,
+        allowStale: false,
+        maxAgeSeconds: undefined,
+      });
+    });
+
+    test("parses string booleans and integer maxAgeSeconds", () => {
+      const parsed = unrealizedPnlQuerySchema.parse({
+        rejectStale: "true",
+        allowStale: "1",
+        maxAgeSeconds: "120",
+      });
+      expect(parsed).toEqual({
+        rejectStale: true,
+        allowStale: true,
+        maxAgeSeconds: 120,
+      });
+    });
+
+    test("rejects invalid maxAgeSeconds", () => {
+      expect(() =>
+        unrealizedPnlQuerySchema.parse({ maxAgeSeconds: "0" }),
+      ).toThrow();
+      expect(() =>
+        unrealizedPnlQuerySchema.parse({ maxAgeSeconds: "not-a-number" }),
+      ).toThrow();
     });
   });
 });

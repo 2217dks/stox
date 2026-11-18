@@ -26,10 +26,21 @@ function normalizeBinanceSymbol(symbol) {
   return toProviderSymbol(symbol, "binance");
 }
 
-function createBinanceMarketDataProvider(config, { httpClient } = {}) {
+function createBinanceMarketDataProvider(config = {}, { httpClient } = {}) {
+  const retryOptions = config.retry
+    ? {
+        retries: config.retry.maxRetries,
+        baseDelayMs: config.retry.baseDelayMs,
+        maxDelayMs: config.retry.maxDelayMs,
+      }
+    : {};
   const client =
     httpClient ||
-    createHttpClient({ baseURL: config.baseUrl, timeoutMs: config.timeoutMs });
+    createHttpClient({
+      baseURL: config.baseUrl,
+      timeoutMs: config.timeoutMs,
+      retry: config.retry,
+    });
 
   return {
     id: "binance",
@@ -37,9 +48,14 @@ function createBinanceMarketDataProvider(config, { httpClient } = {}) {
 
     async getQuote(symbol) {
       const providerSymbol = normalizeBinanceSymbol(symbol);
-      const payload = await getData(client, "/api/v3/ticker/24hr", {
-        symbol: providerSymbol,
-      });
+      const payload = await getData(
+        client,
+        "/api/v3/ticker/24hr",
+        {
+          symbol: providerSymbol,
+        },
+        retryOptions,
+      );
       return mapBinanceQuote(payload, providerSymbol);
     },
 
@@ -51,13 +67,18 @@ function createBinanceMarketDataProvider(config, { httpClient } = {}) {
           "MARKET_DATA_INVALID_REQUEST",
         );
       }
-      const data = await getData(client, "/api/v3/klines", {
-        symbol: normalizeBinanceSymbol(symbol),
-        interval,
-        startTime: from,
-        endTime: to,
-        limit,
-      });
+      const data = await getData(
+        client,
+        "/api/v3/klines",
+        {
+          symbol: normalizeBinanceSymbol(symbol),
+          interval,
+          startTime: from,
+          endTime: to,
+          limit,
+        },
+        retryOptions,
+      );
       if (!Array.isArray(data)) throw invalidProviderResponse();
 
       const prices = data.map((row) => {
@@ -89,7 +110,12 @@ function createBinanceMarketDataProvider(config, { httpClient } = {}) {
     },
 
     async getMarketOverview({ limit = 10 } = {}) {
-      const data = await getData(client, "/api/v3/ticker/24hr", {});
+      const data = await getData(
+        client,
+        "/api/v3/ticker/24hr",
+        {},
+        retryOptions,
+      );
       if (!Array.isArray(data)) throw invalidProviderResponse();
       const rows = data.map((item) => {
         assertObject(item);
@@ -132,7 +158,7 @@ function createBinanceMarketDataProvider(config, { httpClient } = {}) {
 
     async searchSymbols(query) {
       const data = assertObject(
-        await getData(client, "/api/v3/exchangeInfo", {}),
+        await getData(client, "/api/v3/exchangeInfo", {}, retryOptions),
       );
       if (!Array.isArray(data.symbols)) throw invalidProviderResponse();
       const normalizedQuery = query.toUpperCase();

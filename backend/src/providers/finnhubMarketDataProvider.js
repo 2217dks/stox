@@ -24,12 +24,20 @@ const FINNHUB_RESOLUTIONS = Object.freeze({
 
 function createFinnhubMarketDataProvider(config = {}, { httpClient } = {}) {
   const apiKey = typeof config.apiKey === "string" ? config.apiKey.trim() : "";
+  const retryOptions = config.retry
+    ? {
+        retries: config.retry.maxRetries,
+        baseDelayMs: config.retry.baseDelayMs,
+        maxDelayMs: config.retry.maxDelayMs,
+      }
+    : {};
   const client =
     httpClient ||
     createHttpClient({
       baseURL: config.baseUrl,
       timeoutMs: config.timeoutMs,
       headers: apiKey ? { "X-Finnhub-Token": apiKey } : {},
+      retry: config.retry,
     });
 
   function requireApiKey() {
@@ -49,7 +57,12 @@ function createFinnhubMarketDataProvider(config = {}, { httpClient } = {}) {
     async getQuote(symbol) {
       requireApiKey();
       const providerSymbol = toProviderSymbol(symbol, "finnhub");
-      const payload = await getData(client, "/quote", { symbol: providerSymbol });
+      const payload = await getData(
+        client,
+        "/quote",
+        { symbol: providerSymbol },
+        retryOptions,
+      );
       return mapFinnhubQuote(payload, providerSymbol);
     },
 
@@ -66,12 +79,17 @@ function createFinnhubMarketDataProvider(config = {}, { httpClient } = {}) {
       }
 
       const data = assertObject(
-        await getData(client, "/stock/candle", {
-          symbol: providerSymbol,
-          resolution,
-          from: Math.floor(from / 1000),
-          to: Math.floor(to / 1000),
-        }),
+        await getData(
+          client,
+          "/stock/candle",
+          {
+            symbol: providerSymbol,
+            resolution,
+            from: Math.floor(from / 1000),
+            to: Math.floor(to / 1000),
+          },
+          retryOptions,
+        ),
       );
 
       if (data.s === "no_data") {
@@ -117,7 +135,12 @@ function createFinnhubMarketDataProvider(config = {}, { httpClient } = {}) {
     async getMarketOverview() {
       requireApiKey();
       const data = assertObject(
-        await getData(client, "/stock/market-status", { exchange: "US" }),
+        await getData(
+          client,
+          "/stock/market-status",
+          { exchange: "US" },
+          retryOptions,
+        ),
       );
       if (typeof data.isOpen !== "boolean") throw invalidProviderResponse();
       return {
@@ -138,7 +161,9 @@ function createFinnhubMarketDataProvider(config = {}, { httpClient } = {}) {
 
     async searchSymbols(query) {
       requireApiKey();
-      const data = assertObject(await getData(client, "/search", { q: query }));
+      const data = assertObject(
+        await getData(client, "/search", { q: query }, retryOptions),
+      );
       if (!Array.isArray(data.result)) throw invalidProviderResponse();
       return data.result.map((item) => {
         if (!item || typeof item !== "object") throw invalidProviderResponse();

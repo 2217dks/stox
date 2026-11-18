@@ -4,7 +4,7 @@ jest.mock("../../../src/config/database", () => ({
 
 const { Prisma } = require("@prisma/client");
 
-const { serializeTrade } = require("../../../src/services/tradeService");
+const { serializeTrade, executeOrder } = require("../../../src/services/tradeService");
 
 // Contract for the trade read API: Decimal columns are serialized as strings
 // so precision survives JSON, and nullable realized P&L stays null for buys.
@@ -58,6 +58,27 @@ describe("serializeTrade", () => {
       price: "100",
       totalValue: "200",
       fees: "0",
+    });
+  });
+});
+
+describe("executeOrder fee validation", () => {
+  test.each([
+    [-1, "negative number"],
+    ["-0.01", "negative string"],
+    [NaN, "NaN"],
+    [Infinity, "Infinity"],
+    [-Infinity, "-Infinity"],
+    ["invalid", "non-numeric string"],
+    [null, "null"],
+    [{}, "object"],
+  ])("rejects invalid fee %s with INVALID_TRADE_FEE before transaction", async (invalidFee) => {
+    await expect(
+      executeOrder("order-id", "100", { fees: invalidFee }),
+    ).rejects.toMatchObject({
+      statusCode: 400,
+      code: "INVALID_TRADE_FEE",
+      message: "Trade fee must be a non-negative finite number.",
     });
   });
 });

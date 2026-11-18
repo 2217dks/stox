@@ -55,7 +55,7 @@ const riskFreeRateSchema = z.preprocess((val) => {
   return Number.isFinite(num) ? num : val;
 }, z.number().min(0, "Risk-free rate must be non-negative.").max(1, "Risk-free rate must not exceed 1.0 (100%).").default(0.02));
 
-const { dateBoundSchema } = require("./orderValidator");
+const { dateBoundSchema, symbolField } = require("./orderValidator");
 
 const YEAR_MONTH_PATTERN = /^\d{4}-\d{2}$/;
 const DATE_ONLY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
@@ -154,6 +154,41 @@ const monthlyPerformanceQuerySchema = z
     }
   });
 
+const realizedPnlQuerySchema = z
+  .object({
+    period: periodSchema.optional(),
+    from: dateBoundSchema(0).optional(),
+    to: dateBoundSchema(1).optional(),
+    symbol: symbolField.optional(),
+  })
+  .superRefine((query, ctx) => {
+    if (query.from && query.to && query.from >= query.to) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["to"],
+        message: "'to' must be later than 'from'.",
+      });
+    }
+  });
+
+const unrealizedPnlQuerySchema = z.object({
+  rejectStale: z.preprocess((val) => {
+    if (typeof val === "string") return val.toLowerCase() === "true" || val === "1";
+    if (typeof val === "boolean") return val;
+    return false;
+  }, z.boolean().default(false)),
+  allowStale: z.preprocess((val) => {
+    if (typeof val === "string") return val.toLowerCase() === "true" || val === "1";
+    if (typeof val === "boolean") return val;
+    return false;
+  }, z.boolean().default(false)),
+  maxAgeSeconds: z.preprocess((val) => {
+    if (val === undefined || val === null || val === "") return undefined;
+    const num = Number(val);
+    return Number.isFinite(num) ? num : val;
+  }, z.number().int().min(1).max(86400).optional()),
+});
+
 module.exports = {
   portfolioIdParamsSchema,
   updatePortfolioSchema,
@@ -163,4 +198,6 @@ module.exports = {
   benchmarkComparisonQuerySchema,
   monthlyPerformanceQuerySchema,
   monthlyDateBoundSchema,
+  realizedPnlQuerySchema,
+  unrealizedPnlQuerySchema,
 };

@@ -180,6 +180,22 @@ function toDecimal(value) {
   }
 }
 
+function toValidFee(fees) {
+  if (fees === undefined) {
+    return ZERO;
+  }
+
+  const decimal = toDecimal(fees);
+  if (!decimal || !decimal.isFinite() || decimal.isNegative()) {
+    throw AppError.badRequest(
+      "Trade fee must be a non-negative finite number.",
+      "INVALID_TRADE_FEE",
+    );
+  }
+
+  return decimal;
+}
+
 function toExecutionPrice(price) {
   const decimal = toDecimal(price);
 
@@ -261,17 +277,29 @@ function evaluateOrder(order, currentPrice) {
   }
 }
 
-async function applyBuy(tx, order, quantity, price, totalValue, portfolio) {
+async function applyBuy(
+  tx,
+  order,
+  quantity,
+  price,
+  totalValue,
+  portfolio,
+  fees = ZERO,
+) {
+  const feesDecimal = toValidFee(fees);
   const orderReservedCash = new Prisma.Decimal(order.reservedCash ?? ZERO);
   const portfolioReservedCash = new Prisma.Decimal(
     portfolio.reservedCash ?? ZERO,
   );
   const cashBalance = new Prisma.Decimal(portfolio.cashBalance);
 
+  // Total cash outlay for buying includes both the purchase value and transaction fees.
+  const totalCashOutlay = totalValue.plus(feesDecimal);
+
   // Only the portion above this order's reservation needs additional
   // unreserved cash.
   const additionalCashRequired = Prisma.Decimal.max(
-    totalValue.minus(orderReservedCash),
+    totalCashOutlay.minus(orderReservedCash),
     ZERO,
   );
 
@@ -295,6 +323,10 @@ async function applyBuy(tx, order, quantity, price, totalValue, portfolio) {
     );
   }
 
+  // Acquisition fees are capitalized into the holding's cost basis.
+  const costBasis = totalValue.plus(feesDecimal);
+  const averageBuyPrice = costBasis.dividedBy(quantity);
+
   await tx.$executeRaw`
     INSERT INTO "Holding" (
       "id",
@@ -314,8 +346,8 @@ async function applyBuy(tx, order, quantity, price, totalValue, portfolio) {
       ${order.symbol},
       ${order.assetType}::"AssetType",
       ${quantity},
-      ${price},
-      ${totalValue},
+      ${averageBuyPrice},
+      ${costBasis},
       false,
       now(),
       now()
@@ -335,7 +367,7 @@ async function applyBuy(tx, order, quantity, price, totalValue, portfolio) {
     where: { id: order.portfolioId },
     data: {
       cashBalance: {
-        decrement: totalValue,
+        decrement: totalCashOutlay,
       },
       reservedCash: {
         decrement: orderReservedCash,
@@ -351,7 +383,7 @@ async function applyBuy(tx, order, quantity, price, totalValue, portfolio) {
   });
 }
 
-async function applySell(tx, order, quantity, totalValue) {
+async function applySell(tx, order, quantity, totalValue, fees = ZERO) {
   // Lock the holding and read its current quantity and invested amount.
   //
   // The removed cost basis is proportional to `totalInvested`, not derived
@@ -398,10 +430,11 @@ async function applySell(tx, order, quantity, totalValue) {
   // Rounding the stored remainder at the column scale makes the remainder and
   // the removed basis add back to the original total exactly. A full close is
   // forced to zero in the `newTotalInvested` assignment above, so it can never
-  // retain a rounded residual. Realized P&L uses this same removed basis, so
+  // retain a rounded residual. Realized P&L uses this same removed basis minus fees, so
   // the trade record and the holding can never disagree about what was sold.
+  const feesDecimal = toValidFee(fees);
   const removedCostBasis = currentTotalInvested.minus(newTotalInvested);
-  const realizedPnl = totalValue.minus(removedCostBasis);
+  const realizedPnl = totalValue.minus(removedCostBasis).minus(feesDecimal);
 
   await tx.holding.update({
     where: { id: holding.id },
@@ -411,12 +444,13 @@ async function applySell(tx, order, quantity, totalValue) {
     },
   });
 
-  // A sell only credits cash, so an unconditional increment is safe.
+  // A sell credits net cash (totalValue - fees), so increment cashBalance.
+  const netCashCredit = totalValue.minus(feesDecimal);
   await tx.portfolio.update({
     where: { id: order.portfolioId },
     data: {
       cashBalance: {
-        increment: totalValue,
+        increment: netCashCredit,
       },
     },
   });
@@ -443,13 +477,18 @@ async function applySell(tx, order, quantity, totalValue) {
  * `orderOrId` may be an order row (as in the worker) or a UUID, so callers
  * cannot accidentally execute a stale copy.
  */
-async function executeOrder(orderOrId, price, { now = new Date() } = {}) {
+async function executeOrder(
+  orderOrId,
+  price,
+  { now = new Date(), fees = 0 } = {},
+) {
   const orderId = typeof orderOrId === "string" ? orderOrId : orderOrId?.id;
 
   if (!orderId) {
     throw AppError.badRequest("Order is required.", "INVALID_ORDER");
   }
 
+  const feesDecimal = toValidFee(fees);
   const executionPrice = toExecutionPrice(price);
   const clock = now instanceof Date ? now : new Date(now);
 
@@ -540,9 +579,16 @@ async function executeOrder(orderOrId, price, { now = new Date() } = {}) {
           executionPrice,
           totalValue,
           portfolio,
+          feesDecimal,
         );
       } else if (order.side === "SELL") {
-        const realized = await applySell(tx, order, quantity, totalValue);
+        const realized = await applySell(
+          tx,
+          order,
+          quantity,
+          totalValue,
+          feesDecimal,
+        );
 
         realizedPnl = realized.realizedPnl;
         realizedPnlPct = realized.realizedPnlPct;
@@ -560,7 +606,7 @@ async function executeOrder(orderOrId, price, { now = new Date() } = {}) {
           quantity,
           price: executionPrice,
           totalValue,
-          fees: ZERO,
+          fees: feesDecimal,
           realizedPnl,
           realizedPnlPct,
           executedAt,
@@ -579,7 +625,7 @@ async function executeOrder(orderOrId, price, { now = new Date() } = {}) {
           totalValue: totalValue.toString(),
           realizedPnl: realizedPnl ? realizedPnl.toString() : null,
           realizedPnlPct: realizedPnlPct ? realizedPnlPct.toString() : null,
-          fees: ZERO.toString(),
+          fees: feesDecimal.toString(),
         },
       });
 
@@ -651,6 +697,11 @@ async function executeOrder(orderOrId, price, { now = new Date() } = {}) {
   return trade;
 }
 
+const {
+  calculateRealizedPnl,
+  getPortfolioRealizedPnl,
+} = require("./realizedPnlService");
+
 module.exports = {
   serializeTrade,
   getTrade,
@@ -658,4 +709,6 @@ module.exports = {
   evaluateOrder,
   executeOrder,
   TRADE_SORT_FIELDS,
+  calculateRealizedPnl,
+  getPortfolioRealizedPnl,
 };

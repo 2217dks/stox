@@ -272,6 +272,143 @@ Deactivate or delete a portfolio.
 
 Get current holdings.
 
+## `GET /portfolios/:id/realized-pnl`
+
+Calculate realized P&L from completed sell trades for a caller-owned portfolio.
+
+Sign conventions:
+- Positive (`> 0`): Net profit / gain
+- Negative (`< 0`): Net loss
+- Zero (`= 0`): Breakeven
+
+Cost-basis and fee treatment:
+- Proportional cost basis is deducted based on the portfolio holding's `totalInvested`.
+- Trade fees are deducted directly from realized proceeds (`realizedPnl = totalValue - costBasis - fees`).
+- Exact `Decimal(18, 8)` precision is preserved across partial closes and multiple fills.
+
+### Query Parameters
+
+| Parameter | Type   | Default | Description |
+|-----------|--------|---------|-------------|
+| `period`  | enum   | `1M`    | Observation window: `1W`, `1M`, `3M`, `6M`, `1Y`, `YTD`, `ALL` |
+| `from`    | string | -       | ISO datetime lower bound (inclusive) |
+| `to`      | string | -       | ISO datetime upper bound (exclusive) |
+| `symbol`  | string | -       | Optional symbol filter (e.g. `AAPL`) |
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolioId": "uuid",
+    "period": "1M",
+    "startDate": "2026-10-18T00:00:00.000Z",
+    "endDate": "2026-11-18T00:00:00.000Z",
+    "realizedPnl": "195.00000000",
+    "realizedPnlPct": "15.0000",
+    "totalProceeds": "1500.00000000",
+    "totalCostBasis": "1300.00000000",
+    "totalFees": "5.00000000",
+    "tradeCount": 1,
+    "winningTrades": 1,
+    "losingTrades": 0,
+    "breakevenTrades": 0,
+    "winRate": 1.0,
+    "bySymbol": [
+      {
+        "symbol": "AAPL",
+        "realizedPnl": "195.00000000",
+        "realizedPnlPct": "15.0000",
+        "proceeds": "1500.00000000",
+        "costBasis": "1300.00000000",
+        "fees": "5.00000000",
+        "tradeCount": 1,
+        "winningTrades": 1,
+        "losingTrades": 0,
+        "breakevenTrades": 0
+      }
+    ],
+    "trades": [
+      {
+        "id": "trade-uuid",
+        "orderId": "order-uuid",
+        "symbol": "AAPL",
+        "side": "SELL",
+        "quantity": "10.00000000",
+        "price": "150.00000000",
+        "totalValue": "1500.00000000",
+        "costBasis": "1300.00000000",
+        "fees": "5.00000000",
+        "realizedPnl": "195.00000000",
+        "realizedPnlPct": "15.0000",
+        "executedAt": "2026-11-01T10:00:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+## `GET /portfolios/:id/unrealized-pnl`
+
+Calculate live unrealized P&L for open positions (`quantity > 0`) using eligible market prices and position cost basis.
+
+Sign conventions:
+- Long positions: `currentMarketValue - totalInvested`
+- Short positions: `totalInvested - currentMarketValue`
+
+Freshness & Stale Handling:
+- Never treats missing, null, or stale prices as zero.
+- Each open position exposes freshness context (`isStale`, `freshness`, `ageSeconds`, `priceTimestamp`).
+- When `rejectStale=true`, requests encountering stale quotes fail explicitly with `503 MARKET_DATA_STALE_QUOTE`.
+
+### Query Parameters
+
+| Parameter       | Type    | Default | Description |
+|-----------------|---------|---------|-------------|
+| `rejectStale`   | boolean | `false` | When true, rejects quotes exceeding configured freshness thresholds with `503 MARKET_DATA_STALE_QUOTE` |
+| `allowStale`    | boolean | `false` | When true, permits stale quotes to be included while explicitly marking them `isStale: true` |
+| `maxAgeSeconds` | int     | -       | Optional client-requested maximum quote age limit in seconds (1 to 86400) |
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolioId": "uuid",
+    "totalInvested": "3000.00000000",
+    "marketValue": "3300.00000000",
+    "unrealizedPnl": "300.00000000",
+    "unrealizedPnlPct": "10.0000",
+    "isStale": false,
+    "freshness": "FRESH",
+    "maxAgeSeconds": 15,
+    "positionCount": 1,
+    "asOf": "2026-11-18T00:50:00.000Z",
+    "positions": [
+      {
+        "id": "holding-uuid",
+        "symbol": "AAPL",
+        "assetType": "STOCK",
+        "isShort": false,
+        "quantity": "20.00000000",
+        "averageBuyPrice": "150.00000000",
+        "totalInvested": "3000.00000000",
+        "currentPrice": "165.00000000",
+        "marketValue": "3300.00000000",
+        "unrealizedPnl": "300.00000000",
+        "unrealizedPnlPct": "10.0000",
+        "isStale": false,
+        "freshness": "FRESH",
+        "ageSeconds": 15,
+        "priceTimestamp": "2026-11-18T00:49:45.000Z"
+      }
+    ]
+  }
+}
+```
+
 ## `GET /portfolios/:id/performance`
 
 Get performance history and statistics.
@@ -642,6 +779,24 @@ Stox decouples internal canonical instruments from provider-specific formats:
   - **Stocks (Finnhub)**: Standard equity tickers (e.g. `AAPL`, `MSFT`, `BRK.B`).
 - **Ambiguous Tickers**: Symbols like `GBTC`, `METH`, `SOL`, `COIN`, `RIOT`, and `BITO` default to `STOCK`. Specify `assetClass=CRYPTO` (or pass explicit asset class in orders) to override.
 - **Database Resolution**: PostgreSQL `Symbol` model records are authoritative for instrument metadata (`assetType`, `exchange`, `currency`, `isActive`). Discrepancies between requested asset classes and registered symbols reject with `400 ASSET_TYPE_MISMATCH`.
+
+### Provider Resilience and Retry Policy
+
+All market data provider requests apply bounded retries with exponential backoff and jitter for transient provider failures:
+- **Transient Failures Retried**:
+  - Request timeouts (`HTTP 408`, `HTTP 504`, `ECONNABORTED`, `ETIMEDOUT`, `ESOCKETTIMEDOUT`).
+  - Provider rate limits and throttling (`HTTP 429`, `HTTP 418`, or `HTTP 403` with throttling messages).
+  - Server errors (`HTTP 500`, `HTTP 502`, `HTTP 503`, `HTTP 504`).
+  - Transient network disconnects (`ECONNRESET`, `ECONNREFUSED`, `EPIPE`, `EAI_AGAIN`).
+- **Permanent Failures Never Retried**:
+  - Invalid requests (`HTTP 400`, `HTTP 422`).
+  - Unknown symbols / Not found (`HTTP 404`, Binance error code `-1121`, or `"unknown symbol"`).
+  - Permanent authentication errors (`HTTP 401`, non-rate-limit `HTTP 403`).
+- **Backoff & Jitter**:
+  - Bounded to `MARKET_DATA_MAX_RETRIES` (default: 2 retries, 3 total attempts).
+  - Exponential delay starting at `MARKET_DATA_RETRY_BASE_DELAY_MS` (default: 200ms) up to `MARKET_DATA_RETRY_MAX_DELAY_MS` (default: 2000ms).
+  - Full jitter randomized to prevent synchronized thundering-herd spikes.
+  - Provider `Retry-After` headers (numeric seconds or HTTP dates) are respected when supplied; if a requested retry delay exceeds `MARKET_DATA_RETRY_MAX_DELAY_MS`, the request fails immediately with `MARKET_DATA_RATE_LIMITED` rather than retrying early.
 
 ## `GET /market/search`
 
