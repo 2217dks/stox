@@ -25,15 +25,33 @@ module.exports = {
   async getQuote(symbol, options = {}) {
     const resolved = await resolveSymbol(symbol, options);
 
+    const bypass = Boolean(
+      options.bypass === true ||
+        options.bypassCache === true ||
+        options.skipCache === true ||
+        options.noCache === true,
+    );
+
+    const getQuoteCallback = () =>
+      marketDataService.getQuote(resolved.canonicalSymbol, {
+        ...options,
+        assetClass: resolved.assetClass,
+        _resolved: resolved,
+      });
+
+    if (bypass) {
+      return cacheService.getOrSetPrice(
+        resolved.assetClass,
+        resolved.canonicalSymbol,
+        getQuoteCallback,
+        { ...options, bypass, assetClass: resolved.assetClass },
+      );
+    }
+
     return cacheService.getOrSetPrice(
       resolved.assetClass,
       resolved.canonicalSymbol,
-      () =>
-        marketDataService.getQuote(resolved.canonicalSymbol, {
-          ...options,
-          assetClass: resolved.assetClass,
-          _resolved: resolved,
-        }),
+      getQuoteCallback,
     );
   },
 

@@ -1,6 +1,24 @@
 const DEFAULT_TIMEOUT_MS = 5000;
 const MIN_TIMEOUT_MS = 100;
 const MAX_TIMEOUT_MS = 30000;
+const DEFAULT_MAX_CLOCK_SKEW_SECONDS = 5;
+
+const DEFAULT_FRESHNESS_THRESHOLDS = Object.freeze({
+  CRYPTO: 60,
+  STOCK: 300,
+  DEFAULT: 120,
+});
+
+function readFreshnessThreshold(value, fallback, envName) {
+  if (value === undefined || value === "") return fallback;
+  const num = Number(value);
+  if (!Number.isInteger(num) || num <= 0) {
+    throw new Error(
+      `${envName} must be a positive integer representing seconds.`,
+    );
+  }
+  return num;
+}
 
 function readTimeout(value) {
   if (value === undefined || value === "") return DEFAULT_TIMEOUT_MS;
@@ -42,6 +60,28 @@ function loadMarketDataConfig(env = process.env) {
       ),
     }),
     timeoutMs: readTimeout(env.MARKET_DATA_REQUEST_TIMEOUT_MS),
+    maxClockSkewSeconds: readFreshnessThreshold(
+      env.MARKET_DATA_MAX_CLOCK_SKEW_SECONDS,
+      DEFAULT_MAX_CLOCK_SKEW_SECONDS,
+      "MARKET_DATA_MAX_CLOCK_SKEW_SECONDS",
+    ),
+    freshnessThresholds: Object.freeze({
+      CRYPTO: readFreshnessThreshold(
+        env.MARKET_DATA_FRESHNESS_CRYPTO_SECONDS,
+        DEFAULT_FRESHNESS_THRESHOLDS.CRYPTO,
+        "MARKET_DATA_FRESHNESS_CRYPTO_SECONDS",
+      ),
+      STOCK: readFreshnessThreshold(
+        env.MARKET_DATA_FRESHNESS_STOCK_SECONDS,
+        DEFAULT_FRESHNESS_THRESHOLDS.STOCK,
+        "MARKET_DATA_FRESHNESS_STOCK_SECONDS",
+      ),
+      DEFAULT: readFreshnessThreshold(
+        env.MARKET_DATA_FRESHNESS_DEFAULT_SECONDS,
+        DEFAULT_FRESHNESS_THRESHOLDS.DEFAULT,
+        "MARKET_DATA_FRESHNESS_DEFAULT_SECONDS",
+      ),
+    }),
     providers: Object.freeze({
       finnhub: Object.freeze({
         apiKey: env.FINNHUB_API_KEY?.trim() || null,
@@ -58,5 +98,7 @@ module.exports = {
   DEFAULT_TIMEOUT_MS,
   MIN_TIMEOUT_MS,
   MAX_TIMEOUT_MS,
+  DEFAULT_MAX_CLOCK_SKEW_SECONDS,
+  DEFAULT_FRESHNESS_THRESHOLDS,
   loadMarketDataConfig,
 };
