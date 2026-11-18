@@ -63,7 +63,7 @@ describe("marketData quote caching", () => {
 
     expect(cacheService.getOrSetPrice).toHaveBeenCalledWith(
       "STOCK",
-      "aapl",
+      "AAPL",
       expect.any(Function),
     );
   });
@@ -73,7 +73,7 @@ describe("marketData quote caching", () => {
 
     expect(cacheService.getOrSetPrice).toHaveBeenCalledWith(
       "CRYPTO",
-      "btcusdt",
+      "BTCUSDT",
       expect.any(Function),
     );
   });

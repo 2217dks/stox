@@ -28,6 +28,7 @@ const {
   normalizeSymbol,
   normalizeAssetClass,
   inferAssetClass,
+  resolveSymbol,
 } = require("./symbolMappingService");
 
 function invalidRequest(message) {
@@ -240,13 +241,14 @@ function createMarketDataService({ config, providers } = {}) {
      * Binance. Prices and changes are decimal strings.
      */
     async getQuote(symbol, options = {}) {
-      const assetClass = normalizeAssetClass(options.assetClass, symbol);
-      const normalizedSymbol = normalizeSymbol(symbol);
-      const provider = adapterFor(assetClass);
+      const resolved = await resolveSymbol(symbol, options);
+      const provider = adapterFor(resolved.assetClass);
+      const providerSymbol =
+        resolved.providerSymbol || resolved.canonicalSymbol;
       const result = await callAdapter(() =>
-        provider.getQuote(normalizedSymbol),
+        provider.getQuote(providerSymbol),
       );
-      return assertQuote(result, assetClass);
+      return assertQuote(result, resolved.assetClass);
     },
 
     /**
@@ -256,8 +258,7 @@ function createMarketDataService({ config, providers } = {}) {
      * longer than `limit` interval periods are rejected.
      */
     async getHistoricalPrices(symbol, options = {}) {
-      const assetClass = normalizeAssetClass(options.assetClass, symbol);
-      const normalizedSymbol = normalizeSymbol(symbol);
+      const resolved = await resolveSymbol(symbol, options);
       const { interval } = options;
       const from = Number(options.from);
       const to = Number(options.to);
@@ -281,9 +282,11 @@ function createMarketDataService({ config, providers } = {}) {
         );
       }
 
-      const provider = adapterFor(assetClass);
+      const provider = adapterFor(resolved.assetClass);
+      const providerSymbol =
+        resolved.providerSymbol || resolved.canonicalSymbol;
       const result = await callAdapter(() =>
-        provider.getHistoricalPrices(normalizedSymbol, {
+        provider.getHistoricalPrices(providerSymbol, {
           interval,
           from: numericFrom,
           to: numericTo,
@@ -292,8 +295,8 @@ function createMarketDataService({ config, providers } = {}) {
       );
       const normalized = assertHistoricalPrices(
         result,
-        normalizedSymbol,
-        assetClass,
+        resolved.canonicalSymbol,
+        resolved.assetClass,
         interval,
       );
       return { ...normalized, prices: normalized.prices.slice(0, limit) };
@@ -363,4 +366,5 @@ module.exports = {
   normalizeAssetClass,
   normalizeSymbol,
   inferAssetClass,
+  resolveSymbol,
 };
