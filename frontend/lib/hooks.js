@@ -1,0 +1,380 @@
+"use client";
+
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
+import useSWR, { mutate as globalMutate } from "swr";
+
+import { apiFetch } from "./api";
+import { isCrypto } from "./format";
+import { marketApi } from "./endpoints";
+import {
+  getSocket,
+  releaseMarketSymbol,
+  retainMarketSymbol,
+} from "./socket";
+import { useSession } from "@/store/use-session";
+import { useUI } from "@/store/use-ui";
+import { toQueryString } from "./utils";
+
+export function useDebouncedValue(value, delay = 250) {
+  const [debounced, setDebounced] = useState(value);
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebounced(value), delay);
+    return () => clearTimeout(timer);
+  }, [value, delay]);
+
+  return debounced;
+}
+
+export function useMediaQuery(query) {
+  const [matches, setMatches] = useState(false);
+
+  useEffect(() => {
+    const media = window.matchMedia(query);
+    const update = () => setMatches(media.matches);
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, [query]);
+
+  return matches;
+}
+
+const subscribeToNothing = () => () => {};
+
+export function useMounted() {
+  return useSyncExternalStore(
+    subscribeToNothing,
+    () => true,
+    () => false,
+  );
+}
+
+export function useApi(path, options = {}) {
+  const {
+    query,
+    enabled = true,
+    fallbackData,
+    refreshInterval,
+    revalidateOnFocus = false,
+    keepPreviousData = true,
+    ...swrOptions
+  } = options;
+
+  const key =
+    path && enabled
+      ? `${path}${toQueryString(query)}`
+      : null;
+
+  const result = useSWR(
+    key,
+    () => apiFetch(path, { query }),
+    {
+      revalidateOnFocus,
+      keepPreviousData,
+      refreshInterval,
+      shouldRetryOnError: (error) =>
+        !error?.status || error.status >= 500,
+      errorRetryCount: 1,
+      ...swrOptions,
+    },
+  );
+
+  return {
+    ...result,
+    data: result.data ?? fallbackData ?? null,
+    loading: result.isLoading && result.data === undefined,
+  };
+}
+
+export function useQuote(symbol, assetClass, options = {}) {
+  const type = assetClass || (isCrypto(symbol) ? "CRYPTO" : "STOCK");
+  const key = symbol ? `quote:${type}:${symbol}` : null;
+
+  const { data, error, isLoading, mutate } = useSWR(
+    key,
+    () => marketApi.quote(symbol, type),
+    {
+      refreshInterval: options.refreshInterval ?? 60000,
+      revalidateOnFocus: false,
+      shouldRetryOnError: false,
+    },
+  );
+
+  return { quote: data ?? null, error, loading: isLoading, mutate };
+}
+
+export function useQuotes(symbols = [], assetTypes = {}, options = {}) {
+  const symbolKey = symbols.slice().sort().join(",");
+  const key = symbolKey ? `quotes:${symbolKey}` : null;
+  const [live, setLive] = useState({});
+  const pendingTicksRef = useRef({});
+
+  const { data, error, isLoading, mutate } = useSWR(
+    key,
+    async () => {
+      const results = await Promise.all(
+        symbols.map(async (symbol) => {
+          const assetClass =
+            assetTypes[symbol] || (isCrypto(symbol) ? "CRYPTO" : "STOCK");
+          try {
+            const quote = await marketApi.quote(symbol, assetClass);
+            return [symbol, quote];
+          } catch {
+            return [symbol, null];
+          }
+        }),
+      );
+      return Object.fromEntries(results);
+    },
+    {
+      // Live prices arrive over the market socket. HTTP is only the initial
+      // snapshot plus a slow fallback; the global API limiter is deliberately
+      // tight, so polling every few seconds is not an option.
+      refreshInterval: options.refreshInterval ?? 0,
+      revalidateOnFocus: false,
+      shouldRetryOnError: false,
+    },
+  );
+
+  useEffect(() => {
+    if (!symbolKey || typeof window === "undefined") return undefined;
+
+    const list = symbolKey.split(",");
+    const socket = getSocket("/market");
+
+    const onPrice = (payload) => {
+      if (!payload?.symbol || !list.includes(payload.symbol)) return;
+      // Buffer ticks and flush at most twice a second so a busy market does
+      // not re-render a whole table on every trade.
+      pendingTicksRef.current[payload.symbol] = {
+        price: payload.price,
+        volume: payload.volume,
+        timestamp: payload.timestamp,
+      };
+    };
+
+    socket.on("price-update", onPrice);
+    list.forEach((symbol) =>
+      retainMarketSymbol(symbol, isCrypto(symbol) ? "CRYPTO" : "STOCK"),
+    );
+
+    return () => {
+      socket.off("price-update", onPrice);
+      list.forEach((symbol) => releaseMarketSymbol(symbol));
+    };
+  }, [symbolKey]);
+
+  useEffect(() => {
+    if (!symbolKey) return undefined;
+
+    const id = setInterval(() => {
+      const pending = pendingTicksRef.current;
+      if (Object.keys(pending).length === 0) return;
+      pendingTicksRef.current = {};
+      setLive((previous) => ({ ...previous, ...pending }));
+    }, 500);
+
+    return () => clearInterval(id);
+  }, [symbolKey]);
+
+  const quotes = useMemo(() => {
+    const merged = { ...(data || {}) };
+    Object.entries(live).forEach(([symbol, tick]) => {
+      if (!symbolKey.split(",").includes(symbol)) return;
+      merged[symbol] = { ...(merged[symbol] || {}), ...tick };
+    });
+    return merged;
+  }, [data, live, symbolKey]);
+
+  return {
+    quotes,
+    error,
+    loading: isLoading,
+    mutate,
+  };
+}
+
+export function useMarketOverview(assetClass = "CRYPTO", limit = 6) {
+  const { data, error, isLoading, mutate } = useSWR(
+    `overview:${assetClass}:${limit}`,
+    () => marketApi.overview({ assetClass, limit }),
+    {
+      refreshInterval: 120000,
+      revalidateOnFocus: false,
+      shouldRetryOnError: false,
+    },
+  );
+
+  const movers = (data?.movers ?? []).map((mover) => ({
+    ...mover,
+    symbol: mover.symbol?.replace(/^BINANCE:/i, "") || mover.symbol,
+  }));
+
+  return { overview: data, movers, error, loading: isLoading, mutate };
+}
+
+export function usePortfolios() {
+  const { user, status } = useSession();
+  const result = useApi("/portfolios", {
+    enabled: status === "authed" && Boolean(user),
+    refreshInterval: 300000,
+  });
+
+  const portfolios = useMemo(
+    () => result.data?.portfolios ?? [],
+    [result.data],
+  );
+
+  return { ...result, portfolios };
+}
+
+export function useActivePortfolio() {
+  const { portfolios, loading, error, mutate } = usePortfolios();
+  const activePortfolioId = useUI((state) => state.activePortfolioId);
+  const setActivePortfolioId = useUI((state) => state.setActivePortfolioId);
+
+  const activePortfolios = useMemo(
+    () => portfolios.filter((portfolio) => portfolio.isActive !== false),
+    [portfolios],
+  );
+
+  const activePortfolio = useMemo(() => {
+    if (!activePortfolios.length) return null;
+    return (
+      activePortfolios.find((portfolio) => portfolio.id === activePortfolioId) ||
+      activePortfolios.find((portfolio) => portfolio.isDefault) ||
+      activePortfolios[0]
+    );
+  }, [activePortfolios, activePortfolioId]);
+
+  useEffect(() => {
+    if (
+      activePortfolio &&
+      activePortfolio.id !== activePortfolioId
+    ) {
+      setActivePortfolioId(activePortfolio.id);
+    }
+  }, [activePortfolio, activePortfolioId, setActivePortfolioId]);
+
+  return {
+    portfolios,
+    activePortfolios,
+    portfolio: activePortfolio,
+    portfolioId: activePortfolio?.id ?? null,
+    loading,
+    error,
+    mutate,
+    setActivePortfolioId,
+  };
+}
+
+export function usePortfolioSummary(portfolioId, options = {}) {
+  return useApi(
+    portfolioId ? `/portfolios/${portfolioId}/summary` : null,
+    {
+      refreshInterval: 120000,
+      ...options,
+    },
+  );
+}
+
+export function useHoldings(portfolioId) {
+  return useApi(portfolioId ? `/portfolios/${portfolioId}/holdings` : null, {
+    refreshInterval: 120000,
+  });
+}
+
+export function useUnreadNotifications() {
+  const { status } = useSession();
+  const { data, mutate } = useApi("/notifications", {
+    query: { isRead: false, limit: 1 },
+    enabled: status === "authed",
+    // The notification socket invalidates this cache. A 3-minute fallback
+    // keeps the counter honest without burning the global API budget.
+    refreshInterval: 180000,
+  });
+
+  return {
+    count: data?.pagination?.total ?? 0,
+    mutate,
+  };
+}
+
+export function useInvalidateTrading() {
+  const portfolioId = useActivePortfolio().portfolioId;
+
+  return async () => {
+    const keys = [
+      "/orders",
+      "/trades",
+      "/portfolios",
+      "/notifications",
+    ];
+
+    await Promise.all([
+      ...keys.map((key) => globalMutate((k) => typeof k === "string" && k.startsWith(key))),
+      portfolioId &&
+        globalMutate(
+          (k) =>
+            typeof k === "string" &&
+            (k.startsWith(`/portfolios/${portfolioId}`) ||
+              k.startsWith("quote:")),
+        ),
+    ]);
+  };
+}
+
+/**
+ * Subscribe to a public market room. Returns the latest tick, or null while
+ * the socket is connecting. HTTP quote polling remains the source of truth.
+ */
+export function useMarketStream(symbol, assetClass) {
+  const [tick, setTick] = useState(null);
+
+  useEffect(() => {
+    if (!symbol || typeof window === "undefined") return undefined;
+
+    const socket = getSocket("/market");
+    const normalized = symbol.toUpperCase();
+
+    const onPrice = (payload) => {
+      if (payload?.symbol !== normalized) return;
+      setTick(payload);
+    };
+
+    socket.on("price-update", onPrice);
+    retainMarketSymbol(normalized, assetClass);
+
+    return () => {
+      socket.off("price-update", onPrice);
+      releaseMarketSymbol(normalized);
+    };
+  }, [symbol, assetClass]);
+
+  return tick?.symbol === symbol?.toUpperCase() ? tick : null;
+}
+
+/** A stable interval that pauses when the tab is hidden. */
+export function useVisibleInterval(callback, delay) {
+  const savedCallback = useRef(callback);
+
+  useEffect(() => {
+    savedCallback.current = callback;
+  }, [callback]);
+
+  useEffect(() => {
+    if (!delay) return undefined;
+    const tick = () => {
+      if (document.visibilityState === "visible") savedCallback.current();
+    };
+    const id = setInterval(tick, delay);
+    return () => clearInterval(id);
+  }, [delay]);
+}
