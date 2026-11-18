@@ -211,7 +211,6 @@ async function getData(client, path, params, options = {}) {
         }
         throw mapProviderError(error);
       }
-
       if (logger && typeof logger.warn === "function") {
         logger.warn(
           `Market data transient failure on ${path}; retrying attempt ${attempt + 1}/${maxRetries} after ${delayMs}ms.`,

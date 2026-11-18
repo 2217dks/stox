@@ -8,6 +8,9 @@ const {
   unrealizedPnlQuerySchema,
   portfolioSnapshotsQuerySchema,
   aggregatePnlQuerySchema,
+  portfolioPerformanceQuerySchema,
+  portfolioHistoryQuerySchema,
+  portfolioAllocationQuerySchema,
 } = require("../../../src/validators/portfolioValidator");
 
 describe("Portfolio Analytics Validators Unit Tests", () => {
@@ -359,6 +362,87 @@ describe("Portfolio Analytics Validators Unit Tests", () => {
       });
       expect(result.success).toBe(false);
       expect(result.error.issues[0].path).toContain("to");
+    });
+  });
+  describe("portfolioPerformanceQuerySchema", () => {
+    test("applies default period 1M when query is empty", () => {
+      const parsed = portfolioPerformanceQuerySchema.parse({});
+      expect(parsed).toEqual({
+        period: "1M",
+        year: undefined,
+        from: undefined,
+        to: undefined,
+      });
+    });
+
+    test("parses custom date boundaries and normalized period", () => {
+      const parsed = portfolioPerformanceQuerySchema.parse({
+        period: "1y",
+        year: "2026",
+        from: "2026-01-01",
+        to: "2026-12-31",
+      });
+      expect(parsed.period).toBe("1Y");
+      expect(parsed.year).toBe(2026);
+      expect(parsed.from).toBeInstanceOf(Date);
+      expect(parsed.to).toBeInstanceOf(Date);
+    });
+
+    test("rejects when from is after to", () => {
+      const result = portfolioPerformanceQuerySchema.safeParse({
+        from: "2026-12-31",
+        to: "2026-01-01",
+      });
+      expect(result.success).toBe(false);
+      expect(result.error.issues[0].path).toContain("to");
+    });
+  });
+
+  describe("portfolioHistoryQuerySchema", () => {
+    test("accepts empty query with undefined date bounds", () => {
+      const parsed = portfolioHistoryQuerySchema.parse({});
+      expect(parsed).toEqual({
+        from: undefined,
+        to: undefined,
+      });
+    });
+
+    test("parses valid date bounds", () => {
+      const parsed = portfolioHistoryQuerySchema.parse({
+        from: "2026-10-01",
+        to: "2026-11-01",
+      });
+      expect(parsed.from).toBeInstanceOf(Date);
+      expect(parsed.to).toBeInstanceOf(Date);
+    });
+
+    test("rejects when from is after to", () => {
+      const result = portfolioHistoryQuerySchema.safeParse({
+        from: "2026-11-05",
+        to: "2026-11-01",
+      });
+      expect(result.success).toBe(false);
+      expect(result.error.issues[0].path).toContain("to");
+    });
+  });
+
+  describe("portfolioAllocationQuerySchema", () => {
+    test("defaults dimension to symbol", () => {
+      const parsed = portfolioAllocationQuerySchema.parse({});
+      expect(parsed.dimension).toBe("symbol");
+    });
+
+    test("normalizes uppercase and trims dimension", () => {
+      const parsed = portfolioAllocationQuerySchema.parse({
+        dimension: " ASSET ",
+      });
+      expect(parsed.dimension).toBe("asset");
+    });
+
+    test("rejects unsupported dimension", () => {
+      expect(() =>
+        portfolioAllocationQuerySchema.parse({ dimension: "sector" }),
+      ).toThrow();
     });
   });
 });

@@ -10,6 +10,9 @@ const { getPortfolioRealizedPnl } = require("../services/realizedPnlService");
 const { getPortfolioUnrealizedPnl } = require("../services/unrealizedPnlService");
 const { getPortfolioAggregatePnl } = require("../services/portfolioPnlAggregateService");
 const { getPortfolioDashboard } = require("../services/dashboardService");
+const { getPortfolioPerformance: fetchPortfolioPerformance } = require("../services/portfolioPerformanceService");
+const { getPortfolioHistoricalState } = require("../services/portfolioHistoryService");
+const { getPortfolioAllocation: fetchPortfolioAllocation } = require("../services/portfolioAllocationService");
 const portfolioSnapshotService = require("../services/portfolioSnapshotService");
 const cacheService = require("../services/cacheService");
 
@@ -440,6 +443,57 @@ async function getDashboardSummary(req, res, next) {
   }
 }
 
+async function getPortfolioPerformance(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+    const options = req.validatedQuery || {};
+
+    const result = await fetchPortfolioPerformance(userId, portfolioId, options);
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getPortfolioHistory(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+    const options = req.validatedQuery || {};
+
+    const result = await getPortfolioHistoricalState(userId, portfolioId, options);
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+async function getPortfolioAllocation(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+    const options = req.validatedQuery || {};
+
+    const result = await fetchPortfolioAllocation(userId, portfolioId, options);
+
+    return res.status(200).json({
+      success: true,
+      data: result,
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 module.exports = {
   listPortfolios,
   createPortfolio,
@@ -460,4 +514,7 @@ module.exports = {
   getPortfolioSnapshots,
   getAggregatePnl,
   getDashboardSummary,
+  getPortfolioPerformance,
+  getPortfolioHistory,
+  getPortfolioAllocation,
 };

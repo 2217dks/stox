@@ -552,7 +552,6 @@ Scoped strictly to the authenticated user and portfolio.
 
 > [!NOTE]
 > **Timestamp Consistency**: `asOf` reflects the current live market valuation and quote evaluation clock, while `performance.lastSnapshotDate` / `performance.snapshotDate` reflects the date of the most recent recorded end-of-day snapshot. When the latest snapshot is older than the current valuation date (or if no snapshot has been captured yet), these timestamps will differ and should not be treated as a single synchronized point in time.
-
 ### Response
 
 ```json
@@ -615,7 +614,242 @@ Scoped strictly to the authenticated user and portfolio.
 
 ## `GET /portfolios/:id/performance`
 
-Get performance history and statistics.
+Expose portfolio performance for a requested period using the approved return methodology and baseline anchoring.
+
+### Query Parameters
+
+| Parameter | Type   | Default | Description |
+|-----------|--------|---------|-------------|
+| `period`  | enum   | `1M`    | Window preset: `1W`, `1M`, `3M`, `6M`, `1Y`, `YTD`, `ALL` |
+| `year`    | int    | -       | Optional calendar year filter (e.g. `2026`) |
+| `from`    | string | -       | Custom start boundary (`YYYY-MM-DD` or ISO 8601) |
+| `to`      | string | -       | Custom end boundary (`YYYY-MM-DD` or ISO 8601) |
+
+### Return Methodology & Invariants
+
+- **Baseline**: Anchored to the latest snapshot strictly prior to period start. If no prior snapshot exists, falls back to the first snapshot in the window or the portfolio's starting balance.
+- **Date Boundary Normalization**: Date-only bounds (`to: YYYY-MM-DD`) are normalized to `23:59:59.999Z` of the requested day, ensuring intraday trades and daily end-of-day snapshots on that day are fully captured. Uses centralized date boundary parsing shared with `/history`.
+- **Return %**: Calculated as `(netPnl / startValue) * 100`, formatted to 4 decimal places. Returns `"0.0000"` when start value is zero.
+- **Realized P&L**: Sum of realized P&L from closed trades executed within `[from, to]`.
+- **Unrealized P&L**: Net valuation change minus realized P&L (`netPnl - realizedPnl`).
+- **Time-Weighted Return (TWR)**: Compounded product of daily snapshot return factors $\prod (1 + r_i) - 1$. When the earliest snapshot in the window serves as the baseline (`period_start_snapshot`), its daily return occurred at or prior to that baseline and is not compounded into post-baseline performance, guaranteeing consistent starting points and period boundaries between `returnPct` and `timeWeightedReturnPct` across presets, custom periods, and `ALL`.
+- **Best/Worst Day**: Identifies the single day with highest and lowest daily P&L and return.
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolioId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "period": "1M",
+    "startDate": "2026-10-19T00:00:00.000Z",
+    "endDate": "2026-11-18T23:59:59.999Z",
+    "asOf": "2026-11-18T01:00:00.000Z",
+    "baseline": {
+      "date": "2026-10-18",
+      "source": "prior_snapshot",
+      "totalValue": "10000.00000000",
+      "cashBalance": "5000.00000000",
+      "holdingsValue": "5000.00000000"
+    },
+    "current": {
+      "date": "2026-11-18",
+      "totalValue": "10400.00000000",
+      "cashBalance": "6000.00000000",
+      "holdingsValue": "4400.00000000"
+    },
+    "performance": {
+      "startValue": "10000.00000000",
+      "endValue": "10400.00000000",
+      "netPnl": "400.00000000",
+      "returnPct": "4.0000",
+      "timeWeightedReturnPct": "3.9850",
+      "realizedPnl": "150.00000000",
+      "unrealizedPnl": "250.00000000",
+      "fees": "4.50000000",
+      "tradesCount": 2,
+      "bestDay": {
+        "date": "2026-11-02",
+        "pnl": "300.00000000",
+        "returnPct": "2.9400"
+      },
+      "worstDay": {
+        "date": "2026-11-03",
+        "pnl": "-100.00000000",
+        "returnPct": "-0.9500"
+      }
+    },
+    "series": [
+      {
+        "date": "2026-11-01",
+        "totalValue": "10200.00000000",
+        "cashBalance": "5000.00000000",
+        "holdingsValue": "5200.00000000",
+        "dailyPnl": "200.00000000",
+        "dailyReturnPct": "2.0000"
+      }
+    ]
+  }
+}
+```
+
+## `GET /portfolios/:id/history`
+
+Expose chronological historical portfolio state for a requested time range, combining verified snapshots with executed trade activity and tracking missing date gaps without inventing synthetic records.
+
+Guarantees:
+- **Centralized Date Boundaries**: End dates are normalized to `23:59:59.999Z`, producing consistent query windows compatible with `/performance`.
+- **Distinct Date Validation**: `recordedDays` and `missingDays` metadata are derived strictly from distinct recorded UTC dates, ensuring that duplicate snapshot records on the same day never distort gap calculations or calendar day totals.
+
+### Query Parameters
+
+| Parameter | Type   | Default       | Description |
+|-----------|--------|---------------|-------------|
+| `from`    | string | 30 days ago   | Range start date (`YYYY-MM-DD` or ISO 8601). Maximum window 365 days. |
+| `to`      | string | Current date  | Range end date (`YYYY-MM-DD` or ISO 8601). Must be $\ge$ `from`. |
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolioId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "metadata": {
+      "requestedRange": {
+        "from": "2026-11-01",
+        "to": "2026-11-05"
+      },
+      "totalDays": 5,
+      "recordedDays": 3,
+      "missingDays": 2,
+      "hasGaps": true,
+      "gaps": [
+        {
+          "from": "2026-11-03",
+          "to": "2026-11-04",
+          "missingDays": 2
+        }
+      ]
+    },
+    "history": [
+      {
+        "date": "2026-11-01",
+        "totalValue": "10000.00000000",
+        "cashBalance": "5000.00000000",
+        "holdingsValue": "5000.00000000",
+        "dailyPnl": "0.00000000",
+        "dailyPnlPct": "0.0000",
+        "tradesCount": 0,
+        "tradeVolume": "0.00000000"
+      },
+      {
+        "date": "2026-11-02",
+        "totalValue": "10200.00000000",
+        "cashBalance": "4500.00000000",
+        "holdingsValue": "5700.00000000",
+        "dailyPnl": "200.00000000",
+        "dailyPnlPct": "2.0000",
+        "tradesCount": 2,
+        "tradeVolume": "750.00000000"
+      }
+    ]
+  }
+}
+```
+
+## `GET /portfolios/:id/allocation`
+
+Calculate current portfolio allocation breakdown across requested dimensions (`symbol` or `asset`).
+
+### Query Parameters
+
+| Parameter   | Type | Default  | Description |
+|-------------|------|----------|-------------|
+| `dimension` | enum | `symbol` | Grouping dimension: `symbol` (individual holdings + cash) or `asset` (asset class: `STOCK`, `CRYPTO`, `CASH`). |
+
+### Allocation Rules & Reconciliation
+
+- **Cash Inclusion**: Uninvested cash balance is treated as a first-class allocation component (`CASH`).
+- **Missing Price Fallback & Visibility**: When live market prices are unavailable or non-positive, gracefully falls back to holding `averageBuyPrice` (cost basis). To ensure transparency:
+  - Individual items carry `isPriceEstimated: true` and `priceSource: "cost_basis"`.
+  - The root response carries `isEstimated: true` and `valuationMethod: "estimated"`.
+  - `pricingSummary` provides explicit counts (`totalHoldings`, `liveQuotes`, `estimatedQuotes`).
+  - The `reconciliation` block explicitly carries `isEstimated: true` and `valuationMethod: "estimated"` to prevent implying values are live market valuations.
+- **Zero Value Behavior**: If total portfolio value $\le 0$, all allocation percentages return `"0.0000"`.
+- **Percentage Reconciliation**: Sum of allocation percentages is strictly reconciled to **`100.0000%`** by distributing any 4-decimal rounding residual to the largest holding.
+
+### Response
+
+```json
+{
+  "success": true,
+  "data": {
+    "portfolioId": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+    "dimension": "symbol",
+    "totalPortfolioValue": "10000.00000000",
+    "cashBalance": "2500.00000000",
+    "holdingsValue": "7500.00000000",
+    "holdingsCount": 2,
+    "isEstimated": false,
+    "valuationMethod": "market",
+    "pricingSummary": {
+      "totalHoldings": 2,
+      "liveQuotes": 2,
+      "estimatedQuotes": 0,
+      "hasEstimatedPrices": false
+    },
+    "allocations": [
+      {
+        "key": "MSFT",
+        "name": "MSFT",
+        "dimension": "symbol",
+        "assetType": "STOCK",
+        "quantity": "20.00000000",
+        "price": "300.00000000",
+        "priceSource": "live",
+        "isPriceEstimated": false,
+        "value": "6000.00000000",
+        "percentage": "60.0000"
+      },
+      {
+        "key": "CASH",
+        "name": "Cash Balance",
+        "dimension": "symbol",
+        "assetType": "CASH",
+        "quantity": "1.00000000",
+        "price": "2500.00000000",
+        "priceSource": "portfolio",
+        "isPriceEstimated": false,
+        "value": "2500.00000000",
+        "percentage": "25.0000"
+      },
+      {
+        "key": "AAPL",
+        "name": "AAPL",
+        "dimension": "symbol",
+        "assetType": "STOCK",
+        "quantity": "10.00000000",
+        "price": "150.00000000",
+        "priceSource": "live",
+        "isPriceEstimated": false,
+        "value": "1500.00000000",
+        "percentage": "15.0000"
+      }
+    ],
+    "reconciliation": {
+      "totalPortfolioValue": "10000.00000000",
+      "sumAllocatedValue": "10000.00000000",
+      "totalPercentage": "100.0000",
+      "isReconciled": true,
+      "isEstimated": false,
+      "valuationMethod": "market"
+    },
+    "asOf": "2026-11-18T01:00:00.000Z"
+  }
+}
+```
 
 ## `GET /portfolios/:id/pnl-heatmap`
 

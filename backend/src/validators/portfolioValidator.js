@@ -284,6 +284,47 @@ const aggregatePnlQuerySchema = z
     }
   });
 
+const portfolioPerformanceQuerySchema = z
+  .object({
+    period: periodSchema.optional().default("1M"),
+    year: yearSchema,
+    from: dateBoundSchema(0).optional(),
+    to: dateBoundSchema(1).optional(),
+  })
+  .superRefine((query, ctx) => {
+    if (query.from && query.to && query.from > query.to) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["to"],
+        message: "'to' must be on or after 'from'.",
+      });
+    }
+  });
+
+const portfolioHistoryQuerySchema = z
+  .object({
+    from: dateBoundSchema(0).optional(),
+    to: dateBoundSchema(1).optional(),
+  })
+  .superRefine((query, ctx) => {
+    if (query.from && query.to && query.from > query.to) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["to"],
+        message: "'to' must be on or after 'from'.",
+      });
+    }
+  });
+
+const allocationDimensionSchema = z.preprocess((val) => {
+  if (typeof val === "string") return val.trim().toLowerCase();
+  return val;
+}, z.enum(["symbol", "asset", "assettype"]).default("symbol"));
+
+const portfolioAllocationQuerySchema = z.object({
+  dimension: allocationDimensionSchema,
+});
+
 module.exports = {
   portfolioIdParamsSchema,
   updatePortfolioSchema,
@@ -297,4 +338,7 @@ module.exports = {
   unrealizedPnlQuerySchema,
   portfolioSnapshotsQuerySchema,
   aggregatePnlQuerySchema,
+  portfolioPerformanceQuerySchema,
+  portfolioHistoryQuerySchema,
+  portfolioAllocationQuerySchema,
 };
