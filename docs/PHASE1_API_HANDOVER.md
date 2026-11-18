@@ -141,6 +141,10 @@ Body must contain at least one editable field: `name` (1–100 chars) and/or `de
 
 UUID path parameter. Deactivates the portfolio and returns `200` as `{ data:{ portfolio } }`; it is not a hard-delete contract.
 
+#### `POST /portfolios/:portfolioId/reactivate`
+
+UUID path parameter. Reverses `DELETE /portfolios/:portfolioId` by setting `isActive` back to `true`; holdings, orders and trades are untouched. Idempotent: reactivating an already-active portfolio returns `200` with the current projection. Returns `200` as `{ data:{ portfolio } }`; inaccessible/missing portfolios are service domain errors, normally `404 PORTFOLIO_NOT_FOUND`. Owner-scoped like every other portfolio route.
+
 #### `GET /portfolios/:portfolioId/holdings`
 
 Returns `200` as `{ data:{ portfolioId:"...", holdings:[...] } }`. Holdings are owner-scoped.

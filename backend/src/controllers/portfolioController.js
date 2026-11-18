@@ -111,6 +111,27 @@ async function deletePortfolio(req, res, next) {
   }
 }
 
+async function reactivatePortfolio(req, res, next) {
+  try {
+    const userId = req.user.userId;
+    const { portfolioId } = req.validatedParams;
+
+    const portfolio = await portfolioService.reactivatePortfolio(
+      userId,
+      portfolioId,
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        portfolio,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
 async function getPortfolioHoldings(req, res, next) {
   try {
     const userId = req.user.userId;
@@ -323,6 +344,7 @@ module.exports = {
   getPortfolio,
   updatePortfolio,
   deletePortfolio,
+  reactivatePortfolio,
   getPortfolioHoldings,
   getCashBalance,
   getPortfolioSummary,

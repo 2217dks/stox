@@ -271,6 +271,57 @@ async function deactivatePortfolio(userId, portfolioId) {
   return serializePortfolio(deactivatedPortfolio);
 }
 
+/**
+ * Reactivate a soft-deleted portfolio.
+ *
+ * Deactivation is reversible: holdings, orders and trades are preserved, so
+ * restoring `isActive` makes the portfolio tradeable again. Idempotent, in the
+ * same way as deactivation.
+ */
+async function reactivatePortfolio(userId, portfolioId) {
+  await ensureActiveUser(userId);
+
+  const portfolio = await prisma.portfolio.findFirst({
+    where: {
+      id: portfolioId,
+      userId,
+    },
+  });
+
+  if (!portfolio) {
+    throw createServiceError(
+      "Portfolio not found.",
+      404,
+      "PORTFOLIO_NOT_FOUND",
+    );
+  }
+
+  const invalidateCaches = () =>
+    Promise.all([
+      cacheService.invalidatePortfolio(portfolio.id),
+      cacheService.invalidatePortfolioAnalytics(portfolio.id),
+      cacheService.invalidateUserAnalytics(portfolio.userId),
+    ]);
+
+  if (portfolio.isActive) {
+    await invalidateCaches();
+    return serializePortfolio(portfolio);
+  }
+
+  const reactivatedPortfolio = await prisma.portfolio.update({
+    where: {
+      id: portfolio.id,
+    },
+    data: {
+      isActive: true,
+    },
+  });
+
+  await invalidateCaches();
+
+  return serializePortfolio(reactivatedPortfolio);
+}
+
 async function listPortfolioHoldings(userId, portfolioId) {
   await ensureActiveUser(userId);
 
@@ -453,6 +504,7 @@ module.exports = {
   createPortfolio,
   updatePortfolio,
   deactivatePortfolio,
+  reactivatePortfolio,
   listPortfolioHoldings,
   getPortfolioCashBalance,
   getPortfolioSummary,
