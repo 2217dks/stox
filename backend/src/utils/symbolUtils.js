@@ -6,6 +6,7 @@ const {
   inferAssetClass,
   normalizeAssetClass,
   normalizeSymbol,
+  isUnambiguousCryptoSymbol,
 } = require("../services/symbolMappingService");
 
 /**
@@ -37,4 +38,5 @@ module.exports = {
   inferAssetClass,
   normalizeAssetClass,
   normalizeSymbol,
+  isUnambiguousCryptoSymbol,
 };

@@ -20,6 +20,28 @@ const DEFAULT_ASSET_CLASS_BY_PROVIDER = Object.freeze({
 const CRYPTO_QUOTE_ASSETS = Object.freeze(["USDT", "BTC", "ETH"]);
 const CRYPTO_QUOTE_ASSET_SET = new Set(CRYPTO_QUOTE_ASSETS);
 
+const MAJOR_CRYPTO_BASE_ASSETS = Object.freeze([
+  "BTC",
+  "ETH",
+  "SOL",
+  "BNB",
+  "XRP",
+  "DOGE",
+  "ADA",
+  "AVAX",
+  "DOT",
+  "MATIC",
+  "LINK",
+  "LTC",
+  "BCH",
+  "UNI",
+  "ATOM",
+  "XLM",
+  "NEAR",
+  "ALGO",
+]);
+const MAJOR_CRYPTO_BASE_ASSET_SET = new Set(MAJOR_CRYPTO_BASE_ASSETS);
+
 const CRYPTO_PAIR_PATTERN = new RegExp(
   `^([A-Z0-9]{2,20})(?:${CRYPTO_QUOTE_ASSETS.join("|")})$`,
 );
@@ -119,6 +141,36 @@ function normalizeSymbol(symbol) {
 }
 
 /**
+ * Determine whether a symbol represents an unambiguous crypto instrument notation
+ * (e.g. BTCUSDT, ETHBTC, BTC/USDT, BINANCE:BTCUSDT).
+ * An explicit STOCK override must not contradict these formats.
+ */
+function isUnambiguousCryptoSymbol(symbol) {
+  if (typeof symbol !== "string" || !symbol.trim()) {
+    return false;
+  }
+  const upper = symbol.trim().toUpperCase();
+  if (upper.startsWith("BINANCE:")) {
+    return true;
+  }
+  const clean = upper.replace(/^(?:BINANCE|FINNHUB):/, "");
+  if (clean.includes("/") || CRYPTO_SLASH_PATTERN.test(clean)) {
+    return true;
+  }
+  if (KNOWN_AMBIGUOUS_STOCKS.has(clean)) {
+    return false;
+  }
+  const pairMatch = CRYPTO_PAIR_PATTERN.exec(clean);
+  if (pairMatch) {
+    const base = pairMatch[1];
+    if (MAJOR_CRYPTO_BASE_ASSET_SET.has(base)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * Infer asset class (STOCK or CRYPTO) from symbol syntax and known conventions.
  * Does not misclassify stock tickers that end in crypto quote assets (e.g. GBTC, METH).
  */
@@ -179,10 +231,9 @@ function normalizeAssetClass(value, symbol) {
           "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
         );
       }
-      const clean = upper.replace(/^(?:BINANCE|FINNHUB):/, "");
       if (
-        (CRYPTO_SLASH_PATTERN.test(clean) || clean.includes("/")) &&
-        assetClass === "STOCK"
+        assetClass === "STOCK" &&
+        isUnambiguousCryptoSymbol(upper)
       ) {
         throw createMarketDataError(
           "Market data is not supported for this asset class.",
@@ -233,10 +284,12 @@ function toCanonicalSymbol(symbol, options = {}) {
     );
   }
 
-  // Reject slash-form symbols with conflicting STOCK asset class
+  // Reject unambiguous crypto notation with conflicting STOCK asset class
   if (
-    (CRYPTO_SLASH_PATTERN.test(unprefixed) || unprefixed.includes("/")) &&
-    assetClass === "STOCK"
+    assetClass === "STOCK" &&
+    (isUnambiguousCryptoSymbol(normalized) ||
+      unprefixed.includes("/") ||
+      CRYPTO_SLASH_PATTERN.test(unprefixed))
   ) {
     throw createMarketDataError(
       "Market data is not supported for this asset class.",
@@ -414,6 +467,19 @@ async function resolveSymbol(symbol, options = {}) {
     );
   }
 
+  if (
+    requestedAssetClass === "STOCK" &&
+    (isUnambiguousCryptoSymbol(normalized) ||
+      canonicalSymbol.includes("/") ||
+      CRYPTO_SLASH_PATTERN.test(canonicalSymbol))
+  ) {
+    throw createMarketDataError(
+      "Market data is not supported for this asset class.",
+      422,
+      "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
+    );
+  }
+
   const prisma = options.prisma || getDefaultPrisma();
   let dbRecord = null;
   let dbError = null;
@@ -454,6 +520,17 @@ async function resolveSymbol(symbol, options = {}) {
       throw AppError.badRequest(
         "Asset type does not match the selected symbol.",
         "ASSET_TYPE_MISMATCH",
+      );
+    }
+
+    if (
+      isUnambiguousCryptoSymbol(canonicalSymbol) &&
+      dbRecord.assetType === "STOCK"
+    ) {
+      throw createMarketDataError(
+        "Market data is not supported for this asset class.",
+        422,
+        "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
       );
     }
 
@@ -557,6 +634,7 @@ async function resolveSymbols(symbols, options = {}) {
 module.exports = {
   ASSET_CLASSES,
   CRYPTO_QUOTE_ASSETS,
+  MAJOR_CRYPTO_BASE_ASSETS,
   KNOWN_AMBIGUOUS_STOCKS,
   SUPPORTED_PROVIDERS,
   normalizeSymbol,
@@ -568,4 +646,5 @@ module.exports = {
   parseSymbol,
   resolveSymbol,
   resolveSymbols,
+  isUnambiguousCryptoSymbol,
 };

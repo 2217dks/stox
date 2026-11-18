@@ -85,7 +85,7 @@ describe("symbolMappingService", () => {
 
   describe("normalizeAssetClass", () => {
     test("accepts valid explicit asset classes", () => {
-      expect(normalizeAssetClass("STOCK", "BTCUSDT")).toBe("STOCK");
+      expect(normalizeAssetClass("STOCK", "ETH")).toBe("STOCK");
       expect(normalizeAssetClass("CRYPTO", "WBTC")).toBe("CRYPTO");
       expect(normalizeAssetClass("stock", "aapl")).toBe("STOCK");
       expect(normalizeAssetClass("crypto", "btcusdt")).toBe("CRYPTO");
@@ -106,7 +106,7 @@ describe("symbolMappingService", () => {
       );
     });
 
-    test("rejects conflicting explicit asset classes against prefixes and slash syntax", () => {
+    test("rejects conflicting explicit asset classes against prefixes, pairs, and slash syntax", () => {
       expect(() => normalizeAssetClass("CRYPTO", "FINNHUB:AAPL")).toThrow(
         "Market data is not supported for this asset class.",
       );
@@ -114,6 +114,12 @@ describe("symbolMappingService", () => {
         "Market data is not supported for this asset class.",
       );
       expect(() => normalizeAssetClass("STOCK", "BTC/USDT")).toThrow(
+        "Market data is not supported for this asset class.",
+      );
+      expect(() => normalizeAssetClass("STOCK", "BTCUSDT")).toThrow(
+        "Market data is not supported for this asset class.",
+      );
+      expect(() => normalizeAssetClass("STOCK", "ETHBTC")).toThrow(
         "Market data is not supported for this asset class.",
       );
     });
@@ -138,7 +144,7 @@ describe("symbolMappingService", () => {
       expect(toCanonicalSymbol("BF.B")).toBe("BF.B");
     });
 
-    test("rejects conflicting prefixes or slash forms with incompatible explicit asset class", () => {
+    test("rejects conflicting prefixes or unambiguous crypto pairs with incompatible explicit asset class", () => {
       expect(() =>
         toCanonicalSymbol("FINNHUB:AAPL", { assetClass: "CRYPTO" }),
       ).toThrow("Market data is not supported for this asset class.");
@@ -147,6 +153,12 @@ describe("symbolMappingService", () => {
       ).toThrow("Market data is not supported for this asset class.");
       expect(() =>
         toCanonicalSymbol("BTC/USDT", { assetClass: "STOCK" }),
+      ).toThrow("Market data is not supported for this asset class.");
+      expect(() =>
+        toCanonicalSymbol("BTCUSDT", { assetClass: "STOCK" }),
+      ).toThrow("Market data is not supported for this asset class.");
+      expect(() =>
+        toCanonicalSymbol("ETHBTC", { assetClass: "STOCK" }),
       ).toThrow("Market data is not supported for this asset class.");
     });
   });

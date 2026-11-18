@@ -284,6 +284,84 @@ describe("Symbol Resolution & Mapping Regression Suite", () => {
         code: "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
       });
     });
+
+    test("rejects explicit STOCK asset class with unambiguous crypto pairs (BTCUSDT, ETHBTC) across all entry points", async () => {
+      for (const pair of ["BTCUSDT", "ETHBTC"]) {
+        expect(() => normalizeAssetClass("STOCK", pair)).toThrow(
+          "Market data is not supported for this asset class.",
+        );
+        expect(() => toCanonicalSymbol(pair, { assetClass: "STOCK" })).toThrow(
+          "Market data is not supported for this asset class.",
+        );
+        await expect(
+          resolveSymbol(pair, { assetClass: "STOCK" }),
+        ).rejects.toMatchObject({
+          statusCode: 422,
+          code: "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
+        });
+        await expect(
+          service.getQuote(pair, { assetClass: "STOCK" }),
+        ).rejects.toMatchObject({
+          statusCode: 422,
+          code: "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
+        });
+        await expect(
+          service.getHistoricalPrices(pair, {
+            assetClass: "STOCK",
+            interval: "1d",
+            from: 1_700_000_000_000,
+            to: 1_700_086_400_000,
+          }),
+        ).rejects.toMatchObject({
+          statusCode: 422,
+          code: "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
+        });
+      }
+    });
+
+    test("permits explicit asset-class overrides for ambiguous single-token instruments (ETH, GBTC)", async () => {
+      // ETH as CRYPTO
+      expect(normalizeAssetClass("CRYPTO", "ETH")).toBe("CRYPTO");
+      const ethCanon = toCanonicalSymbol("ETH", { assetClass: "CRYPTO" });
+      expect(ethCanon).toBe("ETH");
+      const ethResolved = await resolveSymbol("ETH", { assetClass: "CRYPTO" });
+      expect(ethResolved.assetClass).toBe("CRYPTO");
+      expect(ethResolved.provider).toBe("binance");
+      expect(ethResolved.providerSymbol).toBe("ETHUSDT");
+
+      const ethQuote = await service.getQuote("ETH", { assetClass: "CRYPTO" });
+      expect(mockCryptoProvider.getQuote).toHaveBeenCalledWith("ETHUSDT");
+      expect(ethQuote.assetClass).toBe("CRYPTO");
+
+      // GBTC as STOCK
+      expect(normalizeAssetClass("STOCK", "GBTC")).toBe("STOCK");
+      const gbtcCanon = toCanonicalSymbol("GBTC", { assetClass: "STOCK" });
+      expect(gbtcCanon).toBe("GBTC");
+      const gbtcResolved = await resolveSymbol("GBTC", { assetClass: "STOCK" });
+      expect(gbtcResolved.assetClass).toBe("STOCK");
+      expect(gbtcResolved.provider).toBe("finnhub");
+
+      const gbtcQuote = await service.getQuote("GBTC", { assetClass: "STOCK" });
+      expect(mockStockProvider.getQuote).toHaveBeenCalledWith("GBTC");
+      expect(gbtcQuote.assetClass).toBe("STOCK");
+    });
+
+    test("rejects when database metadata conflicts with an unambiguous crypto symbol format (BTCUSDT as STOCK in DB)", async () => {
+      mockPrisma.symbol.findUnique.mockResolvedValue({
+        id: "sym-corrupt",
+        symbol: "BTCUSDT",
+        name: "Corrupt Record",
+        assetType: "STOCK", // Conflict: BTCUSDT cannot be a stock
+        isActive: true,
+      });
+
+      await expect(
+        resolveSymbol("BTCUSDT", { prisma: mockPrisma }),
+      ).rejects.toMatchObject({
+        statusCode: 422,
+        code: "MARKET_DATA_UNSUPPORTED_ASSET_CLASS",
+      });
+    });
   });
 
   describe("Item 3: Database Metadata Precedence, Inactive & Unknown Symbols", () => {
