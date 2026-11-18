@@ -652,7 +652,13 @@ For environments running without full BullMQ / Redis worker clusters, or for dai
   - **Atomic Lua Lease Release**: Releases the lease via an atomic Lua script verifying token ownership, preventing race conditions where slow workers clear another instance's lock.
   - **Heartbeat Lease Renewal**: A 10-second interval heartbeat extends the Redis lease by 30 seconds for long runs, ensuring the lock never expires prematurely mid-execution.
 
-### 3. Standalone Snapshot Scripts
+### 3. League Completion Worker (`src/workers/leagueCompletionWorker.js`)
+- **Execution:** Started automatically by `npm run workers` (`src/workers/index.js`).
+- **Cadence & Interval:** Evaluates once per interval (default 60s, configurable via `LEAGUE_COMPLETION_INTERVAL_MS`). Runs an initial tick immediately on startup.
+- **Completion & Final Rankings:** Discovers ending leagues (`endDate <= now`) or `COMPLETED` leagues requiring ranking/notification reconciliation. Evaluates member returns, persists final ranks and returns atomically, and enqueues completion notifications (`LEAGUE_UPDATE`).
+- **Idempotency & Reconciliation:** Idempotently repairs completed leagues with missing notification records or ranks without overwriting previously finalized standings or generating duplicate alerts.
+
+### 4. Standalone Snapshot Scripts
 - **Leaderboard Snapshots:** `npm run leaderboard:snapshot` (`scripts/generate-leaderboard-snapshots.js`)
 - **Portfolio Snapshots:** `npm run portfolio:snapshot` (`scripts/generate-portfolio-snapshots.js`)
   - Supports `--date=YYYY-MM-DD` to target a specific date's EOD valuation.
