@@ -81,7 +81,7 @@ describe("marketData quote caching", () => {
 
     expect(cacheService.getOrSetPrice).toHaveBeenCalledWith(
       "STOCK",
-      "aapl",
+      "AAPL",
       expect.any(Function),
     );
   });
@@ -91,8 +91,23 @@ describe("marketData quote caching", () => {
 
     expect(cacheService.getOrSetPrice).toHaveBeenCalledWith(
       "CRYPTO",
-      "btcusdt",
+      "BTCUSDT",
       expect.any(Function),
+    );
+  });
+
+  test("passes pre-resolved metadata (_resolved) to avoid duplicate symbol resolution", async () => {
+    await marketData.getQuote("AAPL");
+
+    expect(baseMarketDataService.getQuote).toHaveBeenCalledWith(
+      "AAPL",
+      expect.objectContaining({
+        assetClass: "STOCK",
+        _resolved: expect.objectContaining({
+          canonicalSymbol: "AAPL",
+          assetClass: "STOCK",
+        }),
+      }),
     );
   });
 });

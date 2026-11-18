@@ -27,11 +27,17 @@ requests.
 
 ### `getQuote(symbol, { assetClass? })`
 
-- `symbol`: nonempty string, up to 30 characters. It is trimmed and uppercased.
-- `assetClass`: `STOCK` or `CRYPTO`. If omitted, `BINANCE:` symbols and
-  symbols ending in `USDT`, `BTC`, or `ETH` are treated as crypto, matching the
-  repository's symbol normalization guidance; other symbols are treated as
-  stocks.
+- `symbol`: nonempty string, up to 30 characters. Normalized, canonicalized,
+  and resolved via `resolveSymbol(symbol, options)` following the 7-step
+  precedence hierarchy (syntax validation -> prefix separation -> database lookup
+  -> prefix validation vs DB -> explicit class validation -> syntax fallback ->
+  rejection of contradictory combinations). Database errors throw 500
+  `DATABASE_ERROR` rather than silently triggering rule fallback.
+- `assetClass`: optional `STOCK` or `CRYPTO`. Mismatches against database
+  metadata reject with `400 ASSET_TYPE_MISMATCH`, conflicts with provider
+  prefixes or slash notation reject with `422 MARKET_DATA_UNSUPPORTED_ASSET_CLASS`,
+  and explicit `STOCK` overrides on unambiguous crypto notation (e.g. `BTCUSDT`,
+  `ETHBTC`, `BINANCE:`) reject with `422 MARKET_DATA_UNSUPPORTED_ASSET_CLASS`.
 - Returns `{ symbol, assetClass, price, change, changePercent, high, low,
 open, previousClose, volume, currency, timestamp, source }`.
 - This exact object is the internal `MarketQuoteDto`. `symbol` and

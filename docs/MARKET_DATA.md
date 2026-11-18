@@ -54,49 +54,97 @@ Both provide **WebSocket streams** for real-time data and **REST APIs** for hist
 
 ---
 
-## 🔤 Symbol Normalization
+## 🔤 Symbol Normalization & Canonical Mapping Layer
+
+stox centralizes all instrument mapping, asset class inference, provider translation, and display formatting in `backend/src/services/symbolMappingService.js` (and re-exports helpers via `symbolUtils.js`):
 
 ```javascript
-// services/marketDataService.js
+const {
+    toCanonicalSymbol,
+    toProviderSymbol,
+    toDisplaySymbol,
+    parseSymbol,
+    inferAssetClass,
+    normalizeAssetClass,
+    resolveSymbol,
+} = require("./services/symbolMappingService");
 
-// Stocks are the default: any ticker Finnhub recognises, not a fixed list.
-// Crypto is inferred only for "BINANCE:..." or a pair with a real base asset
-// and one of the adapter-supported quote assets (USDT, BTC, ETH).
-const CRYPTO_PAIR = /^([A-Z0-9]{2,20})(?:USDT|BTC|ETH)$/;
+// 1. Canonical symbol mapping (provider-agnostic domain identity):
+toCanonicalSymbol("BINANCE:BTCUSDT");   // -> "BTCUSDT"
+toCanonicalSymbol("BTC/USDT");           // -> "BTCUSDT"
+toCanonicalSymbol("FINNHUB:AAPL");       // -> "AAPL"
 
-function inferAssetClass(symbol) {
-    if (symbol.startsWith("BINANCE:")) return "CRYPTO";
-    return CRYPTO_PAIR.test(symbol) ? "CRYPTO" : "STOCK";
-}
+// 2. Provider-specific translation:
+toProviderSymbol("BTCUSDT", "binance");  // -> "BTCUSDT" (for Binance REST & streams)
+toProviderSymbol("AAPL", "finnhub");     // -> "AAPL"    (for Finnhub REST /quote)
 
-export function parseSymbol(symbol) {
-    if (symbol.startsWith("BINANCE:")) {
-        return {
-            exchange: "BINANCE",
-            pair: symbol.replace("BINANCE:", ""),
-            assetType: "CRYPTO",
-        };
-    }
-    return {
-        exchange: "FINNHUB",
-        ticker: symbol,
-        assetType: "STOCK",
-    };
-}
+// 3. Human display formatting:
+toDisplaySymbol("BTCUSDT");              // -> "BTC/USDT"
+toDisplaySymbol("AAPL");                 // -> "AAPL"
 
-export function formatSymbolForDisplay(symbol) {
-    if (symbol.startsWith("BINANCE:")) {
-        const pair = symbol.replace("BINANCE:", "");
-        return pair.replace("USDT", "/USDT");
-    }
-    return symbol;
-}
+// 4. Structured metadata parsing:
+parseSymbol("BINANCE:BTC/USDT");
+// -> {
+//      canonicalSymbol: "BTCUSDT",
+//      providerSymbol: "BTCUSDT",
+//      displaySymbol: "BTC/USDT",
+//      assetClass: "CRYPTO",
+//      provider: "binance",
+//      exchange: "BINANCE",
+//      baseAsset: "BTC",
+//      quoteAsset: "USDT"
+//    }
+
+// 5. Database-backed resolution with PostgreSQL Prisma `Symbol` model:
+const instrument = await resolveSymbol("AAPL", { prisma });
+// -> {
+//      canonicalSymbol: "AAPL",
+//      assetClass: "STOCK",
+//      name: "Apple Inc.",
+//      exchange: "NASDAQ",
+//      source: "database"
+//    }
 ```
 
-A bare suffix is not enough: tickers such as `GBTC` and `METH` end in `BTC`
-and `ETH` but are stocks. Clients can also pass an explicit `assetClass` to
-override inference for genuinely ambiguous symbols. Examples such as `AAPL`
-and `MSFT` are illustrative; they are not an allow-list.
+### Ambiguous Symbols & Disambiguation Rules
+
+A bare suffix is not enough: tickers such as `GBTC`, `METH`, `SOL`, `COIN`, `RIOT`, `BITO`, and `ETHE` end in crypto quote assets or overlap crypto tickers, but represent equities or ETFs.
+- **Ambiguous symbols** (e.g. `ETH`, `GBTC`, `SOL`, `XYZ`): Single-token symbols that cannot be unambiguously classified from syntax alone accept explicit asset-class overrides (`STOCK` or `CRYPTO`), subject to authoritative database validation.
+- **Unambiguous crypto instruments** (e.g. `BTCUSDT`, `ETHBTC`, `SOLUSDT`, `BTC/USDT`, `BINANCE:BTCUSDT`): Identified by major crypto base assets (`BTC`, `ETH`, `SOL`, `XRP`, `BNB`, etc.) or slash notation. An explicit `STOCK` override contradicting unambiguous crypto format is rejected with `422 MARKET_DATA_UNSUPPORTED_ASSET_CLASS`.
+
+### 7-Step Resolution Precedence Hierarchy (`resolveSymbol`)
+
+All market-data paths (`getQuote`, `getHistoricalPrices`, `getHistoricalPrice`) resolve instruments through `resolveSymbol()` according to a strict 7-step hierarchy:
+
+1. **Step 1 — Basic Syntax Validation**:
+   - Verify string type, non-empty, trimmed uppercase representation, and allowed character set (`[A-Z0-9._/:-]`).
+2. **Step 2 — Separate Provider Prefix**:
+   - Parse and extract provider prefix (`FINNHUB:`, `BINANCE:`, or none) via `parseProviderPrefix`. Unsupported prefixes (e.g. `UNKNOWN:`) are rejected with `400 MARKET_DATA_INVALID_REQUEST`.
+   - Derive the underlying canonical symbol (e.g. `BINANCE:BTC/USDT` -> `BTCUSDT`, `FINNHUB:XYZUSDT` -> `XYZUSDT`).
+   - Enforce prefix-level asset-class constraints upfront (`FINNHUB` + `CRYPTO` -> 422; `BINANCE` + `STOCK` -> 422).
+3. **Step 3 — Authoritative Database Lookup**:
+   - Query the PostgreSQL Prisma `Symbol` table for the underlying canonical symbol.
+   - **Database Error Handling**: Database failures (connection drops, query errors) throw `500 DATABASE_ERROR` and do **NOT** silently fall back to rule-based inference. An explicit opt-in (`allowFallbackOnError: true`) is required to allow fallback during DB degradation.
+4. **Step 4 — Validate Provider Prefix against DB Asset Class**:
+   - If a database record exists, enforce that `FINNHUB:` targets a `STOCK` and `BINANCE:` targets a `CRYPTO`. Mismatches throw `400 MARKET_DATA_INVALID_REQUEST`.
+   - Tickers like `FINNHUB:XYZUSDT` succeed when registered as `STOCK` in the database.
+   - Enforce active status: inactive symbols throw `404 SYMBOL_NOT_FOUND` unless `includeInactive: true` is passed.
+5. **Step 5 — Validate Explicit Asset Class against DB Metadata**:
+   - If an explicit `assetClass` was requested and contradicts the database `assetType`, throw `400 ASSET_TYPE_MISMATCH`.
+   - If all checks pass, return authoritative database metadata (`source: "database"`).
+6. **Step 6 — Syntax-Based Inference (No Database Record)**:
+   - If no database record exists (and `strict: true` is not set), apply deterministic syntax inference (`KNOWN_AMBIGUOUS_STOCKS`, `CRYPTO_PAIR_PATTERN`, `CRYPTO_SLASH_PATTERN`).
+7. **Step 7 — Reject Contradictory Prefixes and Asset Classes**:
+   - For unregistered symbols, reject prefixes that contradict inferred syntax (e.g. `FINNHUB:BTCUSDT` or unregistered `FINNHUB:XYZUSDT` where suffix infers crypto -> 400; `BINANCE:AAPL` -> 400).
+   - Reject explicit `STOCK` overrides on unambiguous crypto notation (`422 MARKET_DATA_UNSUPPORTED_ASSET_CLASS`).
+   - If valid, return rule-inferred metadata (`source: "rule"`).
+
+### Database Query Deduplication
+
+To prevent duplicate Prisma database lookups between `marketData.js` (caching wrapper) and `marketDataService.js` (provider execution service):
+- `marketData.getQuote` and `marketData.getHistoricalPrice` resolve the symbol once upfront.
+- Resolved metadata is passed into `marketDataService` via an internal `_resolved` property.
+- `resolveSymbol` validates that `_resolved` matches the requested symbol and asset class, reusing it directly and avoiding redundant database queries.
 
 ---
 
