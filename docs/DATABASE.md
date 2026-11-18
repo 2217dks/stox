@@ -665,6 +665,7 @@ model UserAchievement {
   id              String   @id @default(uuid())
   userId          String
   achievementId   String
+  reason          String   // Snapshot of Achievement.description at grant time.
 
   user            User @relation(fields: [userId], references: [id], onDelete: Cascade)
   achievement     Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)

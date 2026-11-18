@@ -123,8 +123,13 @@ describe("Achievements Integration", () => {
       .set("Authorization", `Bearer ${userAccessToken}`);
 
     expect(mineRes.status).toBe(200);
+    const firstTradeAward = mineRes.body.data.achievements.find(
+      (award) => award.achievement.code === "FIRST_TRADE",
+    );
     const mineCodes = mineRes.body.data.achievements.map((a) => a.achievement.code);
     expect(mineCodes).toContain("FIRST_TRADE");
+    expect(firstTradeAward.reason).toBe("Executed your first trade.");
+    expect(new Date(firstTradeAward.unlockedAt).toString()).not.toBe("Invalid Date");
 
     // Notification created
     const notification = await prisma.notification.findFirst({
@@ -139,6 +144,7 @@ describe("Achievements Integration", () => {
     });
     expect(notification).not.toBeNull();
     expect(notification.title).toBe("Achievement unlocked");
+    expect(notification.data.reason).toBe(firstTradeAward.reason);
   });
 
   test("triggers FIRST_PROFIT on trade with realizedPnl > 0", async () => {
@@ -180,6 +186,48 @@ describe("Achievements Integration", () => {
 
     const mineCodes = mineRes.body.data.achievements.map((a) => a.achievement.code);
     expect(mineCodes).toContain("FIRST_PROFIT");
+  });
+
+  test("keeps the award reason and timestamp stable when the catalog changes", async () => {
+    const originalAchievement = await prisma.achievement.findUnique({
+      where: { code: "FIRST_TRADE" },
+    });
+    const awardUser = await prisma.user.create({
+      data: {
+        name: "Achievement Reason Snapshot User",
+        email: `achievement-reason-${Date.now()}@example.com`,
+      },
+    });
+
+    try {
+      const { grantAchievement } = require("../../src/services/achievementService");
+      const award = await grantAchievement(awardUser.id, "FIRST_TRADE");
+
+      expect(award.reason).toBe(originalAchievement.description);
+
+      await prisma.achievement.update({
+        where: { id: originalAchievement.id },
+        data: { description: "Updated catalog copy." },
+      });
+
+      await expect(
+        grantAchievement(awardUser.id, "FIRST_TRADE"),
+      ).resolves.toBeNull();
+
+      const persistedAward = await prisma.userAchievement.findUnique({
+        where: {
+          userId_achievementId: {
+            userId: awardUser.id,
+            achievementId: originalAchievement.id,
+          },
+        },
+      });
+
+      expect(persistedAward.reason).toBe(originalAchievement.description);
+      expect(persistedAward.unlockedAt).toEqual(award.unlockedAt);
+    } finally {
+      await prisma.user.delete({ where: { id: awardUser.id } });
+    }
   });
 
   test("triggers PORTFOLIO_MILESTONE when portfolio totalValue reaches 2x starting balance", async () => {
@@ -348,6 +396,9 @@ describe("Achievements Integration", () => {
         },
       });
       expect(dbAchievements.length).toBe(1);
+      expect(dbAchievements[0].reason).toBe(
+        "Doubled your portfolio starting balance.",
+      );
 
       const dbNotifications = await prisma.notification.findMany({
         where: {

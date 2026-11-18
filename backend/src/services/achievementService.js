@@ -90,6 +90,9 @@ async function grantAchievement(userId, achievementCode) {
       data: {
         userId,
         achievementId: achievement.id,
+        // Store the human-readable explanation on the award itself so it
+        // remains stable if the catalog description changes later.
+        reason: achievement.description,
       },
       include: {
         achievement: true,
@@ -104,6 +107,7 @@ async function grantAchievement(userId, achievementCode) {
     throw error;
   }
 
+
   if (newlyGranted) {
     try {
       await createNotificationEvent({
@@ -116,7 +120,8 @@ async function grantAchievement(userId, achievementCode) {
           achievementId: achievement.id,
           code: achievement.code,
           name: achievement.name,
-          description: achievement.description,
+          description: userAchievement.reason,
+          reason: userAchievement.reason,
         },
       });
     } catch (notificationError) {
@@ -127,6 +132,7 @@ async function grantAchievement(userId, achievementCode) {
       });
     }
   }
+
 
   return userAchievement;
 }

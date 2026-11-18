@@ -1229,7 +1229,9 @@ Get all available achievements in the catalog.
 
 ## `GET /achievements/mine`
 
-Get achievements unlocked by the authenticated caller.
+Get achievements unlocked by the authenticated caller. Each award includes its
+`unlockedAt` timestamp and a `reason` snapshot of the achievement description
+at the time it was granted.
 
 ### Durable Evaluation & Crash Recovery
 
