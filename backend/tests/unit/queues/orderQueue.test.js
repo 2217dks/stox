@@ -84,6 +84,56 @@ describe("order queue", () => {
       expect(queue.add).not.toHaveBeenCalled();
     });
 
+    test("retries a retained failed job instead of being deduplicated by its id", async () => {
+      const retry = jest.fn(async () => {});
+      queue.getJob.mockResolvedValue({
+        id: ORDER_ID,
+        getState: async () => "failed",
+        retry,
+      });
+
+      const result = await enqueueOrderExecution({ orderId: ORDER_ID });
+
+      expect(retry).toHaveBeenCalledTimes(1);
+      expect(queue.add).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        enqueued: true,
+        jobId: ORDER_ID,
+        retried: true,
+      });
+    });
+
+    test("removes a completed job so the order can be enqueued again", async () => {
+      const remove = jest.fn(async () => {});
+      queue.getJob.mockResolvedValue({
+        id: ORDER_ID,
+        getState: async () => "completed",
+        remove,
+      });
+
+      const result = await enqueueOrderExecution({ orderId: ORDER_ID });
+
+      expect(remove).toHaveBeenCalledTimes(1);
+      expect(queue.add).toHaveBeenCalledTimes(1);
+      expect(result).toEqual({ enqueued: true, jobId: ORDER_ID });
+    });
+
+    test("leaves a waiting job alone", async () => {
+      queue.getJob.mockResolvedValue({
+        id: ORDER_ID,
+        getState: async () => "waiting",
+      });
+
+      const result = await enqueueOrderExecution({ orderId: ORDER_ID });
+
+      expect(queue.add).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        enqueued: false,
+        reason: "ALREADY_QUEUED",
+        state: "waiting",
+      });
+    });
+
     test("never throws when Redis rejects the enqueue", async () => {
       queue.add.mockRejectedValue(new Error("redis down"));
 
