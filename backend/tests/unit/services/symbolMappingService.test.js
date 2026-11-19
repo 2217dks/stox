@@ -231,18 +231,36 @@ describe("symbolMappingService", () => {
         expect(toProviderSymbol("ETHBTC", "binance")).toBe("ETHBTC");
         expect(toProviderSymbol("HYPER/USDC", "binance")).toBe("HYPERUSDC");
         expect(toProviderSymbol("HYPERFDUSD", "binance")).toBe("HYPERFDUSD");
+        expect(toProviderSymbol("BINANCE:HYPERTRY", "binance")).toBe("HYPERTRY");
+        expect(toProviderSymbol("BINANCE:HYPER/TRY", "binance")).toBe("HYPERTRY");
+        expect(toProviderSymbol("BINANCE:HYPERUSDC", "binance")).toBe("HYPERUSDC");
+        expect(toProviderSymbol("BINANCE:HYPERFDUSD", "binance")).toBe("HYPERFDUSD");
+        expect(toProviderSymbol("HYPERTRY", "binance", { assetClass: "CRYPTO" })).toBe("HYPERTRY");
+        expect(toProviderSymbol("BINANCE:BTC/XYZ", "binance")).toBe("BTCXYZ");
+        expect(toProviderSymbol("BINANCE:SOLUNKNOWN", "binance")).toBe("SOLUNKNOWN");
       });
 
-      test("rejects stock symbols for Binance with 400", () => {
+      test("rejects stock symbols and ambiguous stocks for Binance with 400", () => {
         expect(() => toProviderSymbol("AAPL", "binance")).toThrow(
           "The cryptocurrency symbol format is invalid.",
         );
-      });
-
-      test("rejects unsupported quote assets for Binance with 400", () => {
-        expect(() => toProviderSymbol("BTCUSD", "binance")).toThrow(
+        expect(() => toProviderSymbol("GBTC", "binance")).toThrow(
           "The cryptocurrency symbol format is invalid.",
         );
+        expect(() => toProviderSymbol("METH", "binance")).toThrow(
+          "The cryptocurrency symbol format is invalid.",
+        );
+        expect(() => toProviderSymbol("BRK.B", "binance")).toThrow(
+          "The cryptocurrency symbol format is invalid.",
+        );
+      });
+
+      test("normalizes explicit Binance pairs without quote asset whitelist gate", () => {
+        expect(toProviderSymbol("BINANCE:HYPERTRY", "binance")).toBe("HYPERTRY");
+        expect(toProviderSymbol("BINANCE:HYPER/TRY", "binance")).toBe("HYPERTRY");
+        expect(toProviderSymbol("HYPER/TRY", "binance")).toBe("HYPERTRY");
+        expect(toProviderSymbol("BINANCE:ETHBTC", "binance")).toBe("ETHBTC");
+        expect(toProviderSymbol("BINANCE:BTCUNKNOWN", "binance")).toBe("BTCUNKNOWN");
       });
 
       test("rejects non-crypto explicit asset class with 422", () => {
