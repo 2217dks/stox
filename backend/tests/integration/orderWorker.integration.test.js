@@ -559,4 +559,43 @@ describe("processPendingOrders", () => {
     expect(storedFailing.status).toBe("REJECTED");
     expect(storedValid.status).toBe("EXECUTED");
   });
+
+  test("resting orders rotate instead of being starved by the oldest batch", async () => {
+    const older = await createReservedBuyOrder({
+      symbol: "AAPL",
+      type: "LIMIT",
+      limitPrice: "50",
+      createdAt: new Date(Date.now() - 10_000),
+    });
+
+    const newer = await createReservedBuyOrder({
+      symbol: "MSFT",
+      type: "LIMIT",
+      limitPrice: "50",
+      createdAt: new Date(Date.now() - 1_000),
+    });
+
+    // Price is above the limit, so neither order triggers and both stay PENDING.
+    const quoteProvider = quoteAt("100");
+
+    const readAttempts = async () =>
+      prisma.order.findMany({
+        where: { id: { in: [older.id, newer.id] } },
+        select: { id: true, lastExecutionAttemptAt: true },
+      });
+
+    const stampFor = (rows, id) =>
+      rows.find((row) => row.id === id)?.lastExecutionAttemptAt;
+
+    await processPendingOrders({ quoteProvider, portfolioId, limit: 1 });
+    const afterFirst = await readAttempts();
+
+    await processPendingOrders({ quoteProvider, portfolioId, limit: 1 });
+    const afterSecond = await readAttempts();
+
+    // The first scan takes the oldest order; the second must move on to the
+    // other one instead of re-reading the same head of the queue forever.
+    expect(stampFor(afterFirst, older.id)).toBeInstanceOf(Date);
+    expect(stampFor(afterSecond, newer.id)).toBeInstanceOf(Date);
+  });
 });
