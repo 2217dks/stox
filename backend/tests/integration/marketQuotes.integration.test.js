@@ -41,4 +41,68 @@ describe("GET /market/quotes", () => {
 
     expect(response.status).toBe(400);
   });
+
+  test("returns quote for a single symbol", async () => {
+    const spy = jest.spyOn(marketData, "getQuotes").mockResolvedValue([
+      { symbol: "AAPL", assetClass: "STOCK", price: "150" },
+    ]);
+
+    const response = await request(app).get(
+      "/api/v1/market/quotes?symbols=AAPL",
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.quotes).toHaveLength(1);
+    expect(spy).toHaveBeenCalledWith(["AAPL"]);
+  });
+
+  test("supports repeated symbols query parameters", async () => {
+    const spy = jest.spyOn(marketData, "getQuotes").mockResolvedValue([
+      { symbol: "AAPL", assetClass: "STOCK", price: "150" },
+      { symbol: "BINANCE:ETHUSDT", assetClass: "CRYPTO", price: "3000" },
+    ]);
+
+    const response = await request(app).get(
+      "/api/v1/market/quotes?symbols=AAPL&symbols=ETHUSDT",
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.quotes).toHaveLength(2);
+    expect(spy).toHaveBeenCalledWith(["AAPL", "ETHUSDT"]);
+  });
+
+  test("deduplicates symbols in batch query", async () => {
+    const spy = jest.spyOn(marketData, "getQuotes").mockResolvedValue([
+      { symbol: "AAPL", assetClass: "STOCK", price: "150" },
+      { symbol: "MSFT", assetClass: "STOCK", price: "400" },
+    ]);
+
+    const response = await request(app).get(
+      "/api/v1/market/quotes?symbols=AAPL,MSFT,AAPL,MSFT",
+    );
+
+    expect(response.status).toBe(200);
+    expect(spy).toHaveBeenCalledWith(["AAPL", "MSFT"]);
+  });
+
+  test("handles partial failures by returning only fulfilled quotes without 500 error", async () => {
+    jest.spyOn(marketData, "getQuote").mockImplementation(async (sym) => {
+      if (sym === "INVALID_DELISTED") {
+        throw new Error("Provider returned 404");
+      }
+      return { symbol: sym, assetClass: "STOCK", price: "100" };
+    });
+
+    const response = await request(app).get(
+      "/api/v1/market/quotes?symbols=AAPL,INVALID_DELISTED,MSFT",
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.success).toBe(true);
+    expect(response.body.data.quotes).toHaveLength(2);
+    expect(response.body.data.quotes.map((q) => q.symbol)).toEqual([
+      "AAPL",
+      "MSFT",
+    ]);
+  });
 });

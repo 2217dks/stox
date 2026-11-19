@@ -101,14 +101,24 @@ const marketSearchQuerySchema = z
 const batchQuotesQuerySchema = z
   .object({
     symbols: z
-      .string()
-      .trim()
-      .min(1, "symbols is required.")
-      .transform((value) =>
-        value
-          .split(",")
-          .map((symbol) => symbol.trim())
-          .filter(Boolean),
+      .preprocess(
+        (val) => {
+          if (Array.isArray(val)) {
+            return val.join(",");
+          }
+          return typeof val === "string" ? val : "";
+        },
+        z
+          .string()
+          .trim()
+          .min(1, "symbols is required.")
+          .transform((value) => {
+            const raw = value
+              .split(",")
+              .map((symbol) => symbol.trim())
+              .filter(Boolean);
+            return [...new Set(raw)];
+          }),
       )
       .pipe(
         z
