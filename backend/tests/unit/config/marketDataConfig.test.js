@@ -77,10 +77,16 @@ describe("market data configuration", () => {
     expect(config.providerByAssetClass.STOCK).toBe("yahoo");
   });
 
-  test.each([",", " , "])("rejects an empty provider chain %s", (value) => {
+  test.each(["", "   ", ",", " , "])("rejects an empty provider chain %j", (value) => {
     expect(() =>
       loadMarketDataConfig({ MARKET_DATA_STOCK_PROVIDERS: value }),
     ).toThrow("MARKET_DATA_STOCK_PROVIDERS must list at least one");
+  });
+
+  test.each(["", "   "])("rejects an empty legacy primary provider %j", (value) => {
+    expect(() =>
+      loadMarketDataConfig({ MARKET_DATA_STOCK_PROVIDER: value }),
+    ).toThrow("MARKET_DATA_STOCK_PROVIDER must name a market-data provider.");
   });
 
   test("rejects invalid timeout configuration", () => {

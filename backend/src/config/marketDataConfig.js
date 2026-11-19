@@ -102,7 +102,7 @@ function readProviderChain(assetClass, env) {
   const defaults = DEFAULT_PROVIDER_CHAINS[assetClass];
   const chainValue = env[chainEnvName];
 
-  if (chainValue !== undefined && String(chainValue).trim() !== "") {
+  if (chainValue !== undefined) {
     const ids = String(chainValue)
       .split(",")
       .map(normalizeProviderId)
@@ -116,8 +116,13 @@ function readProviderChain(assetClass, env) {
     return unique;
   }
 
+  const primaryValue = env[primaryEnvName];
+  if (primaryValue !== undefined && String(primaryValue).trim() === "") {
+    throw new Error(`${primaryEnvName} must name a market-data provider.`);
+  }
+
   const primary =
-    normalizeProviderId(env[primaryEnvName]) || defaults[0] || null;
+    normalizeProviderId(primaryValue) || defaults[0] || null;
   if (!primary) {
     throw new Error(`${primaryEnvName} must name a market-data provider.`);
   }

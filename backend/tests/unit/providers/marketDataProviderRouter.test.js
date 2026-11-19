@@ -135,4 +135,85 @@ describe("marketDataProviderRouter", () => {
     });
     expect(adapter.getQuote).toHaveBeenCalledWith("TRANSLATED");
   });
+
+  test("deduplicates providers in chain to prevent duplicate candidate invocation", () => {
+    const adapter = provider("finnhub", {
+      markets: ["US"],
+      getQuote: jest.fn(),
+    });
+
+    const candidates = router({
+      chain: ["finnhub", "finnhub"],
+      providers: { finnhub: adapter },
+    }).candidatesFor({
+      assetClass: "STOCK",
+      operation: "quote",
+      resolved: { canonicalSymbol: "AAPL", assetClass: "STOCK" },
+    });
+
+    expect(candidates).toEqual([adapter]);
+  });
+
+  test("warns and skips configured providers missing from the registry", () => {
+    const warn = jest.fn();
+    const adapter = provider("finnhub", {
+      markets: ["US"],
+      getQuote: jest.fn(),
+    });
+
+    const candidates = router({
+      chain: ["missing_provider", "finnhub"],
+      providers: { finnhub: adapter },
+      log: { warn },
+    }).candidatesFor({
+      assetClass: "STOCK",
+      operation: "quote",
+      resolved: { canonicalSymbol: "AAPL", assetClass: "STOCK" },
+    });
+
+    expect(candidates).toEqual([adapter]);
+    expect(warn).toHaveBeenCalledWith(
+      "Configured market data provider not registered",
+      expect.objectContaining({
+        provider: "missing_provider",
+        assetClass: "STOCK",
+      }),
+    );
+  });
+
+  test("throws 503 MARKET_DATA_PROVIDER_UNAVAILABLE when no candidates match", () => {
+    expect(() =>
+      router({
+        chain: ["finnhub"],
+        providers: {},
+      }).candidatesFor({
+        assetClass: "STOCK",
+        operation: "quote",
+        resolved: { canonicalSymbol: "AAPL", assetClass: "STOCK" },
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        statusCode: 503,
+        code: "MARKET_DATA_PROVIDER_UNAVAILABLE",
+      }),
+    );
+  });
+
+  test("throws 503 MARKET_DATA_NOT_CONFIGURED when asset class has no chain", () => {
+    expect(() =>
+      router({
+        chain: ["finnhub"],
+        providers: {},
+      }).candidatesFor({
+        assetClass: "FOREX",
+        operation: "quote",
+        resolved: { canonicalSymbol: "EURUSD", assetClass: "FOREX" },
+      }),
+    ).toThrow(
+      expect.objectContaining({
+        statusCode: 503,
+        code: "MARKET_DATA_NOT_CONFIGURED",
+      }),
+    );
+  });
 });

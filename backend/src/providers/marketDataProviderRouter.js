@@ -76,7 +76,8 @@ function createMarketDataProviderRouter({
   }
 
   function candidatesFor({ assetClass, operation, resolved }) {
-    const chain = providerChainFor(assetClass);
+    const rawChain = providerChainFor(assetClass);
+    const chain = [...new Set(rawChain)];
     const region = resolved
       ? assetClass === "CRYPTO"
         ? GLOBAL_REGION
@@ -86,7 +87,13 @@ function createMarketDataProviderRouter({
 
     for (const providerId of chain) {
       const adapter = providers[providerId];
-      if (!adapter) continue;
+      if (!adapter) {
+        log.warn("Configured market data provider not registered", {
+          provider: providerId,
+          assetClass,
+        });
+        continue;
+      }
       if (!supportsAssetClass(adapter, assetClass)) continue;
       if (!supportsOperation(adapter, operation)) continue;
       // Overview and search are market-wide, not symbol-specific, so their
