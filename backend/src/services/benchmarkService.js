@@ -3,6 +3,7 @@ const defaultMarketData = require("./marketData");
 const prisma = require("../config/database");
 const { resolveDateRange } = require("./portfolioSeriesService");
 const { findSnapshots } = require("./portfolioSnapshotRepository");
+const { MAX_HISTORICAL_LIMIT } = require("../utils/historicalRange");
 
 const ZERO = new Prisma.Decimal(0);
 
@@ -75,11 +76,27 @@ async function getBenchmarkPriceSeries(symbol = "SPY", {
     fromMs = Math.max(0, toMs - 24 * 60 * 60 * 1000);
   }
 
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  // `period=ALL` on an old portfolio asks for years of candles, but the
+  // market-data validator rejects a window longer than interval * limit and
+  // MAX_HISTORICAL_LIMIT is a hard ceiling. Clamp the lookback instead of
+  // returning a 400, and size the limit to the window we actually request.
+  const maxDays = MAX_HISTORICAL_LIMIT - 2;
+
+  if (toMs - fromMs > maxDays * DAY_MS) {
+    fromMs = toMs - maxDays * DAY_MS;
+  }
+
+  const limit = Math.min(
+    MAX_HISTORICAL_LIMIT,
+    Math.max(1, Math.ceil((toMs - fromMs) / DAY_MS) + 2),
+  );
+
   const historical = await marketDataProvider.getHistoricalPrices(benchmark, {
     interval: "1d",
     from: fromMs,
     to: toMs,
-    limit: 500,
+    limit,
   });
 
   const rawCandles = (historical && Array.isArray(historical.prices))
