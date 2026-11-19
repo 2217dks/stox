@@ -21,14 +21,18 @@ const symbols = [
 ];
 
 export function MarketTicker() {
-  // No polling: the market socket streams ticks, and the global API limiter
-  // is tight enough that an idle landing tab would exhaust it.
-  const { quotes } = useQuotes(symbols, {
-    AAPL: "STOCK",
-    NVDA: "STOCK",
-    TSLA: "STOCK",
-    MSFT: "STOCK",
-  });
+  // Low-frequency 60s HTTP fallback keeps the ticker populated if WebSocket
+  // streaming is disconnected or disabled, without exhausting API rate limits.
+  const { quotes } = useQuotes(
+    symbols,
+    {
+      AAPL: "STOCK",
+      NVDA: "STOCK",
+      TSLA: "STOCK",
+      MSFT: "STOCK",
+    },
+    { refreshInterval: 60000 },
+  );
 
   const items = symbols.map((symbol) => ({
     symbol,
@@ -46,8 +50,11 @@ export function MarketTicker() {
     >
       <div className="flex w-max animate-marquee items-center gap-7 pr-7">
         {[...items, ...items].map((item, index) => {
-          const change = Number(item.quote?.changePercent ?? 0);
-          const isUp = change >= 0;
+          const changeVal = Number(item.quote?.changePercent);
+          const hasChange = Number.isFinite(changeVal);
+          const isUp = hasChange && changeVal >= 0;
+          const priceVal = Number(item.quote?.price);
+          const hasPrice = Number.isFinite(priceVal) && priceVal > 0;
 
           return (
             <Link
@@ -61,9 +68,9 @@ export function MarketTicker() {
                 {tickerOf(item.symbol)}
               </span>
               <span className="tnum text-[11.5px] text-fg">
-                {item.quote ? formatCurrency(item.quote.price) : "—"}
+                {hasPrice ? formatCurrency(item.quote.price) : "—"}
               </span>
-              {item.quote?.changePercent != null ? (
+              {hasChange ? (
                 <span
                   className={cn(
                     "tnum inline-flex items-center gap-0.5 text-[10.5px]",

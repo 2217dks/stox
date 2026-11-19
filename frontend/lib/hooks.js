@@ -113,6 +113,16 @@ export function useQuote(symbol, assetClass, options = {}) {
 
 export function useQuotes(symbols = [], assetTypes = {}, options = {}) {
   const symbolKey = symbols.slice().sort().join(",");
+  const assetTypesKey = Object.entries(assetTypes || {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k}:${v}`)
+    .join(",");
+  const stableAssetTypes = useMemo(() => {
+    if (!assetTypesKey) return {};
+    return Object.fromEntries(
+      assetTypesKey.split(",").map((entry) => entry.split(":")),
+    );
+  }, [assetTypesKey]);
   const key = symbolKey ? `quotes:${symbolKey}` : null;
   const [live, setLive] = useState({});
   const pendingTicksRef = useRef({});
@@ -163,7 +173,17 @@ export function useQuotes(symbols = [], assetTypes = {}, options = {}) {
 
       if (index === -1) return;
 
-      pendingTicksRef.current[list[index]] = {
+      const targetSymbol = list[index];
+      const expectedAsset =
+        stableAssetTypes[targetSymbol] ||
+        (isCrypto(targetSymbol) ? "CRYPTO" : "STOCK");
+
+      // When the tick carries an asset class, ensure it matches the requested one
+      if (payload.assetClass && payload.assetClass !== expectedAsset) {
+        return;
+      }
+
+      pendingTicksRef.current[targetSymbol] = {
         price: payload.price,
         volume: payload.volume,
         timestamp: payload.timestamp,
@@ -171,15 +191,17 @@ export function useQuotes(symbols = [], assetTypes = {}, options = {}) {
     };
 
     socket.on("price-update", onPrice);
-    list.forEach((symbol) =>
-      retainMarketSymbol(symbol, isCrypto(symbol) ? "CRYPTO" : "STOCK"),
-    );
+    list.forEach((symbol) => {
+      const assetClass =
+        stableAssetTypes[symbol] || (isCrypto(symbol) ? "CRYPTO" : "STOCK");
+      retainMarketSymbol(symbol, assetClass);
+    });
 
     return () => {
       socket.off("price-update", onPrice);
       list.forEach((symbol) => releaseMarketSymbol(symbol));
     };
-  }, [symbolKey]);
+  }, [symbolKey, stableAssetTypes]);
 
   useEffect(() => {
     if (!symbolKey) return undefined;
