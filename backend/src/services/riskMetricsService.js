@@ -3,6 +3,11 @@ const prisma = require("../config/database");
 const { getPortfolioReturnSeries } = require("./portfolioSeriesService");
 
 const DEFAULT_ANNUALIZATION_FACTOR = 252;
+
+// Portfolio snapshots exist for every UTC calendar day (weekends carry the
+// previous close), so that series holds 365 observations per year. Using 252
+// on it understated volatility by ~15% and the annualized mean by 252/365.
+const CALENDAR_DAY_ANNUALIZATION_FACTOR = 365;
 const DEFAULT_RISK_FREE_RATE = 0.02;
 
 /**
@@ -78,7 +83,7 @@ function calculateSampleStdDev(values) {
  *
  * @param {Array<number|string|Object>} returns - Array of daily returns
  * @param {Object} [options]
- * @param {number} [options.annualizationFactor=252]
+ * @param {number} [options.annualizationFactor=365]
  * @param {number} [options.precision=4]
  * @returns {string|null}
  */
@@ -209,7 +214,7 @@ function calculateDrawdown(
  * @param {Array<number|string|Object>} returns
  * @param {Object} [options]
  * @param {number} [options.riskFreeRate=0.02]
- * @param {number} [options.annualizationFactor=252]
+ * @param {number} [options.annualizationFactor=365]
  * @param {number} [options.precision=2]
  * @returns {string|null}
  */
@@ -244,7 +249,7 @@ function calculateSharpeRatio(
  * @param {Array<{ date: string, totalValue?: Object|string|number, value?: Object|string|number, dailyReturn?: Object|string|number }>} series
  * @param {Object} [options]
  * @param {number} [options.riskFreeRate=0.02]
- * @param {number} [options.annualizationFactor=252]
+ * @param {number} [options.annualizationFactor=365]
  * @returns {{
  *   annualizedVolatility: string|null,
  *   maxDrawdown: string|null,
@@ -344,6 +349,7 @@ async function getPortfolioRiskMetrics(
 
   const metrics = calculatePortfolioRiskMetrics(seriesResult.series, {
     riskFreeRate,
+    annualizationFactor: CALENDAR_DAY_ANNUALIZATION_FACTOR,
   });
 
   return {
@@ -355,6 +361,7 @@ async function getPortfolioRiskMetrics(
 
 module.exports = {
   DEFAULT_ANNUALIZATION_FACTOR,
+  CALENDAR_DAY_ANNUALIZATION_FACTOR,
   DEFAULT_RISK_FREE_RATE,
   extractNumbers,
   calculateMean,
