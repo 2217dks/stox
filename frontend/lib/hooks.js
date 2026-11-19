@@ -20,7 +20,7 @@ import {
 } from "./socket";
 import { useSession } from "@/store/use-session";
 import { useUI } from "@/store/use-ui";
-import { toQueryString } from "./utils";
+import { canonicalMarketSymbol, toQueryString } from "./utils";
 
 export function useDebouncedValue(value, delay = 250) {
   const [debounced, setDebounced] = useState(value);
@@ -290,6 +290,72 @@ export function useHoldings(portfolioId) {
   return useApi(portfolioId ? `/portfolios/${portfolioId}/holdings` : null, {
     refreshInterval: 120000,
   });
+}
+
+/**
+ * Quantity-first position model for one symbol.
+ *
+ * The API stores holdings and orders with the symbol the client submitted, so
+ * legacy rows can contain `BINANCE:BTCUSDT` while market routes use
+ * `BTCUSDT`. Everything is matched through `canonicalMarketSymbol`.
+ *
+ * Pending SELL orders are netted out of the sellable quantity because the
+ * server does not reserve shares the way it reserves cash for BUY orders.
+ */
+export function usePosition(portfolioId, symbol) {
+  const symbolKey = canonicalMarketSymbol(symbol);
+  const holdings = useHoldings(portfolioId);
+  const pendingSells = useApi(
+    portfolioId && symbolKey ? "/orders" : null,
+    {
+      query: {
+        portfolioId,
+        side: "SELL",
+        status: "PENDING",
+        limit: 100,
+      },
+      refreshInterval: 120000,
+    },
+  );
+
+  const holding = useMemo(() => {
+    if (!symbolKey) return null;
+    return (
+      (holdings.data?.holdings ?? []).find(
+        (item) => canonicalMarketSymbol(item.symbol) === symbolKey,
+      ) || null
+    );
+  }, [holdings.data, symbolKey]);
+
+  const reservedQuantity = useMemo(() => {
+    if (!symbolKey) return 0;
+    return (pendingSells.data?.orders ?? [])
+      .filter(
+        (order) =>
+          order.side === "SELL" &&
+          order.status === "PENDING" &&
+          canonicalMarketSymbol(order.symbol) === symbolKey,
+      )
+      .reduce((total, order) => total + Number(order.quantity || 0), 0);
+  }, [pendingSells.data, symbolKey]);
+
+  const quantity = Number(holding?.quantity ?? 0);
+  const netReserved = Math.min(Math.max(reservedQuantity, 0), quantity);
+
+  return {
+    holding,
+    quantity,
+    reservedQuantity: netReserved,
+    availableQuantity: Math.max(0, quantity - netReserved),
+    averageBuyPrice: Number(holding?.averageBuyPrice ?? 0),
+    totalInvested: Number(holding?.totalInvested ?? 0),
+    hasPosition: quantity > 0,
+    loading: holdings.loading || pendingSells.loading,
+    error: holdings.error,
+    reservedError: pendingSells.error,
+    mutateHoldings: holdings.mutate,
+    mutatePendingSells: pendingSells.mutate,
+  };
 }
 
 export function useUnreadNotifications() {

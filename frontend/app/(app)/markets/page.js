@@ -27,7 +27,13 @@ import { SegmentedControl } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SymbolSearch } from "@/components/market/symbol-search";
 import { AlertDialog } from "@/components/alerts/alert-dialog";
-import { useApi, useMarketOverview, useQuotes } from "@/lib/hooks";
+import {
+  useActivePortfolio,
+  useApi,
+  useHoldings,
+  useMarketOverview,
+  useQuotes,
+} from "@/lib/hooks";
 import {
   CURATED_MARKET_META,
   CURATED_SYMBOLS,
@@ -36,9 +42,10 @@ import {
   formatCurrency,
   formatPercent,
   formatPrice,
+  formatQuantity,
   tickerOf,
 } from "@/lib/format";
-import { cn } from "@/lib/utils";
+import { canonicalMarketSymbol, cn } from "@/lib/utils";
 
 const allCurated = [
   ...CURATED_SYMBOLS.STOCK,
@@ -90,6 +97,21 @@ function MarketsContent() {
     query: { status: "ACTIVE", limit: 5 },
     refreshInterval: 180000,
   });
+  const { portfolioId } = useActivePortfolio();
+  const {
+    data: holdingsData,
+    loading: holdingsLoading,
+    error: holdingsError,
+  } = useHoldings(portfolioId);
+
+  const holdingsBySymbol = useMemo(() => {
+    const map = new Map();
+    for (const holding of holdingsData?.holdings ?? []) {
+      if (Number(holding.quantity) === 0) continue;
+      map.set(canonicalMarketSymbol(holding.symbol), holding);
+    }
+    return map;
+  }, [holdingsData]);
 
   const rows = useMemo(() => {
     const curatedRows = allCurated.map((symbol) => ({
@@ -98,6 +120,7 @@ function MarketsContent() {
       assetType: CURATED_MARKET_META[symbol]?.assetType || assetTypes[symbol],
       exchange: CURATED_MARKET_META[symbol]?.exchange || "—",
       quote: quotes[symbol],
+      holding: holdingsBySymbol.get(canonicalMarketSymbol(symbol)) || null,
     }));
 
     const existing = new Set(curatedRows.map((row) => row.symbol));
@@ -113,6 +136,7 @@ function MarketsContent() {
           changePercent: mover.changePercent,
           volume: mover.quoteVolume,
         },
+        holding: holdingsBySymbol.get(canonicalMarketSymbol(mover.symbol)) || null,
       }));
 
     const merged = [...curatedRows, ...moverRows].filter(
@@ -126,7 +150,7 @@ function MarketsContent() {
         Math.abs(Number(a.quote?.changePercent || 0))
       );
     });
-  }, [quotes, movers, filter, sort]);
+  }, [quotes, movers, filter, sort, holdingsBySymbol]);
 
   const alerts = alertsData?.alerts ?? [];
 
@@ -341,6 +365,32 @@ function MarketsContent() {
                 align: "right",
                 render: (row) =>
                   row.quote?.low ? formatPrice(row.quote.low) : "—",
+              },
+              {
+                key: "position",
+                header: "Position",
+                align: "right",
+                render: (row) => {
+                  if (row.holding) {
+                    return (
+                      <div>
+                        <p className="tnum text-[11.5px] text-fg">
+                          {formatQuantity(row.holding.quantity)}
+                        </p>
+                        <p className="tnum text-[9.5px] text-fg-subtle">
+                          @ {formatPrice(row.holding.averageBuyPrice)} avg
+                        </p>
+                      </div>
+                    );
+                  }
+                  if (holdingsLoading) {
+                    return <span className="text-fg-subtle">…</span>;
+                  }
+                  if (holdingsError) {
+                    return <span className="text-fg-subtle">Unavailable</span>;
+                  }
+                  return <span className="text-fg-subtle">—</span>;
+                },
               },
               {
                 key: "trade",

@@ -95,6 +95,21 @@ export function normalizeMarketSymbol(symbol = "") {
   return String(symbol).replace(/^BINANCE:/i, "");
 }
 
+/**
+ * Provider-independent comparison key for a market symbol.
+ *
+ * Holdings and orders were historically written with a `BINANCE:` prefix or a
+ * slash pair, while market routes use the canonical `BTCUSDT`. Comparing this
+ * key keeps position lookups correct for both legacy and new rows.
+ */
+export function canonicalMarketSymbol(symbol = "") {
+  return String(symbol)
+    .trim()
+    .toUpperCase()
+    .replace(/^(?:BINANCE|FINNHUB):/, "")
+    .replace(/\//g, "");
+}
+
 export function humanizeEnum(value = "") {
   return value
     .toString()
