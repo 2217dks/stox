@@ -548,6 +548,9 @@ describe("Frontend Regression & Contract Tests", () => {
       expect(hooksSrc).toContain("aggregatedHolding");
       expect(hooksSrc).toContain("totalReserved");
       expect(hooksSrc).toContain("availableQuantity: availableQty.toString()");
+      // Authoritative backend reservations eliminate the redundant client-side pending-sells query with limit: 100
+      expect(hooksSrc).not.toContain("side: \"SELL\"");
+      expect(hooksSrc).not.toContain("limit: 100");
     });
   });
 

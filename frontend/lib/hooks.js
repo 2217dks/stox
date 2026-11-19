@@ -340,18 +340,6 @@ export function useHoldings(portfolioId) {
 export function usePosition(portfolioId, symbol, explicitAssetType = null) {
   const symbolKey = canonicalMarketSymbol(symbol);
   const holdings = useHoldings(portfolioId);
-  const pendingSells = useApi(
-    portfolioId && symbolKey ? "/orders" : null,
-    {
-      query: {
-        portfolioId,
-        side: "SELL",
-        status: "PENDING",
-        limit: 100,
-      },
-      refreshInterval: 120000,
-    },
-  );
 
   const matchingHoldings = useMemo(() => {
     if (!symbolKey) return [];
@@ -375,26 +363,11 @@ export function usePosition(portfolioId, symbol, explicitAssetType = null) {
     let totalQty = 0;
     let totalReserved = 0;
     let totalInvested = 0;
-    let hasAuthoritativeReserved = false;
 
     for (const h of matchingHoldings) {
       totalQty += Number(h.quantity || 0);
-      if (h.reservedQuantity !== undefined && h.reservedQuantity !== null) {
-        totalReserved += Number(h.reservedQuantity);
-        hasAuthoritativeReserved = true;
-      }
+      totalReserved += Number(h.reservedQuantity || 0);
       totalInvested += Number(h.totalInvested || 0);
-    }
-
-    if (!hasAuthoritativeReserved) {
-      totalReserved = (pendingSells.data?.orders ?? [])
-        .filter(
-          (order) =>
-            order.side === "SELL" &&
-            order.status === "PENDING" &&
-            canonicalMarketSymbol(order.symbol) === symbolKey,
-        )
-        .reduce((total, order) => total + Number(order.quantity || 0), 0);
     }
 
     const netQty = Number(totalQty.toFixed(8));
@@ -412,7 +385,7 @@ export function usePosition(portfolioId, symbol, explicitAssetType = null) {
       averageBuyPrice: avgBuyPrice.toString(),
       totalInvested: totalInvested.toString(),
     };
-  }, [matchingHoldings, pendingSells.data, symbolKey]);
+  }, [matchingHoldings]);
 
   const quantity = aggregatedHolding ? Number(aggregatedHolding.quantity) : 0;
   const reservedQuantity = aggregatedHolding
@@ -436,11 +409,11 @@ export function usePosition(portfolioId, symbol, explicitAssetType = null) {
     averageBuyPrice,
     totalInvested,
     hasPosition: quantity > 0,
-    loading: holdings.loading || pendingSells.loading,
+    loading: holdings.loading,
     error: holdings.error,
-    reservedError: pendingSells.error,
+    reservedError: null,
     mutateHoldings: holdings.mutate,
-    mutatePendingSells: pendingSells.mutate,
+    mutatePendingSells: holdings.mutate,
   };
 }
 
