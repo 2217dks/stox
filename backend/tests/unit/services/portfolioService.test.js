@@ -351,4 +351,127 @@ describe("listPortfolioHoldings", () => {
     expect(tsla.reservedQuantity).toBe("30");
     expect(tsla.availableQuantity).toBe("20");
   });
+
+  test("allocates reservations across multiple holding rows representing the same instrument without duplicating", async () => {
+    prisma.portfolio.findFirst.mockResolvedValue({ id: PORTFOLIO_ID });
+    prisma.holding.findMany.mockResolvedValue([
+      {
+        id: "holding-btc-1",
+        portfolioId: PORTFOLIO_ID,
+        symbol: "BINANCE:BTCUSDT",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("2.0"),
+        averageBuyPrice: new Prisma.Decimal("50000"),
+        totalInvested: new Prisma.Decimal("100000"),
+        isShort: false,
+        createdAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      },
+      {
+        id: "holding-btc-2",
+        portfolioId: PORTFOLIO_ID,
+        symbol: "BTC/USDT",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("3.0"),
+        averageBuyPrice: new Prisma.Decimal("60000"),
+        totalInvested: new Prisma.Decimal("180000"),
+        isShort: false,
+        createdAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      },
+    ]);
+
+    // Total reserved = 1.5 BTC across pending sell orders
+    prisma.order.findMany.mockResolvedValue([
+      {
+        symbol: "BTCUSDT",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("1.5"),
+      },
+    ]);
+
+    const holdings = await portfolioService.listPortfolioHoldings(
+      USER_ID,
+      PORTFOLIO_ID,
+    );
+
+    expect(holdings).toHaveLength(2);
+    // Row 1 held 2.0 -> takes 1.5 reserved, has 0.5 available
+    const row1 = holdings.find((h) => h.id === "holding-btc-1");
+    expect(row1.quantity).toBe("2");
+    expect(row1.reservedQuantity).toBe("1.5");
+    expect(row1.availableQuantity).toBe("0.5");
+
+    // Row 2 held 3.0 -> takes remaining 0.0 reserved, has 3.0 available
+    const row2 = holdings.find((h) => h.id === "holding-btc-2");
+    expect(row2.quantity).toBe("3");
+    expect(row2.reservedQuantity).toBe("0");
+    expect(row2.availableQuantity).toBe("3");
+
+    // Total reservation across both rows equals exactly 1.5 (counted exactly once)
+    const sumReserved = Number(row1.reservedQuantity) + Number(row2.reservedQuantity);
+    expect(sumReserved).toBe(1.5);
+    const sumAvailable = Number(row1.availableQuantity) + Number(row2.availableQuantity);
+    expect(sumAvailable).toBe(3.5);
+  });
+
+  test("handles pending sell reservations exceeding total holding quantity across multiple rows", async () => {
+    prisma.portfolio.findFirst.mockResolvedValue({ id: PORTFOLIO_ID });
+    prisma.holding.findMany.mockResolvedValue([
+      {
+        id: "holding-eth-1",
+        portfolioId: PORTFOLIO_ID,
+        symbol: "BINANCE:ETHUSDT",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("1.0"),
+        averageBuyPrice: new Prisma.Decimal("3000"),
+        totalInvested: new Prisma.Decimal("3000"),
+        isShort: false,
+        createdAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      },
+      {
+        id: "holding-eth-2",
+        portfolioId: PORTFOLIO_ID,
+        symbol: "ETH/USDT",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("2.0"),
+        averageBuyPrice: new Prisma.Decimal("3500"),
+        totalInvested: new Prisma.Decimal("7000"),
+        isShort: false,
+        createdAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      },
+    ]);
+
+    // Total pending sells = 5.0 ETH (exceeds total 3.0 ETH held)
+    prisma.order.findMany.mockResolvedValue([
+      {
+        symbol: "ETHUSDT",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("5.0"),
+      },
+    ]);
+
+    const holdings = await portfolioService.listPortfolioHoldings(
+      USER_ID,
+      PORTFOLIO_ID,
+    );
+
+    expect(holdings).toHaveLength(2);
+    const row1 = holdings.find((h) => h.id === "holding-eth-1");
+    expect(row1.quantity).toBe("1");
+    expect(row1.reservedQuantity).toBe("1");
+    expect(row1.availableQuantity).toBe("0");
+
+    const row2 = holdings.find((h) => h.id === "holding-eth-2");
+    expect(row2.quantity).toBe("2");
+    expect(row2.reservedQuantity).toBe("2");
+    expect(row2.availableQuantity).toBe("0");
+
+    const sumReserved = Number(row1.reservedQuantity) + Number(row2.reservedQuantity);
+    expect(sumReserved).toBe(3);
+    const sumAvailable = Number(row1.availableQuantity) + Number(row2.availableQuantity);
+    expect(sumAvailable).toBe(0);
+  });
 });

@@ -105,7 +105,7 @@ function MarketDetail() {
     query: { query: rawSymbol, assetClass: assetType, limit: 1 },
     enabled: rawSymbol.length >= 2,
   });
-  const position = usePosition(portfolioId, rawSymbol);
+  const position = usePosition(portfolioId, rawSymbol, assetType);
   const { data: alertsData, loading: alertsLoading } = useApi("/alerts", {
     query: { symbol: rawSymbol, status: "ACTIVE", limit: 5 },
     refreshInterval: 180000,

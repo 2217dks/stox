@@ -106,7 +106,7 @@ export function canonicalMarketSymbol(symbol = "") {
   return String(symbol)
     .trim()
     .toUpperCase()
-    .replace(/^(?:BINANCE|FINNHUB):/, "")
+    .replace(/^(?:BINANCE|FINNHUB|YAHOO):/, "")
     .replace(/\//g, "");
 }
 

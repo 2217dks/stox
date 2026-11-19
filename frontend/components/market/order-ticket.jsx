@@ -85,7 +85,7 @@ export function OrderTicket({
   // an undebounced quote key fires one request per typed character.
   const positionSymbol = useDebouncedValue(symbol, 300);
   const { quote } = useQuote(positionSymbol, assetType);
-  const position = usePosition(portfolioId, positionSymbol);
+  const position = usePosition(portfolioId, positionSymbol, assetType);
 
   useEffect(() => {
     if (portfolioId) setValue("portfolioId", portfolioId);

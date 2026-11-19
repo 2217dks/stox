@@ -377,17 +377,23 @@ async function listPortfolioHoldings(userId, portfolioId) {
     reservedMap.set(key, prev.plus(new Prisma.Decimal(pending.quantity)));
   }
 
+  const remainingReservedMap = new Map();
+  for (const [key, val] of reservedMap.entries()) {
+    remainingReservedMap.set(key, new Prisma.Decimal(val));
+  }
+
   return holdings.map((holding) => {
     const canonical = getCanonicalInstrumentSymbol(
       holding.symbol,
       holding.assetType,
     );
     const key = `${holding.assetType}:${canonical}`;
-    const totalReserved = reservedMap.get(key) || new Prisma.Decimal(0);
+    const unallocated = remainingReservedMap.get(key) || new Prisma.Decimal(0);
     const heldQty = new Prisma.Decimal(holding.quantity);
-    const reservedQty = heldQty.gt(totalReserved) ? totalReserved : heldQty;
-    const availableQty = heldQty.gt(reservedQty)
-      ? heldQty.minus(reservedQty)
+    const rowReserved = heldQty.gt(unallocated) ? unallocated : heldQty;
+    remainingReservedMap.set(key, unallocated.minus(rowReserved));
+    const availableQty = heldQty.gt(rowReserved)
+      ? heldQty.minus(rowReserved)
       : new Prisma.Decimal(0);
 
     return {
@@ -396,7 +402,7 @@ async function listPortfolioHoldings(userId, portfolioId) {
       symbol: holding.symbol,
       assetType: holding.assetType,
       quantity: holding.quantity.toString(),
-      reservedQuantity: totalReserved.toString(),
+      reservedQuantity: rowReserved.toString(),
       availableQuantity: availableQty.toString(),
       averageBuyPrice: holding.averageBuyPrice.toString(),
       totalInvested: holding.totalInvested.toString(),

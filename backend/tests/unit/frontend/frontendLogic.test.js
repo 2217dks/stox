@@ -79,39 +79,98 @@ function serializeQuotesQuery(symbols = [], assetTypes = {}) {
 }
 
 /** Position calculation matching frontend/lib/hooks.js (usePosition) */
-function calculatePosition({ holding, pendingOrders = [], targetSymbol }) {
+function calculatePosition({
+  holding = null,
+  holdings = [],
+  pendingOrders = [],
+  targetSymbol,
+  assetType = null,
+}) {
   const symbolKey = canonicalMarketSymbol(targetSymbol);
+  if (!symbolKey) {
+    return {
+      holding: null,
+      quantity: 0,
+      reservedQuantity: 0,
+      availableQuantity: 0,
+      averageBuyPrice: 0,
+      totalInvested: 0,
+      hasPosition: false,
+    };
+  }
 
-  const matchedHolding =
-    holding && canonicalMarketSymbol(holding.symbol) === symbolKey
-      ? holding
-      : null;
+  const rawList = holdings.length > 0 ? holdings : holding ? [holding] : [];
+  const matchedHoldings = rawList.filter((item) => {
+    if (canonicalMarketSymbol(item.symbol) !== symbolKey) return false;
+    if (assetType && item.assetType && item.assetType !== assetType) {
+      return false;
+    }
+    return true;
+  });
 
-  const reservedQuantity =
-    matchedHolding?.reservedQuantity !== undefined &&
-    matchedHolding?.reservedQuantity !== null
-      ? Number(matchedHolding.reservedQuantity)
-      : pendingOrders
-          .filter(
-            (order) =>
-              order.side === "SELL" &&
-              order.status === "PENDING" &&
-              canonicalMarketSymbol(order.symbol) === symbolKey,
-          )
-          .reduce((total, order) => total + Number(order.quantity || 0), 0);
+  if (!matchedHoldings.length) {
+    return {
+      holding: null,
+      quantity: 0,
+      reservedQuantity: 0,
+      availableQuantity: 0,
+      averageBuyPrice: 0,
+      totalInvested: 0,
+      hasPosition: false,
+    };
+  }
 
-  const quantity = Number(matchedHolding?.quantity ?? 0);
-  const netReserved = Math.min(Math.max(reservedQuantity, 0), quantity);
-  const availableQuantity = Math.max(0, quantity - netReserved);
+  const first = matchedHoldings[0];
+  let totalQty = 0;
+  let totalReserved = 0;
+  let totalInvested = 0;
+
+  for (const h of matchedHoldings) {
+    totalQty += Number(h.quantity || 0);
+    if (h.reservedQuantity !== undefined && h.reservedQuantity !== null) {
+      totalReserved += Number(h.reservedQuantity);
+    }
+    totalInvested += Number(
+      h.totalInvested ||
+        Number(h.quantity || 0) * Number(h.averageBuyPrice || 0),
+    );
+  }
+
+  if (totalReserved === 0 && pendingOrders.length > 0) {
+    totalReserved = pendingOrders
+      .filter(
+        (order) =>
+          order.side === "SELL" &&
+          order.status === "PENDING" &&
+          canonicalMarketSymbol(order.symbol) === symbolKey,
+      )
+      .reduce((total, order) => total + Number(order.quantity || 0), 0);
+  }
+
+  const netQty = Number(totalQty.toFixed(8));
+  const netReserved = Number(
+    Math.min(Math.max(totalReserved, 0), netQty).toFixed(8),
+  );
+  const availableQuantity = Number(Math.max(0, netQty - netReserved).toFixed(8));
+  const avgBuyPrice = netQty > 0 ? totalInvested / netQty : 0;
+
+  const aggregatedHolding = {
+    ...first,
+    quantity: netQty.toString(),
+    reservedQuantity: netReserved.toString(),
+    availableQuantity: availableQuantity.toString(),
+    averageBuyPrice: avgBuyPrice.toString(),
+    totalInvested: totalInvested.toString(),
+  };
 
   return {
-    holding: matchedHolding,
-    quantity,
+    holding: aggregatedHolding,
+    quantity: netQty,
     reservedQuantity: netReserved,
     availableQuantity,
-    averageBuyPrice: Number(matchedHolding?.averageBuyPrice ?? 0),
-    totalInvested: Number(matchedHolding?.totalInvested ?? 0),
-    hasPosition: quantity > 0,
+    averageBuyPrice: avgBuyPrice,
+    totalInvested,
+    hasPosition: netQty > 0,
   };
 }
 
@@ -338,13 +397,157 @@ describe("Frontend Regression & Contract Tests", () => {
       expect(pos.hasPosition).toBe(true);
     });
 
-    test("source verification: usePosition in hooks.js implements sell netting", () => {
+    test("aggregates two equivalent holding records with different symbol formats", () => {
+      const pos = calculatePosition({
+        holdings: [
+          { symbol: "BINANCE:BTCUSDT", quantity: "2.0", reservedQuantity: "1.0", totalInvested: "100000" },
+          { symbol: "BTC/USDT", quantity: "3.0", reservedQuantity: "0.0", totalInvested: "180000" },
+        ],
+        targetSymbol: "BTCUSDT",
+      });
+
+      expect(pos.quantity).toBe(5.0);
+      expect(pos.reservedQuantity).toBe(1.0);
+      expect(pos.availableQuantity).toBe(4.0);
+      expect(pos.totalInvested).toBe(280000);
+      expect(pos.averageBuyPrice).toBe(56000);
+      expect(pos.hasPosition).toBe(true);
+    });
+
+    test("aggregates three equivalent holding records correctly", () => {
+      const pos = calculatePosition({
+        holdings: [
+          { symbol: "BINANCE:BTCUSDT", quantity: "2.0", reservedQuantity: "1.0", totalInvested: "100000" },
+          { symbol: "BTC/USDT", quantity: "3.0", reservedQuantity: "0.5", totalInvested: "180000" },
+          { symbol: "BTCUSDT", quantity: "1.5", reservedQuantity: "0.0", totalInvested: "90000" },
+        ],
+        targetSymbol: "BINANCE:BTC/USDT",
+      });
+
+      expect(pos.quantity).toBe(6.5);
+      expect(pos.reservedQuantity).toBe(1.5);
+      expect(pos.availableQuantity).toBe(5.0);
+      expect(pos.totalInvested).toBe(370000);
+      expect(pos.averageBuyPrice).toBeCloseTo(370000 / 6.5, 6);
+      expect(pos.hasPosition).toBe(true);
+    });
+
+    test("isolates holdings with different asset types for the same or similar symbols", () => {
+      const pos = calculatePosition({
+        holdings: [
+          { symbol: "BTC", assetType: "STOCK", quantity: "100", reservedQuantity: "20", totalInvested: "5000" },
+          { symbol: "BTCUSDT", assetType: "CRYPTO", quantity: "2.5", reservedQuantity: "0.5", totalInvested: "150000" },
+        ],
+        targetSymbol: "BTC",
+        assetType: "STOCK",
+      });
+
+      expect(pos.quantity).toBe(100);
+      expect(pos.reservedQuantity).toBe(20);
+      expect(pos.availableQuantity).toBe(80);
+      expect(pos.totalInvested).toBe(5000);
+    });
+
+    test("handles multiple pending SELL orders across equivalent symbol formats", () => {
+      const pos = calculatePosition({
+        holdings: [
+          { symbol: "BINANCE:ETHUSDT", quantity: "4.0", reservedQuantity: "0.0", totalInvested: "12000" },
+          { symbol: "ETH/USDT", quantity: "6.0", reservedQuantity: "0.0", totalInvested: "18000" },
+        ],
+        pendingOrders: [
+          { symbol: "ETHUSDT", side: "SELL", status: "PENDING", quantity: "1.5" },
+          { symbol: "BINANCE:ETHUSDT", side: "SELL", status: "PENDING", quantity: "2.0" },
+          { symbol: "ETH/USDT", side: "SELL", status: "PENDING", quantity: "0.5" },
+        ],
+        targetSymbol: "ETHUSDT",
+      });
+
+      expect(pos.quantity).toBe(10.0);
+      expect(pos.reservedQuantity).toBe(4.0);
+      expect(pos.availableQuantity).toBe(6.0);
+      expect(pos.hasPosition).toBe(true);
+    });
+
+    test("handles fractional quantities with exact 8-decimal precision", () => {
+      const pos = calculatePosition({
+        holdings: [
+          { symbol: "SOLUSDT", quantity: "0.12345678", reservedQuantity: "0.02345678", totalInvested: "20" },
+          { symbol: "SOL/USDT", quantity: "0.87654322", reservedQuantity: "0.10000000", totalInvested: "140" },
+        ],
+        targetSymbol: "SOLUSDT",
+      });
+
+      expect(pos.quantity).toBe(1.0);
+      expect(pos.reservedQuantity).toBe(0.12345678);
+      expect(pos.availableQuantity).toBe(0.87654322);
+      expect(pos.totalInvested).toBe(160);
+      expect(pos.averageBuyPrice).toBe(160);
+    });
+
+    test("correctly computes fully reserved position", () => {
+      const pos = calculatePosition({
+        holdings: [
+          { symbol: "AAPL", quantity: "50", reservedQuantity: "50", totalInvested: "7500" },
+        ],
+        targetSymbol: "AAPL",
+      });
+
+      expect(pos.quantity).toBe(50);
+      expect(pos.reservedQuantity).toBe(50);
+      expect(pos.availableQuantity).toBe(0);
+      expect(pos.hasPosition).toBe(true);
+    });
+
+    test("correctly computes partially reserved position", () => {
+      const pos = calculatePosition({
+        holdings: [
+          { symbol: "AAPL", quantity: "50", reservedQuantity: "15", totalInvested: "7500" },
+        ],
+        targetSymbol: "AAPL",
+      });
+
+      expect(pos.quantity).toBe(50);
+      expect(pos.reservedQuantity).toBe(15);
+      expect(pos.availableQuantity).toBe(35);
+      expect(pos.hasPosition).toBe(true);
+    });
+
+    test("handles reservations exceeding total holding quantity without going negative", () => {
+      const pos = calculatePosition({
+        holdings: [
+          { symbol: "AAPL", quantity: "50", reservedQuantity: "75", totalInvested: "7500" },
+        ],
+        targetSymbol: "AAPL",
+      });
+
+      expect(pos.quantity).toBe(50);
+      expect(pos.reservedQuantity).toBe(50);
+      expect(pos.availableQuantity).toBe(0);
+      expect(pos.hasPosition).toBe(true);
+    });
+
+    test("handles no pending SELL orders", () => {
+      const pos = calculatePosition({
+        holdings: [
+          { symbol: "AAPL", quantity: "50", reservedQuantity: "0", totalInvested: "7500" },
+        ],
+        targetSymbol: "AAPL",
+      });
+
+      expect(pos.quantity).toBe(50);
+      expect(pos.reservedQuantity).toBe(0);
+      expect(pos.availableQuantity).toBe(50);
+      expect(pos.hasPosition).toBe(true);
+    });
+
+    test("source verification: usePosition in hooks.js aggregates holdings and uses authoritative reservations", () => {
       const hooksSrc = fs.readFileSync(path.join(frontendDir, "lib/hooks.js"), "utf8");
 
-      expect(hooksSrc).toContain("order.side === \"SELL\"");
-      expect(hooksSrc).toContain("order.status === \"PENDING\"");
-      expect(hooksSrc).toContain("const netReserved = Math.min(Math.max(reservedQuantity, 0), quantity)");
-      expect(hooksSrc).toContain("availableQuantity: Math.max(0, quantity - netReserved)");
+      expect(hooksSrc).toContain("canonicalMarketSymbol(item.symbol) === symbolKey");
+      expect(hooksSrc).toContain("matchingHoldings");
+      expect(hooksSrc).toContain("aggregatedHolding");
+      expect(hooksSrc).toContain("totalReserved");
+      expect(hooksSrc).toContain("availableQuantity: availableQty.toString()");
     });
   });
 

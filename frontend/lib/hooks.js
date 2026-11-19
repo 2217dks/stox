@@ -337,7 +337,7 @@ export function useHoldings(portfolioId) {
  * Pending SELL orders are netted out of the sellable quantity because the
  * server does not reserve shares the way it reserves cash for BUY orders.
  */
-export function usePosition(portfolioId, symbol) {
+export function usePosition(portfolioId, symbol, explicitAssetType = null) {
   const symbolKey = canonicalMarketSymbol(symbol);
   const holdings = useHoldings(portfolioId);
   const pendingSells = useApi(
@@ -353,43 +353,88 @@ export function usePosition(portfolioId, symbol) {
     },
   );
 
-  const holding = useMemo(() => {
-    if (!symbolKey) return null;
-    return (
-      (holdings.data?.holdings ?? []).find(
-        (item) => canonicalMarketSymbol(item.symbol) === symbolKey,
-      ) || null
+  const matchingHoldings = useMemo(() => {
+    if (!symbolKey) return [];
+    const list = holdings.data?.holdings ?? [];
+    const matches = list.filter(
+      (item) => canonicalMarketSymbol(item.symbol) === symbolKey,
     );
-  }, [holdings.data, symbolKey]);
-
-  const reservedQuantity = useMemo(() => {
-    if (!symbolKey) return 0;
-    if (
-      holding?.reservedQuantity !== undefined &&
-      holding?.reservedQuantity !== null
-    ) {
-      return Number(holding.reservedQuantity);
+    if (!matches.length) return [];
+    if (explicitAssetType) {
+      const typeMatches = matches.filter(
+        (item) => item.assetType === explicitAssetType,
+      );
+      if (typeMatches.length > 0) return typeMatches;
     }
-    return (pendingSells.data?.orders ?? [])
-      .filter(
-        (order) =>
-          order.side === "SELL" &&
-          order.status === "PENDING" &&
-          canonicalMarketSymbol(order.symbol) === symbolKey,
-      )
-      .reduce((total, order) => total + Number(order.quantity || 0), 0);
-  }, [holding, pendingSells.data, symbolKey]);
+    return matches;
+  }, [holdings.data, symbolKey, explicitAssetType]);
 
-  const quantity = Number(holding?.quantity ?? 0);
-  const netReserved = Math.min(Math.max(reservedQuantity, 0), quantity);
+  const aggregatedHolding = useMemo(() => {
+    if (!matchingHoldings.length) return null;
+    const first = matchingHoldings[0];
+    let totalQty = 0;
+    let totalReserved = 0;
+    let totalInvested = 0;
+    let hasAuthoritativeReserved = false;
+
+    for (const h of matchingHoldings) {
+      totalQty += Number(h.quantity || 0);
+      if (h.reservedQuantity !== undefined && h.reservedQuantity !== null) {
+        totalReserved += Number(h.reservedQuantity);
+        hasAuthoritativeReserved = true;
+      }
+      totalInvested += Number(h.totalInvested || 0);
+    }
+
+    if (!hasAuthoritativeReserved) {
+      totalReserved = (pendingSells.data?.orders ?? [])
+        .filter(
+          (order) =>
+            order.side === "SELL" &&
+            order.status === "PENDING" &&
+            canonicalMarketSymbol(order.symbol) === symbolKey,
+        )
+        .reduce((total, order) => total + Number(order.quantity || 0), 0);
+    }
+
+    const netQty = Number(totalQty.toFixed(8));
+    const netReserved = Number(
+      Math.min(Math.max(totalReserved, 0), netQty).toFixed(8),
+    );
+    const availableQty = Number(Math.max(0, netQty - netReserved).toFixed(8));
+    const avgBuyPrice = netQty > 0 ? totalInvested / netQty : 0;
+
+    return {
+      ...first,
+      quantity: netQty.toString(),
+      reservedQuantity: netReserved.toString(),
+      availableQuantity: availableQty.toString(),
+      averageBuyPrice: avgBuyPrice.toString(),
+      totalInvested: totalInvested.toString(),
+    };
+  }, [matchingHoldings, pendingSells.data, symbolKey]);
+
+  const quantity = aggregatedHolding ? Number(aggregatedHolding.quantity) : 0;
+  const reservedQuantity = aggregatedHolding
+    ? Number(aggregatedHolding.reservedQuantity)
+    : 0;
+  const availableQuantity = aggregatedHolding
+    ? Number(aggregatedHolding.availableQuantity)
+    : 0;
+  const averageBuyPrice = aggregatedHolding
+    ? Number(aggregatedHolding.averageBuyPrice)
+    : 0;
+  const totalInvested = aggregatedHolding
+    ? Number(aggregatedHolding.totalInvested)
+    : 0;
 
   return {
-    holding,
+    holding: aggregatedHolding,
     quantity,
-    reservedQuantity: netReserved,
-    availableQuantity: Math.max(0, quantity - netReserved),
-    averageBuyPrice: Number(holding?.averageBuyPrice ?? 0),
-    totalInvested: Number(holding?.totalInvested ?? 0),
+    reservedQuantity,
+    availableQuantity,
+    averageBuyPrice,
+    totalInvested,
     hasPosition: quantity > 0,
     loading: holdings.loading || pendingSells.loading,
     error: holdings.error,
