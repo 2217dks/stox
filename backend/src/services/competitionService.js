@@ -376,14 +376,21 @@ async function getLeagueLeaderboard({
   const endDate = new Date(league.endDate);
   const effectiveStatus = getEffectiveLeagueStatus(league, currentDate);
 
-  // If already completed and members have finalReturn & rank, return stored results
+  // If already completed and every eligible member has a stored rank, return
+  // stored results. completeLeague only ranks non-suspended members, so a
+  // suspended member keeps rank = null forever; including them in `.every`
+  // forced a fresh market-data evaluation on every read of a "permanent"
+  // leaderboard.
+  const eligibleMembers = league.members.filter(
+    (m) => !m.user?.isSuspended,
+  );
+
   if (
     league.status === "COMPLETED" &&
-    league.members.length > 0 &&
-    league.members.every((m) => m.rank != null && m.finalReturn != null)
+    eligibleMembers.length > 0 &&
+    eligibleMembers.every((m) => m.rank != null && m.finalReturn != null)
   ) {
-    const activeMembers = league.members
-      .filter((m) => !m.user?.isSuspended)
+    const activeMembers = eligibleMembers
       .sort((a, b) => (a.rank || 0) - (b.rank || 0));
 
     return {
