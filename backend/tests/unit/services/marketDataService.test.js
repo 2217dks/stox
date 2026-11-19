@@ -217,6 +217,28 @@ describe("marketDataService provider-independent interface", () => {
     expect(result[1].symbol).toBe("BINANCE:BTCUSDT");
   });
 
+  test("keeps crypto results visible when a combined search is limited", async () => {
+    const stockProvider = createProvider({
+      searchSymbols: jest.fn(async () =>
+        Array.from({ length: 8 }, (_, index) => ({
+          symbol: `STOCK${index}`,
+          name: `Stock ${index}`,
+          assetClass: "STOCK",
+          exchange: "NASDAQ",
+          currency: "USD",
+          type: "Common Stock",
+          source: "mock",
+        })),
+      ),
+    });
+    const service = createService({ stockProvider });
+
+    const result = await service.searchSymbols("btc", { limit: 8 });
+
+    expect(result).toHaveLength(8);
+    expect(result.map((item) => item.assetClass)).toContain("CRYPTO");
+  });
+
   test("normalizes search metadata and returns only the documented fields", async () => {
     const stockProvider = createProvider({
       searchSymbols: jest.fn(async () => [

@@ -53,6 +53,10 @@ function createFinnhubMarketDataProvider(config = {}, { httpClient } = {}) {
   return {
     id: "finnhub",
     assetClasses: ["STOCK"],
+    operations: ["quote", "history", "overview", "search"],
+    markets: ["US"],
+
+    toProviderSymbol: (symbol) => toProviderSymbol(symbol, "finnhub"),
 
     async getQuote(symbol) {
       requireApiKey();
@@ -93,7 +97,12 @@ function createFinnhubMarketDataProvider(config = {}, { httpClient } = {}) {
       );
 
       if (data.s === "no_data") {
-        return { symbol: providerSymbol, assetClass: "STOCK", interval, prices: [] };
+        return {
+          symbol: providerSymbol,
+          assetClass: "STOCK",
+          interval,
+          prices: [],
+        };
       }
       if (
         data.s !== "ok" ||
@@ -145,7 +154,8 @@ function createFinnhubMarketDataProvider(config = {}, { httpClient } = {}) {
       if (typeof data.isOpen !== "boolean") throw invalidProviderResponse();
       return {
         assetClass: "STOCK",
-        asOf: isoTimestamp(data.t, { unit: "seconds" }) || new Date().toISOString(),
+        asOf:
+          isoTimestamp(data.t, { unit: "seconds" }) || new Date().toISOString(),
         marketStatus: {
           isOpen: data.isOpen,
           session: typeof data.session === "string" ? data.session : null,

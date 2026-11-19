@@ -16,6 +16,9 @@ const {
   assertQuoteFreshness,
   evaluateQuoteFreshness,
 } = require("../utils/quoteFreshness");
+const {
+  createMarketDataProviderRouter,
+} = require("../providers/marketDataProviderRouter");
 
 const HISTORICAL_INTERVALS = new Set([
   "1m",
@@ -37,6 +40,30 @@ const {
 
 function invalidRequest(message) {
   return createMarketDataError(message, 400, "MARKET_DATA_INVALID_REQUEST");
+}
+
+/**
+ * Round-robin merge of per-asset-class result groups.
+ *
+ * A plain `flat()` followed by `slice(limit)` lets the first asset class fill
+ * every slot, so a query such as "BTC" returns eight stock ETFs and hides the
+ * crypto pairs entirely. Interleaving keeps both classes visible while
+ * preserving each provider's relevance order.
+ */
+function interleaveResults(groups) {
+  const merged = [];
+  const longest = groups.reduce(
+    (length, group) => Math.max(length, group.length),
+    0,
+  );
+
+  for (let index = 0; index < longest; index += 1) {
+    for (const group of groups) {
+      if (group[index]) merged.push(group[index]);
+    }
+  }
+
+  return merged;
 }
 
 function isDecimalString(value) {
@@ -192,45 +219,27 @@ function assertSearchResults(value, assetClass) {
  * getHistoricalPrices(symbol, options), getMarketOverview(options), and
  * searchSymbols(query). Each method returns the normalized domain shapes
  * documented in docs/MARKET_DATA_SERVICE.md. Adapters may be replaced without
- * changing service callers.
+ * changing service callers. Configuration supplies an ordered provider chain
+ * per asset class; the service filters by declared capability and market and
+ * falls through provider-side failures to the next candidate.
  */
 function createMarketDataService({ config, providers } = {}) {
   const marketConfig = config || loadMarketDataConfig();
   const providerAdapters = providers || {};
 
-  function adapterFor(assetClass) {
-    const providerId = marketConfig.providerByAssetClass?.[assetClass];
-    if (!providerId) {
-      throw createMarketDataError(
-        `No market-data provider is configured for ${assetClass}.`,
-        503,
-        "MARKET_DATA_NOT_CONFIGURED",
-      );
-    }
-    const adapter = providerAdapters[providerId];
-    if (!adapter) {
-      throw createMarketDataError(
-        "The configured market-data provider is unavailable.",
-        503,
-        "MARKET_DATA_PROVIDER_UNAVAILABLE",
-      );
-    }
-    if (
-      Array.isArray(adapter.assetClasses) &&
-      !adapter.assetClasses.includes(assetClass)
-    ) {
-      throw createMarketDataError(
-        "The configured market-data provider does not support this asset class.",
-        503,
-        "MARKET_DATA_PROVIDER_UNAVAILABLE",
-      );
-    }
-    return adapter;
-  }
+  const router = createMarketDataProviderRouter({
+    config: marketConfig,
+    providers: providerAdapters,
+  });
 
-  async function callAdapter(callback) {
+  async function runOperation({ assetClass, operation, resolved, invoke }) {
     try {
-      return await callback();
+      return await router.run({
+        assetClass,
+        operation,
+        resolved,
+        invoke,
+      });
     } catch (error) {
       throw mapProviderError(error);
     }
@@ -246,13 +255,16 @@ function createMarketDataService({ config, providers } = {}) {
      */
     async getQuote(symbol, options = {}) {
       const resolved = await resolveSymbol(symbol, options);
-      const provider = adapterFor(resolved.assetClass);
-      const providerSymbol =
-        resolved.providerSymbol || resolved.canonicalSymbol;
-      const result = await callAdapter(() =>
-        provider.getQuote(providerSymbol),
-      );
-      const quote = assertQuote(result, resolved.assetClass);
+      const quote = await runOperation({
+        assetClass: resolved.assetClass,
+        operation: "quote",
+        resolved,
+        invoke: async (provider, providerSymbol) =>
+          assertQuote(
+            await provider.getQuote(providerSymbol),
+            resolved.assetClass,
+          ),
+      });
       return assertQuoteFreshness(quote, {
         config: marketConfig,
         ...options,
@@ -290,23 +302,23 @@ function createMarketDataService({ config, providers } = {}) {
         );
       }
 
-      const provider = adapterFor(resolved.assetClass);
-      const providerSymbol =
-        resolved.providerSymbol || resolved.canonicalSymbol;
-      const result = await callAdapter(() =>
-        provider.getHistoricalPrices(providerSymbol, {
-          interval,
-          from: numericFrom,
-          to: numericTo,
-          limit,
-        }),
-      );
-      const normalized = assertHistoricalPrices(
-        result,
-        resolved.canonicalSymbol,
-        resolved.assetClass,
-        interval,
-      );
+      const normalized = await runOperation({
+        assetClass: resolved.assetClass,
+        operation: "history",
+        resolved,
+        invoke: async (provider, providerSymbol) =>
+          assertHistoricalPrices(
+            await provider.getHistoricalPrices(providerSymbol, {
+              interval,
+              from: numericFrom,
+              to: numericTo,
+              limit,
+            }),
+            resolved.canonicalSymbol,
+            resolved.assetClass,
+            interval,
+          ),
+      });
       return { ...normalized, prices: normalized.prices.slice(0, limit) };
     },
 
@@ -327,11 +339,20 @@ function createMarketDataService({ config, providers } = {}) {
           "Overview limit must be an integer from 1 to 100.",
         );
       }
-      const provider = adapterFor(assetClass);
-      const result = await callAdapter(() =>
-        provider.getMarketOverview({ ...options, assetClass, limit }),
-      );
-      return assertOverview(result, assetClass);
+      return runOperation({
+        assetClass,
+        operation: "overview",
+        resolved: null,
+        invoke: async (provider) =>
+          assertOverview(
+            await provider.getMarketOverview({
+              ...options,
+              assetClass,
+              limit,
+            }),
+            assetClass,
+          ),
+      });
     },
 
     /**
@@ -355,16 +376,23 @@ function createMarketDataService({ config, providers } = {}) {
       }
       const results = await Promise.all(
         assetClasses.map(async (assetClass) => {
-          const provider = adapterFor(assetClass);
-          const values = await callAdapter(() =>
-            provider.searchSymbols(normalizedQuery),
-          );
-          return assertSearchResults(values, assetClass);
+          return runOperation({
+            assetClass,
+            operation: "search",
+            resolved: null,
+            invoke: async (provider) =>
+              assertSearchResults(
+                await provider.searchSymbols(normalizedQuery),
+                assetClass,
+              ),
+          });
         }),
       );
-      const combined = results.flat();
-      if (limit !== null) return combined.slice(0, limit);
-      return combined;
+      if (limit === null) return results.flat();
+      if (assetClasses.length > 1) {
+        return interleaveResults(results).slice(0, limit);
+      }
+      return results.flat().slice(0, limit);
     },
   };
 }
