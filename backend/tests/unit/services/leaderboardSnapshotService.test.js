@@ -463,5 +463,56 @@ describe("Leaderboard snapshot calculation", () => {
         },
       });
     });
+
+    test("excludes league competition portfolios from the global board", async () => {
+      const mockPortfolios = [
+        {
+          id: "port-main",
+          userId: "user-main",
+          startingBalance: new Prisma.Decimal("10000"),
+          cashBalance: new Prisma.Decimal("10000"),
+          holdings: [],
+          leagueMember: null,
+        },
+        {
+          id: "port-league",
+          userId: "user-league",
+          startingBalance: new Prisma.Decimal("9999999999"),
+          cashBalance: new Prisma.Decimal("9999999999"),
+          holdings: [],
+          leagueMember: { id: "member-1" },
+        },
+      ];
+
+      const createManyMock = jest.fn().mockResolvedValue({ count: 1 });
+      const groupByTradeMock = jest.fn().mockResolvedValue([]);
+
+      const mockTx = {
+        portfolio: { findMany: jest.fn().mockResolvedValue(mockPortfolios) },
+        trade: { groupBy: groupByTradeMock },
+        leaderboardSnapshot: { upsert: jest.fn().mockResolvedValue({ id: "s" }) },
+        leaderboardEntry: {
+          deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+          createMany: createManyMock,
+        },
+      };
+
+      jest
+        .spyOn(prisma, "$transaction")
+        .mockImplementation(async (callback) => callback(mockTx));
+
+      await generateLeaderboardSnapshots({
+        date: new Date("2026-11-10T15:00:00.000Z"),
+      });
+
+      const entries = createManyMock.mock.calls.flatMap(
+        ([argument]) => argument.data,
+      );
+
+      expect(entries.some((entry) => entry.userId === "user-main")).toBe(true);
+      expect(entries.some((entry) => entry.userId === "user-league")).toBe(
+        false,
+      );
+    });
   });
 });
