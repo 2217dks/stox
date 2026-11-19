@@ -79,6 +79,12 @@ async function resetData() {
     where: { id: { in: portfolioIds } },
     data: { cashBalance: "10000", reservedCash: "0", isActive: true },
   });
+
+  // Clear un-fanned trade backlog from other suites so scan tests are deterministic.
+  await prisma.trade.updateMany({
+    where: { copyFanOutAt: null },
+    data: { copyFanOutAt: new Date() },
+  });
 }
 
 async function createSourceTrade({
