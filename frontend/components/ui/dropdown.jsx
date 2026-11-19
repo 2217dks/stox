@@ -16,8 +16,9 @@ export function DropdownMenuContent({ className, sideOffset = 6, ...props }) {
         sideOffset={sideOffset}
         className={cn(
           "z-50 min-w-[190px] overflow-hidden rounded-[10px] border border-line bg-surface p-1 shadow-[var(--shadow-pop)]",
+          "scale-100",
           "data-[state=open]:animate-[menu-in_160ms_cubic-bezier(0.23,1,0.32,1)]",
-          "data-[side=bottom]:origin-top data-[side=top]:origin-bottom",
+          "[transform-origin:var(--radix-dropdown-menu-content-transform-origin)]",
           className,
         )}
         {...props}

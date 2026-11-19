@@ -34,7 +34,9 @@ export function SelectContent({ className, children, position = "popper", ...pro
         sideOffset={6}
         className={cn(
           "z-[70] max-h-[min(340px,var(--radix-select-content-available-height))] min-w-[var(--radix-select-trigger-width)] overflow-hidden rounded-[10px] border border-line bg-surface shadow-[var(--shadow-pop)]",
+          "scale-100",
           "data-[state=open]:animate-[menu-in_160ms_cubic-bezier(0.23,1,0.32,1)]",
+          "[transform-origin:var(--radix-select-content-transform-origin)]",
           className,
         )}
         {...props}
