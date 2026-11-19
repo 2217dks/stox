@@ -1,16 +1,12 @@
 const { Prisma } = require("@prisma/client");
 const prisma = require("../config/database");
 const { AppError } = require("../utils/errors");
+const { toDecimalString } = require("../utils/decimal");
 const { toUtcDateString, parseUtcDateBoundary } = require("../utils/dateUtils");
 
 const ZERO = new Prisma.Decimal(0);
 const MAX_RANGE_DAYS = 365;
 
-function toDecimalString(val, decimals = 8) {
-  if (val === null || val === undefined) return null;
-  const d = val instanceof Prisma.Decimal ? val : new Prisma.Decimal(val);
-  return d.toFixed(decimals);
-}
 
 /**
  * Expose historical portfolio state for a requested time range using stored snapshots

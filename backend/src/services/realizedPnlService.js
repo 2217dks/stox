@@ -1,6 +1,7 @@
 const { Prisma } = require("@prisma/client");
 const prisma = require("../config/database");
 const { AppError } = require("../utils/errors");
+const { toDecimalString } = require("../utils/decimal");
 const { resolveDateRange } = require("./portfolioSeriesService");
 
 const ZERO = new Prisma.Decimal(0);
@@ -15,11 +16,6 @@ function toDecimal(val) {
   }
 }
 
-function toDecimalString(val, decimals = 8) {
-  if (val === null || val === undefined) return null;
-  const d = toDecimal(val);
-  return d.toFixed(decimals);
-}
 
 /**
  * Pure calculation of realized P&L metrics from a list of completed trade rows.
