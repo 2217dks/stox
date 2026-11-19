@@ -349,13 +349,32 @@ export function usePosition(portfolioId, symbol, explicitAssetType = null) {
     );
     if (!matches.length) return [];
     if (explicitAssetType) {
-      const typeMatches = matches.filter(
+      return matches.filter(
         (item) => item.assetType === explicitAssetType,
       );
-      if (typeMatches.length > 0) return typeMatches;
     }
+
+    // When explicitAssetType is omitted, ensure we never aggregate across different
+    // asset classes. If all matches share the same asset type, aggregate them.
+    // If mixed asset types exist for this canonical symbol, isolate by the
+    // symbol's natural asset class heuristic (isCrypto) so unrelated classes
+    // (e.g. STOCK vs CRYPTO) are never aggregated into one position.
+    const firstType = matches[0]?.assetType;
+    const hasMixedTypes = matches.some(
+      (item) => item.assetType && firstType && item.assetType !== firstType,
+    );
+    if (hasMixedTypes) {
+      const preferredType = isCrypto(symbol) ? "CRYPTO" : "STOCK";
+      const preferredMatches = matches.filter(
+        (item) => item.assetType === preferredType,
+      );
+      return preferredMatches.length > 0
+        ? preferredMatches
+        : matches.filter((item) => item.assetType === firstType);
+    }
+
     return matches;
-  }, [holdings.data, symbolKey, explicitAssetType]);
+  }, [holdings.data, symbolKey, explicitAssetType, symbol]);
 
   const aggregatedHolding = useMemo(() => {
     if (!matchingHoldings.length) return null;
