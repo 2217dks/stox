@@ -114,7 +114,19 @@ export async function refreshSession() {
 
       if (!response.ok) {
         if (response.status === 401 || response.status === 403) {
-          clearAuthSession();
+          // Another tab may have rotated the refresh token while this request
+          // was in flight. Clearing here would delete that tab's fresh pair
+          // and log both tabs out, so only clear when the stored token is
+          // still the one this request sent.
+          const currentRefreshToken = getRefreshToken();
+
+          if (currentRefreshToken && currentRefreshToken !== refreshToken) {
+            return true;
+          }
+
+          if (currentRefreshToken === refreshToken) {
+            clearAuthSession();
+          }
         }
         return false;
       }
