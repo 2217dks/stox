@@ -432,14 +432,25 @@ async function refreshAccessToken({ refreshToken, userAgent, ipAddress }) {
   }
 
   const result = await prisma.$transaction(async (tx) => {
-    await tx.refreshToken.update({
+    // Claim the token atomically. The revokedAt check above runs outside the
+    // transaction, so two concurrent refreshes can both reach this point with
+    // one single-use token. The conditional update lets exactly one win.
+    const claimed = await tx.refreshToken.updateMany({
       where: {
         id: storedToken.id,
+        revokedAt: null,
       },
       data: {
         revokedAt: new Date(),
       },
     });
+
+    if (claimed.count !== 1) {
+      throw AppError.unauthorized(
+        "Refresh token has been revoked.",
+        "REFRESH_TOKEN_REVOKED",
+      );
+    }
 
     const tokens = await issueTokenPair(tx, storedToken.user, {
       userAgent,
