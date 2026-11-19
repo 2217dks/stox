@@ -90,6 +90,14 @@ function isExplicitCryptoPair(requestedSymbol, rawSymbol) {
     }
   }
 
+  // Explicit provider prefix with a pair-shaped symbol (length >= 5) that is NOT a base asset
+  if (raw.startsWith("BINANCE:")) {
+    const clean = raw.slice("BINANCE:".length);
+    if (clean !== "1000SATS" && !MAJOR_CRYPTO_BASE_ASSET_SET.has(clean) && clean.length >= 5) {
+      return true;
+    }
+  }
+
   return false;
 }
 
