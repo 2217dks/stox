@@ -217,6 +217,81 @@ describe("Portfolio integration API", () => {
     expect(aapl.isShort).toBe(false);
   });
 
+  test("returns holdings with sequential reservedQuantity allocation across multiple rows of the same canonical symbol", async () => {
+    await prisma.holding.deleteMany({
+      where: {
+        portfolioId: user1TestPortfolioId,
+      },
+    });
+
+    await prisma.holding.createMany({
+      data: [
+        {
+          portfolioId: user1TestPortfolioId,
+          symbol: "BINANCE:BTCUSDT",
+          assetType: "CRYPTO",
+          quantity: "2.0",
+          averageBuyPrice: "50000",
+          totalInvested: "100000",
+          isShort: false,
+        },
+        {
+          portfolioId: user1TestPortfolioId,
+          symbol: "BTC/USDT",
+          assetType: "CRYPTO",
+          quantity: "3.0",
+          averageBuyPrice: "60000",
+          totalInvested: "180000",
+          isShort: false,
+        },
+      ],
+    });
+
+    const pendingSell = await prisma.order.create({
+      data: {
+        portfolioId: user1TestPortfolioId,
+        symbol: "BTCUSDT",
+        assetType: "CRYPTO",
+        side: "SELL",
+        type: "LIMIT",
+        quantity: "1.5",
+        limitPrice: "70000",
+        status: "PENDING",
+      },
+    });
+
+    try {
+      const response = await request(app)
+        .get(`/api/v1/portfolios/${user1TestPortfolioId}/holdings`)
+        .set("Authorization", `Bearer ${user1AccessToken}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.success).toBe(true);
+      const holdings = response.body.data.holdings;
+      expect(holdings).toHaveLength(2);
+
+      const btc1 = holdings.find((h) => h.symbol === "BINANCE:BTCUSDT");
+      const btc2 = holdings.find((h) => h.symbol === "BTC/USDT");
+
+      expect(btc1.quantity).toBe("2");
+      expect(btc1.reservedQuantity).toBe("1.5");
+      expect(btc1.availableQuantity).toBe("0.5");
+
+      expect(btc2.quantity).toBe("3");
+      expect(btc2.reservedQuantity).toBe("0");
+      expect(btc2.availableQuantity).toBe("3");
+
+      const totalReserved =
+        Number(btc1.reservedQuantity) + Number(btc2.reservedQuantity);
+      expect(totalReserved).toBe(1.5);
+      const totalAvailable =
+        Number(btc1.availableQuantity) + Number(btc2.availableQuantity);
+      expect(totalAvailable).toBe(3.5);
+    } finally {
+      await prisma.order.delete({ where: { id: pendingSell.id } });
+    }
+  });
+
   test("returns the current portfolio cash balance", async () => {
     await prisma.portfolio.update({
       where: {
