@@ -475,6 +475,26 @@ async function evaluateLeagueMembers(
     (m) => !m.user?.isSuspended,
   );
 
+  // Every member is evaluated concurrently, so cache the in-flight price
+  // promise per symbol: without this a 500-member league holding 10 symbols
+  // makes ~5,000 provider calls for 10 distinct prices.
+  const pricePromises = new Map();
+
+  const priceFor = (holding) => {
+    const key = `${holding.symbol}:${holding.assetType}`;
+
+    if (!pricePromises.has(key)) {
+      pricePromises.set(
+        key,
+        priceProvider
+          ? resolveHoldingPrice(holding, vDate, priceProvider, isHistorical)
+          : Promise.resolve(null),
+      );
+    }
+
+    return pricePromises.get(key);
+  };
+
   const evaluatedMembers = await Promise.all(
     candidateMembers.map(async (member) => {
       const allTrades = member.portfolio?.trades || [];
@@ -524,9 +544,7 @@ async function evaluateLeagueMembers(
         if (!h.quantity.isZero()) {
           let priceDecimal;
           try {
-            const quote = priceProvider
-              ? await resolveHoldingPrice(h, vDate, priceProvider, isHistorical)
-              : null;
+            const quote = await priceFor(h);
 
             if (!quote || quote.price === undefined || quote.price === null) {
               throw new Error(`Quote price is missing for ${h.symbol}`);
@@ -1087,6 +1105,7 @@ module.exports = {
   getEffectiveLeagueStatus,
   syncLeagueStatuses,
   completeLeague,
+  evaluateLeagueMembers,
   processCompletedLeagues,
   validateMembershipConsistency,
 };
