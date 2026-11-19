@@ -31,8 +31,9 @@ const QUANTITY_FACTOR = 10n ** BigInt(QUANTITY_SCALE);
 
 /** Percent of a decimal quantity without floating-point overshoot. */
 function fractionQuantity(value, percent) {
-  const text =
-    typeof value === "number" ? value.toFixed(QUANTITY_SCALE) : String(value ?? "0");
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return "";
+  const text = num.toFixed(QUANTITY_SCALE);
   const [whole = "0", fraction = ""] = text.split(".");
   const digits = `${whole}${fraction.padEnd(QUANTITY_SCALE, "0").slice(0, QUANTITY_SCALE)}`;
   const scaled = (BigInt(digits) * BigInt(percent)) / 100n;
@@ -47,8 +48,9 @@ function fractionQuantity(value, percent) {
 
 /** Round a cash-derived quantity down so the notional can never exceed cash. */
 function floorQuantity(value) {
-  if (!Number.isFinite(value) || value <= 0) return "";
-  const truncated = Math.floor(value * 10 ** QUANTITY_SCALE) / 10 ** QUANTITY_SCALE;
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return "";
+  const truncated = Math.floor(num * 10 ** QUANTITY_SCALE) / 10 ** QUANTITY_SCALE;
   return truncated > 0
     ? truncated.toFixed(QUANTITY_SCALE).replace(/\.?0+$/, "")
     : "";
@@ -171,8 +173,22 @@ export function OrderTicket({
 
   const fillAllocation = (percent) => {
     if (side === "SELL") {
+      if (percent === 100) {
+        const next =
+          assetType === "STOCK"
+            ? String(Math.floor(sellableQuantity))
+            : floorQuantity(sellableQuantity);
+        if (next && next !== "0") setValue("quantity", next, { shouldValidate: true });
+        return;
+      }
       const next = fractionQuantity(sellableQuantity, percent);
       if (next) setValue("quantity", next, { shouldValidate: true });
+      return;
+    }
+
+    if (percent === 100 && assetType === "STOCK" && price > 0) {
+      const next = String(Math.floor(availableCash / price));
+      if (next && next !== "0") setValue("quantity", next, { shouldValidate: true });
       return;
     }
 
@@ -443,8 +459,11 @@ export function OrderTicket({
           {({ id }) => (
             <Input
               id={id}
+              type="number"
+              step={assetType === "CRYPTO" ? "any" : "1"}
+              min={assetType === "CRYPTO" ? "0.00000001" : "1"}
               inputMode="decimal"
-              placeholder="0.00"
+              placeholder={assetType === "CRYPTO" ? "0.00000000" : "0"}
               className="font-mono tnum"
               invalid={Boolean(errors.quantity)}
               {...register("quantity")}
