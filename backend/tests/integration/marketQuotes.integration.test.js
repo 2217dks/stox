@@ -105,4 +105,24 @@ describe("GET /market/quotes", () => {
       "MSFT",
     ]);
   });
+
+  test("propagates explicit assetTypes to getQuotes service", async () => {
+    const spy = jest.spyOn(marketData, "getQuotes").mockResolvedValue([
+      { symbol: "AAPL", assetClass: "STOCK", price: "150" },
+      { symbol: "BINANCE:SOLUSDT", assetClass: "CRYPTO", price: "100" },
+    ]);
+
+    const response = await request(app).get(
+      "/api/v1/market/quotes?symbols=AAPL,SOL&assetTypes=AAPL:STOCK,SOL:CRYPTO",
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.quotes).toHaveLength(2);
+    expect(spy).toHaveBeenCalledWith(["AAPL", "SOL"], {
+      assetTypes: {
+        AAPL: "STOCK",
+        SOL: "CRYPTO",
+      },
+    });
+  });
 });

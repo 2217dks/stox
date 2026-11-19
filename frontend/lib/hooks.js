@@ -123,7 +123,11 @@ export function useQuotes(symbols = [], assetTypes = {}, options = {}) {
       assetTypesKey.split(",").map((entry) => entry.split(":")),
     );
   }, [assetTypesKey]);
-  const key = symbolKey ? `quotes:${symbolKey}` : null;
+  const key = symbolKey
+    ? assetTypesKey
+      ? `quotes:${symbolKey}:${assetTypesKey}`
+      : `quotes:${symbolKey}`
+    : null;
   const [live, setLive] = useState({});
   const pendingTicksRef = useRef({});
 
@@ -132,7 +136,7 @@ export function useQuotes(symbols = [], assetTypes = {}, options = {}) {
     async () => {
       // One request for the whole set: a per-symbol fan-out costs the global
       // rate-limit budget N times for what is one screen.
-      const quotes = await marketApi.quotes(symbols);
+      const quotes = await marketApi.quotes(symbols, stableAssetTypes);
       const byCanonical = new Map(
         quotes.map((quote) => [canonicalMarketSymbol(quote.symbol), quote]),
       );

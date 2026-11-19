@@ -50,8 +50,10 @@ async function getStockQuote(req, res, next) {
 
 async function getQuotes(req, res, next) {
   try {
-    const { symbols } = req.validatedQuery;
-    const quotes = await marketDataService.getQuotes(symbols);
+    const { symbols, assetTypes } = req.validatedQuery;
+    const quotes = assetTypes
+      ? await marketDataService.getQuotes(symbols, { assetTypes })
+      : await marketDataService.getQuotes(symbols);
 
     return res.status(200).json({
       success: true,

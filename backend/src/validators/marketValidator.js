@@ -132,6 +132,40 @@ const batchQuotesQuerySchema = z
           .min(1, "At least one symbol is required.")
           .max(20, "At most 20 symbols may be requested at once."),
       ),
+    assetTypes: z
+      .preprocess((val) => {
+        if (!val) return undefined;
+        if (typeof val === "object" && !Array.isArray(val)) return val;
+        if (typeof val === "string") {
+          const trimmed = val.trim();
+          if (!trimmed) return undefined;
+          if (trimmed.startsWith("{")) {
+            try {
+              return JSON.parse(trimmed);
+            } catch {
+              return {};
+            }
+          }
+          const entries = trimmed
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
+            .map((item) => {
+              const colonIndex = item.indexOf(":");
+              if (colonIndex === -1) return null;
+              const sym = item.slice(0, colonIndex).trim();
+              const type = item.slice(colonIndex + 1).trim().toUpperCase();
+              return [sym, type];
+            })
+            .filter(
+              (entry) =>
+                entry && (entry[1] === "STOCK" || entry[1] === "CRYPTO"),
+            );
+          return Object.fromEntries(entries);
+        }
+        return undefined;
+      }, z.record(z.string(), z.enum(["STOCK", "CRYPTO"])).optional())
+      .optional(),
   })
   .strict();
 

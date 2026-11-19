@@ -77,8 +77,15 @@ module.exports = {
    * as unavailable.
    */
   async getQuotes(symbols = [], options = {}) {
+    const assetTypes = options.assetTypes || {};
     const results = await Promise.allSettled(
-      symbols.map((symbol) => this.getQuote(symbol, options)),
+      symbols.map((symbol) => {
+        const assetClass =
+          assetTypes[symbol] ||
+          assetTypes[symbol.toUpperCase()] ||
+          options.assetClass;
+        return this.getQuote(symbol, { ...options, assetClass });
+      }),
     );
 
     return results
