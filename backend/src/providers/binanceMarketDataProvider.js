@@ -16,6 +16,33 @@ const { BINANCE_QUOTE_ASSETS } = require("../utils/cryptoQuoteAssets");
 
 const MAJOR_CRYPTO_BASE_ASSET_SET = new Set(MAJOR_CRYPTO_BASE_ASSETS);
 
+const KNOWN_BASE_EXCEPTIONS = new Set([
+  "1000SATS",
+  "1000BONK",
+  "1000PEPE",
+  "1000FLOKI",
+  "1000SHIB",
+  "1000RATS",
+  "1000XEC",
+  "1000LUNC",
+]);
+
+function isIntentionalBaseAsset(symbol) {
+  const clean = String(symbol || "")
+    .trim()
+    .toUpperCase()
+    .replace(/^BINANCE:/, "")
+    .replace(/\//g, "");
+
+  if (KNOWN_BASE_EXCEPTIONS.has(clean)) {
+    return true;
+  }
+  if (MAJOR_CRYPTO_BASE_ASSET_SET.has(clean)) {
+    return true;
+  }
+  return false;
+}
+
 const BINANCE_INTERVALS = new Set([
   "1m",
   "5m",
@@ -37,7 +64,10 @@ function assertBinanceSymbolShape(symbol) {
   if (/^[A-Z0-9]{5,30}$/.test(upper)) {
     return;
   }
-  if (/^[A-Z0-9]{2,5}$/.test(upper) && MAJOR_CRYPTO_BASE_ASSET_SET.has(upper)) {
+  if (
+    /^[A-Z0-9]{2,5}$/.test(upper) &&
+    (MAJOR_CRYPTO_BASE_ASSET_SET.has(upper) || isIntentionalBaseAsset(upper))
+  ) {
     return;
   }
   throw createMarketDataError(
@@ -61,8 +91,8 @@ function isExplicitCryptoPair(requestedSymbol, rawSymbol) {
   const symbol = String(requestedSymbol || "").trim().toUpperCase();
   const raw = String(rawSymbol || symbol).trim().toUpperCase();
 
-  // If raw input has a pair delimiter (/ - _), it's explicitly a pair
-  if (/[/_-]/.test(raw)) {
+  // If raw input or normalized symbol has a pair delimiter (/ - _), it's explicitly a pair
+  if (/[/_-]/.test(raw) || /[/_-]/.test(symbol)) {
     return true;
   }
   // If it has a provider prefix with a delimiter, e.g. BINANCE:BTC/USDT or BINANCE:SOL-ETH
@@ -76,6 +106,21 @@ function isExplicitCryptoPair(requestedSymbol, rawSymbol) {
     return true;
   }
 
+  const clean = raw.replace(/^BINANCE:/, "");
+
+  // Intentional base assets (like BTC, SOL, 1000SATS) are not explicit pairs
+  if (isIntentionalBaseAsset(clean) && !symbol.includes(clean + "USDT")) {
+    return false;
+  }
+  if (isIntentionalBaseAsset(symbol)) {
+    return false;
+  }
+
+  // Any Binance-prefixed symbol that is not an intentional base asset
+  if (raw.startsWith("BINANCE:")) {
+    return true;
+  }
+
   // Ends in any known quote asset
   for (const quote of BINANCE_QUOTE_ASSETS) {
     if (symbol.endsWith(quote) && symbol.length > quote.length) {
@@ -83,19 +128,16 @@ function isExplicitCryptoPair(requestedSymbol, rawSymbol) {
     }
   }
 
-  // Starts with any known crypto base asset and has an explicit quote asset (e.g. SOLUNKNOWN, BTCABC, ETHXYZ)
+  // Starts with any known crypto base asset and has an explicit quote asset
   for (const base of MAJOR_CRYPTO_BASE_ASSETS) {
     if (symbol.startsWith(base) && symbol.length > base.length) {
       return true;
     }
   }
 
-  // Explicit provider prefix with a pair-shaped symbol (length >= 5) that is NOT a base asset
-  if (raw.startsWith("BINANCE:")) {
-    const clean = raw.slice("BINANCE:".length);
-    if (clean !== "1000SATS" && !MAJOR_CRYPTO_BASE_ASSET_SET.has(clean) && clean.length >= 5) {
-      return true;
-    }
+  // Any other pair-shaped symbol (length >= 5) that is NOT an intentional base asset
+  if (/^[A-Z0-9]{5,30}$/.test(symbol)) {
+    return true;
   }
 
   return false;

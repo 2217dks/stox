@@ -571,6 +571,11 @@ describe("market-data provider adapters", () => {
     ["BTCABC", "BTCABC"],
     ["SOL/UNKNOWN", "SOLUNKNOWN"],
     ["XYZ/ABC", "XYZABC"],
+    ["BINANCE:HYPERTRY", "HYPERTRY"],
+    ["HYPER/TRY", "HYPERTRY"],
+    ["HYPERTRY", "HYPERTRY"],
+    ["BINANCE:XYZABC", "XYZABC"],
+    ["BTCXYZ", "BTCXYZ"],
   ])(
     "never mutates explicit pair %s into USDT fallback when rejected",
     async (requestedSymbol, expectedBinanceParam) => {
@@ -595,6 +600,81 @@ describe("market-data provider adapters", () => {
       });
     },
   );
+
+  test("fetches a known Binance pair successfully without fallback", async () => {
+    const get = jest.fn().mockResolvedValue({
+      data: binanceQuoteResponse({ symbol: "BTCUSDT", lastPrice: "68000.50" }),
+    });
+    const provider = createBinanceMarketDataProvider(
+      { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+      { httpClient: { get } },
+    );
+
+    const quote = await provider.getQuote("BTCUSDT");
+    expect(quote.symbol).toBe("BINANCE:BTCUSDT");
+    expect(quote.price).toBe("68000.5");
+    expect(get).toHaveBeenCalledTimes(1);
+    expect(get).toHaveBeenCalledWith("/api/v3/ticker/24hr", {
+      params: { symbol: "BTCUSDT" },
+    });
+  });
+
+  test("retries 1000SATS fallback on 404 and succeeds", async () => {
+    const error404 = Object.assign(new Error("Symbol not found"), {
+      response: { status: 404, data: { code: -1121, msg: "Invalid symbol." } },
+    });
+    const get = jest
+      .fn()
+      .mockRejectedValueOnce(error404)
+      .mockResolvedValueOnce({
+        data: binanceQuoteResponse({ symbol: "1000SATSUSDT", lastPrice: "0.00025" }),
+      });
+    const provider = createBinanceMarketDataProvider(
+      { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+      { httpClient: { get } },
+    );
+
+    const quote = await provider.getQuote("1000SATS");
+    expect(quote.symbol).toBe("BINANCE:1000SATSUSDT");
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(get).toHaveBeenNthCalledWith(1, "/api/v3/ticker/24hr", {
+      params: { symbol: "1000SATS" },
+    });
+    expect(get).toHaveBeenNthCalledWith(2, "/api/v3/ticker/24hr", {
+      params: { symbol: "1000SATSUSDT" },
+    });
+  });
+
+  test.each(["!", "A", "@", "", " "])(
+    "rejects invalid symbol syntax %j with 400 before calling API",
+    async (invalidSymbol) => {
+      const get = jest.fn();
+      const provider = createBinanceMarketDataProvider(
+        { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+        { httpClient: { get } },
+      );
+
+      await expect(provider.getQuote(invalidSymbol)).rejects.toMatchObject({
+        statusCode: 400,
+        code: "MARKET_DATA_INVALID_REQUEST",
+      });
+      expect(get).not.toHaveBeenCalled();
+    },
+  );
+
+  test("rejects stock symbol AAPL directly passed to Binance provider", async () => {
+    const get = jest.fn();
+    const provider = createBinanceMarketDataProvider(
+      { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+      { httpClient: { get } },
+    );
+
+    await expect(provider.getQuote("AAPL")).rejects.toMatchObject({
+      statusCode: 400,
+      code: "MARKET_DATA_INVALID_REQUEST",
+    });
+    expect(get).not.toHaveBeenCalled();
+  });
 
   test.each(["BTC", "ETH", "SOL"])(
     "accepts short base-only crypto symbol %s",
