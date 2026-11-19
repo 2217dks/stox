@@ -21,6 +21,14 @@ const BCRYPT_SALT_ROUNDS = Number.parseInt(
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
+// A real bcrypt hash of a value nobody can log in with. Unknown emails and
+// Google-only accounts compare against it so every login attempt pays the same
+// bcrypt cost; otherwise response timing reveals which emails exist.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync(
+  "stox-dummy-password-not-a-real-account",
+  BCRYPT_SALT_ROUNDS,
+);
+
 function requireEnv(name, value) {
   if (!value) {
     throw new Error(`Missing required environment variable: ${name}`);
@@ -339,22 +347,20 @@ async function loginUser({ email, password, userAgent, ipAddress }) {
     },
   });
 
-  if (!user) {
+  // Always pay the bcrypt cost, even when the email is unknown or the account
+  // has no password. Skipping it here is both a timing oracle and the reason
+  // the suspended branch below used to answer before the password was checked.
+  const passwordMatches = await verifyPassword(
+    password,
+    user?.passwordHash ?? DUMMY_PASSWORD_HASH,
+  );
+
+  if (!user || !user.passwordHash || !passwordMatches) {
     throw AppError.unauthorized("Invalid email or password.", "INVALID_CREDENTIALS");
   }
 
   if (user.isSuspended) {
     throw AppError.forbidden("This account has been suspended.", "ACCOUNT_SUSPENDED");
-  }
-
-  if (!user || !user.passwordHash) {
-    throw AppError.unauthorized("Invalid email or password.", "INVALID_CREDENTIALS");
-  }
-
-  const passwordMatches = await verifyPassword(password, user.passwordHash);
-
-  if (!passwordMatches) {
-    throw AppError.unauthorized("Invalid email or password.", "INVALID_CREDENTIALS");
   }
 
   const result = await prisma.$transaction(async (tx) => {
