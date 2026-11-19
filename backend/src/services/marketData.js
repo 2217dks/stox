@@ -86,17 +86,25 @@ module.exports = {
     const toMs = Math.min(asOf.getTime(), Date.now());
     const fromMs = Math.max(0, toMs - 7 * 24 * 60 * 60 * 1000);
 
-    const history = await marketDataService.getHistoricalPrices(
+    // Nightly snapshots ask for the same symbol-day once per portfolio. Without
+    // this cache a 200-portfolio run fetches the same close 200 times.
+    const history = await cacheService.getOrSetHistoricalPrices(
+      resolved.assetClass,
       resolved.canonicalSymbol,
-      {
-        interval: "1d",
-        from: fromMs,
-        to: toMs,
-        limit: 10,
-        assetClass: resolved.assetClass,
-        ...options,
-        _resolved: resolved,
-      },
+      "1d",
+      fromMs,
+      toMs,
+      10,
+      () =>
+        marketDataService.getHistoricalPrices(resolved.canonicalSymbol, {
+          interval: "1d",
+          from: fromMs,
+          to: toMs,
+          limit: 10,
+          assetClass: resolved.assetClass,
+          ...options,
+          _resolved: resolved,
+        }),
     );
 
     if (!history || !Array.isArray(history.prices) || history.prices.length === 0) {

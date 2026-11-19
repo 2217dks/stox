@@ -342,6 +342,24 @@ async function setHistoricalPrices(
   );
 }
 
+async function getOrSetHistoricalPrices(
+  assetClass,
+  symbol,
+  interval,
+  from,
+  to,
+  limit,
+  loader,
+  options = {},
+) {
+  return getOrSet(
+    cacheKeys.historicalPrices(assetClass, symbol, interval, from, to, limit),
+    loader,
+    TTL_SECONDS.historicalPrices,
+    { resource: "historical_prices", assetClass, ...options },
+  );
+}
+
 async function getMarketSearch(query, options = {}) {
   return get(cacheKeys.marketSearch(query, options), {
     resource: "market_search",
@@ -723,6 +741,7 @@ module.exports = {
   invalidatePortfolio,
   getHistoricalPrices,
   setHistoricalPrices,
+  getOrSetHistoricalPrices,
   getMarketSearch,
   setMarketSearch,
   getOrSetMarketSearch,

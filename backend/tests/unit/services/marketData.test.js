@@ -43,6 +43,7 @@ jest.mock("../../../src/services/marketDataService", () => ({
 jest.mock("../../../src/services/cacheService", () => ({
   getOrSetPrice: jest.fn(),
   getOrSetMarketSearch: jest.fn(),
+  getOrSetHistoricalPrices: jest.fn(),
 }));
 
 const {
@@ -318,5 +319,39 @@ describe("marketData symbol search caching", () => {
       expect.any(Function),
     );
     expect(results).toEqual([]);
+  });
+});
+
+describe("marketData historical price caching", () => {
+  test("fetches one symbol-day once even when many portfolios ask for it", async () => {
+    const store = new Map();
+
+    cacheService.getOrSetHistoricalPrices.mockImplementation(
+      (assetClass, symbol, interval, from, to, limit, loader) => {
+        const key = [assetClass, symbol, interval, from, to, limit].join("|");
+
+        if (!store.has(key)) {
+          return Promise.resolve(loader()).then((value) => {
+            store.set(key, value);
+            return value;
+          });
+        }
+
+        return store.get(key);
+      },
+    );
+
+    baseMarketDataService.getHistoricalPrices = jest.fn().mockResolvedValue({
+      symbol: "AAPL",
+      interval: "1d",
+      prices: [{ timestamp: Date.parse("2026-11-10T00:00:00.000Z"), close: "100" }],
+    });
+
+    const asOf = new Date("2026-11-10T23:59:59.999Z");
+
+    await marketData.getHistoricalPrice("AAPL", { asOf });
+    await marketData.getHistoricalPrice("AAPL", { asOf });
+
+    expect(baseMarketDataService.getHistoricalPrices).toHaveBeenCalledTimes(1);
   });
 });
