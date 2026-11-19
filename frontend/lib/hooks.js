@@ -364,6 +364,12 @@ export function usePosition(portfolioId, symbol) {
 
   const reservedQuantity = useMemo(() => {
     if (!symbolKey) return 0;
+    if (
+      holding?.reservedQuantity !== undefined &&
+      holding?.reservedQuantity !== null
+    ) {
+      return Number(holding.reservedQuantity);
+    }
     return (pendingSells.data?.orders ?? [])
       .filter(
         (order) =>
@@ -372,7 +378,7 @@ export function usePosition(portfolioId, symbol) {
           canonicalMarketSymbol(order.symbol) === symbolKey,
       )
       .reduce((total, order) => total + Number(order.quantity || 0), 0);
-  }, [pendingSells.data, symbolKey]);
+  }, [holding, pendingSells.data, symbolKey]);
 
   const quantity = Number(holding?.quantity ?? 0);
   const netReserved = Math.min(Math.max(reservedQuantity, 0), quantity);

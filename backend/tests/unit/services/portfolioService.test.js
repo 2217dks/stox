@@ -1,7 +1,8 @@
 jest.mock("../../../src/config/database", () => ({
   user: { findUnique: jest.fn() },
   portfolio: { findFirst: jest.fn(), update: jest.fn() },
-  holding: { aggregate: jest.fn() },
+  holding: { aggregate: jest.fn(), findMany: jest.fn() },
+  order: { findMany: jest.fn() },
 }));
 
 jest.mock("../../../src/services/cacheService", () => ({
@@ -248,5 +249,67 @@ describe("reactivatePortfolio", () => {
     });
 
     expect(prisma.portfolio.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("listPortfolioHoldings", () => {
+  test("calculates authoritative reservedQuantity and availableQuantity across pending sell orders", async () => {
+    prisma.portfolio.findFirst.mockResolvedValue({
+      id: PORTFOLIO_ID,
+    });
+    prisma.holding.findMany.mockResolvedValue([
+      {
+        id: "holding-1",
+        portfolioId: PORTFOLIO_ID,
+        symbol: "AAPL",
+        assetType: "STOCK",
+        quantity: new Prisma.Decimal("10"),
+        averageBuyPrice: new Prisma.Decimal("150"),
+        totalInvested: new Prisma.Decimal("1500"),
+        isShort: false,
+        createdAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      },
+      {
+        id: "holding-2",
+        portfolioId: PORTFOLIO_ID,
+        symbol: "BINANCE:BTCUSDT",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("5.5"),
+        averageBuyPrice: new Prisma.Decimal("60000"),
+        totalInvested: new Prisma.Decimal("330000"),
+        isShort: false,
+        createdAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      },
+    ]);
+    prisma.order.findMany.mockResolvedValue([
+      {
+        symbol: "AAPL",
+        assetType: "STOCK",
+        quantity: new Prisma.Decimal("4"),
+      },
+      {
+        symbol: "BTC/USDT",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("2.0"),
+      },
+    ]);
+
+    const holdings = await portfolioService.listPortfolioHoldings(
+      USER_ID,
+      PORTFOLIO_ID,
+    );
+
+    expect(holdings).toHaveLength(2);
+    const aapl = holdings.find((h) => h.symbol === "AAPL");
+    expect(aapl.quantity).toBe("10");
+    expect(aapl.reservedQuantity).toBe("4");
+    expect(aapl.availableQuantity).toBe("6");
+
+    const btc = holdings.find((h) => h.symbol === "BINANCE:BTCUSDT");
+    expect(btc.quantity).toBe("5.5");
+    expect(btc.reservedQuantity).toBe("2");
+    expect(btc.availableQuantity).toBe("3.5");
   });
 });

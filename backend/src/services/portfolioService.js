@@ -4,6 +4,7 @@ const prisma = require("../config/database");
 const { AppError } = require("../utils/errors");
 
 const cacheService = require("./cacheService");
+const { getCanonicalInstrumentSymbol } = require("./symbolMappingService");
 
 function createServiceError(message, statusCode, code) {
   return new AppError(message, { statusCode, code });
@@ -352,18 +353,58 @@ async function listPortfolioHoldings(userId, portfolioId) {
     },
   });
 
-  return holdings.map((holding) => ({
-    id: holding.id,
-    portfolioId: holding.portfolioId,
-    symbol: holding.symbol,
-    assetType: holding.assetType,
-    quantity: holding.quantity.toString(),
-    averageBuyPrice: holding.averageBuyPrice.toString(),
-    totalInvested: holding.totalInvested.toString(),
-    isShort: holding.isShort,
-    createdAt: holding.createdAt,
-    updatedAt: holding.updatedAt,
-  }));
+  const pendingSellOrders = await prisma.order.findMany({
+    where: {
+      portfolioId: portfolio.id,
+      side: "SELL",
+      status: "PENDING",
+    },
+    select: {
+      symbol: true,
+      assetType: true,
+      quantity: true,
+    },
+  });
+
+  const reservedMap = new Map();
+  for (const pending of pendingSellOrders) {
+    const canonical = getCanonicalInstrumentSymbol(
+      pending.symbol,
+      pending.assetType,
+    );
+    const key = `${pending.assetType}:${canonical}`;
+    const prev = reservedMap.get(key) || new Prisma.Decimal(0);
+    reservedMap.set(key, prev.plus(new Prisma.Decimal(pending.quantity)));
+  }
+
+  return holdings.map((holding) => {
+    const canonical = getCanonicalInstrumentSymbol(
+      holding.symbol,
+      holding.assetType,
+    );
+    const key = `${holding.assetType}:${canonical}`;
+    const totalReserved = reservedMap.get(key) || new Prisma.Decimal(0);
+    const heldQty = new Prisma.Decimal(holding.quantity);
+    const reservedQty = heldQty.gt(totalReserved) ? totalReserved : heldQty;
+    const availableQty = heldQty.gt(reservedQty)
+      ? heldQty.minus(reservedQty)
+      : new Prisma.Decimal(0);
+
+    return {
+      id: holding.id,
+      portfolioId: holding.portfolioId,
+      symbol: holding.symbol,
+      assetType: holding.assetType,
+      quantity: holding.quantity.toString(),
+      reservedQuantity: totalReserved.toString(),
+      availableQuantity: availableQty.toString(),
+      averageBuyPrice: holding.averageBuyPrice.toString(),
+      totalInvested: holding.totalInvested.toString(),
+      isShort: holding.isShort,
+      createdAt: holding.createdAt,
+      updatedAt: holding.updatedAt,
+    };
+  });
 }
 
 /**
