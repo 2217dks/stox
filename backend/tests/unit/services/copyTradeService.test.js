@@ -7,6 +7,7 @@ jest.mock("../../../src/config/database", () => ({
     create: jest.fn(),
     findUnique: jest.fn(),
     update: jest.fn(),
+    count: jest.fn(),
   },
   order: {
     findUnique: jest.fn(),
@@ -17,6 +18,7 @@ jest.mock("../../../src/config/database", () => ({
   },
   trade: {
     findUnique: jest.fn(),
+    update: jest.fn(),
   },
 }));
 
@@ -24,7 +26,12 @@ jest.mock("../../../src/services/orderService", () => ({
   createOrder: jest.fn(),
 }));
 
-const { computeCopyQuantity } = require("../../../src/services/copyTradeService");
+const {
+  computeCopyQuantity,
+  fanOutCopyTrades,
+} = require("../../../src/services/copyTradeService");
+const prisma = require("../../../src/config/database");
+const orderService = require("../../../src/services/orderService");
 
 // Pure sizing contract. The fan-out path is covered by the integration suite;
 // these cases pin the arithmetic and the rounding direction.
@@ -121,5 +128,83 @@ describe("computeCopyQuantity", () => {
         allocationPct: "33.33",
       }).toString(),
     ).toBe("0.03333");
+  });
+});
+
+describe("copy-trade fan-out recovery", () => {
+  const sourceTrade = {
+    id: "trade-1",
+    symbol: "AAPL",
+    assetType: "STOCK",
+    side: "BUY",
+    quantity: "10",
+    price: "100",
+    copyFanOutAt: null,
+    order: { id: "order-source", source: "MANUAL" },
+    portfolio: { userId: "copied-user" },
+  };
+
+  const copyTrader = {
+    id: "copy-trader-1",
+    copierId: "copier-1",
+    copyPortfolioId: "portfolio-1",
+    allocationPct: "100",
+    maxTradeSize: null,
+  };
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+
+    prisma.trade.findUnique.mockResolvedValue(sourceTrade);
+    prisma.trade.update.mockResolvedValue({});
+    prisma.copyTrader.findMany.mockResolvedValue([copyTrader]);
+    prisma.copyTradeExecution.create.mockResolvedValue({
+      id: "execution-1",
+      status: "PENDING",
+      attempts: 0,
+    });
+    prisma.copyTradeExecution.findUnique.mockResolvedValue({
+      id: "execution-1",
+      status: "PENDING",
+      attempts: 0,
+    });
+    prisma.copyTradeExecution.update.mockImplementation(async ({ data }) => ({
+      id: "execution-1",
+      status: data.status ?? "PENDING",
+      attempts: data.attempts ?? 0,
+    }));
+    prisma.copyTradeExecution.count.mockResolvedValue(0);
+    prisma.portfolio.findUnique.mockResolvedValue({
+      id: "portfolio-1",
+      isActive: true,
+    });
+  });
+
+  test("marks PLACED when a concurrent pass committed the order before the failure was classified", async () => {
+    prisma.order.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: "order-1", status: "PENDING" });
+
+    orderService.createOrder.mockRejectedValue(
+      Object.assign(new Error("Insufficient available portfolio cash."), {
+        code: "INSUFFICIENT_BALANCE",
+      }),
+    );
+
+    const summary = await fanOutCopyTrades({
+      tradeId: sourceTrade.id,
+      orderService,
+    });
+
+    expect(summary.placed).toBe(1);
+    expect(summary.failed).toBe(0);
+    expect(prisma.copyTradeExecution.update).toHaveBeenCalledWith({
+      where: { id: "execution-1" },
+      data: expect.objectContaining({ status: "PLACED" }),
+    });
+    expect(prisma.trade.update).toHaveBeenCalledWith({
+      where: { id: sourceTrade.id },
+      data: { copyFanOutAt: expect.any(Date) },
+    });
   });
 });
