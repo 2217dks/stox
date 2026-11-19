@@ -33,9 +33,19 @@ import { DataTable } from "@/components/ui/data-table";
 import { EmptyState, ErrorState } from "@/components/ui/empty-state";
 import { SegmentedControl } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useApi, useActivePortfolio, useHoldings, useMarketStream, useQuote } from "@/lib/hooks";
+import {
+  useApi,
+  useActivePortfolio,
+  useMarketStream,
+  usePosition,
+  useQuote,
+} from "@/lib/hooks";
 import { marketApi } from "@/lib/endpoints";
-import { CHART_INTERVALS, CURATED_MARKET_META } from "@/lib/constants";
+import {
+  CHART_TIMEFRAMES,
+  chartRequestWindow,
+  CURATED_MARKET_META,
+} from "@/lib/constants";
 import {
   formatCurrency,
   formatPercent,
@@ -48,9 +58,9 @@ import {
 } from "@/lib/format";
 import { cn, normalizeMarketSymbol } from "@/lib/utils";
 
-const intervalOptions = CHART_INTERVALS.map((interval) => ({
-  value: interval.value,
-  label: interval.label,
+const timeframeOptions = CHART_TIMEFRAMES.map((timeframe) => ({
+  value: timeframe.value,
+  label: timeframe.label,
 }));
 
 function Stat({ label, value, hint }) {
@@ -79,8 +89,13 @@ function MarketDetail() {
         ? "CRYPTO"
         : "STOCK";
 
-  const [interval, setInterval] = useState(assetType === "CRYPTO" ? "1h" : "1d");
+  const [timeframe, setTimeframe] = useState(
+    assetType === "CRYPTO" ? "1W" : "3M",
+  );
   const [mode, setMode] = useState("candles");
+  const timeframeConfig =
+    CHART_TIMEFRAMES.find((item) => item.value === timeframe) ??
+    CHART_TIMEFRAMES[0];
 
   const { portfolio, portfolioId } = useActivePortfolio();
   const { quote, loading: quoteLoading, error: quoteError, mutate: mutateQuote } =
@@ -90,7 +105,7 @@ function MarketDetail() {
     query: { query: rawSymbol, assetClass: assetType, limit: 1 },
     enabled: rawSymbol.length >= 2,
   });
-  const { data: holdingsData } = useHoldings(portfolioId);
+  const position = usePosition(portfolioId, rawSymbol);
   const { data: alertsData, loading: alertsLoading } = useApi("/alerts", {
     query: { symbol: rawSymbol, status: "ACTIVE", limit: 5 },
     refreshInterval: 180000,
@@ -100,43 +115,42 @@ function MarketDetail() {
     refreshInterval: 120000,
   });
 
-  const intervalConfig =
-    CHART_INTERVALS.find((item) => item.value === interval) || CHART_INTERVALS[3];
-
   const {
     data: history,
     isLoading: historyLoading,
     error: historyError,
     mutate: mutateHistory,
   } = useSWR(
-    `history:${assetType}:${rawSymbol}:${interval}`,
+    `history:${assetType}:${rawSymbol}:${timeframeConfig.value}`,
     () => {
-      const to = Date.now();
-      const from = to - intervalConfig.duration;
+      const window = chartRequestWindow(timeframeConfig.value);
       return marketApi.history(rawSymbol, {
-        interval,
-        from,
-        to,
-        limit: 800,
+        interval: timeframeConfig.interval,
+        from: window.from,
+        to: window.to,
+        limit: window.limit,
         assetClass: assetType,
       });
     },
-    { refreshInterval: 180000, shouldRetryOnError: false, keepPreviousData: true },
+    {
+      refreshInterval: 180000,
+      shouldRetryOnError: false,
+      keepPreviousData: true,
+    },
   );
-
-  const holding = (holdingsData?.holdings ?? []).find(
-    (item) => item.symbol === rawSymbol && Number(item.quantity) !== 0,
-  );
-  const holdingValue = holding
-    ? Number(holding.quantity) * Number(quote?.price || 0)
-    : 0;
-  const holdingPnl = holding ? holdingValue - Number(holding.totalInvested) : 0;
-  const holdingPnlPct =
-    holding && Number(holding.totalInvested) > 0
-      ? (holdingPnl / Number(holding.totalInvested)) * 100
-      : 0;
 
   const price = tick?.price || quote?.price;
+  const livePositionPrice = Number(price || 0);
+  const holdingValue =
+    position.hasPosition && livePositionPrice > 0
+      ? position.quantity * livePositionPrice
+      : 0;
+  const holdingPnl = holdingValue > 0 ? holdingValue - position.totalInvested : 0;
+  const holdingPnlPct =
+    position.totalInvested > 0 && holdingValue > 0
+      ? (holdingPnl / position.totalInvested) * 100
+      : 0;
+
   const change = Number(quote?.changePercent || 0);
   const isUp = change >= 0;
   const name =
@@ -156,8 +170,8 @@ function MarketDetail() {
     const change = first ? ((last - first) / first) * 100 : 0;
     return `${tickerOf(rawSymbol)} is ${change >= 0 ? "up" : "down"} ${Math.abs(
       change,
-    ).toFixed(2)} percent over the selected period.`;
-  }, [prices, rawSymbol]);
+    ).toFixed(2)} percent over the selected ${timeframeConfig.label}.`;
+  }, [prices, rawSymbol, timeframeConfig.label]);
 
   const alerts = alertsData?.alerts ?? [];
   const trades = tradesData?.trades ?? [];
@@ -238,6 +252,35 @@ function MarketDetail() {
               Quote updated {formatRelative(quote.timestamp)}
             </p>
           ) : null}
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+            {position.loading ? (
+              <span className="text-fg-subtle">Checking position…</span>
+            ) : position.error ? (
+              <span className="text-fg-subtle">Position unavailable</span>
+            ) : position.hasPosition ? (
+              <>
+                <span className="rounded-full border border-line bg-surface-2/70 px-2 py-0.5 text-fg-muted">
+                  You own{" "}
+                  <span className="tnum font-medium text-fg">
+                    {formatQuantity(position.quantity)}{" "}
+                    {assetType === "CRYPTO" ? tickerOf(rawSymbol) : "shares"}
+                  </span>
+                </span>
+                <span className="tnum text-fg-subtle">
+                  {formatPrice(position.averageBuyPrice)} avg
+                </span>
+                {position.reservedQuantity > 0 ? (
+                  <span className="tnum text-fg-subtle">
+                    {formatQuantity(position.reservedQuantity)} in pending sells
+                  </span>
+                ) : null}
+              </>
+            ) : (
+              <span className="rounded-full border border-line bg-surface-2/70 px-2 py-0.5 text-fg-subtle">
+                No open position
+              </span>
+            )}
+          </div>
         </div>
 
         <div className="flex shrink-0 flex-wrap items-center gap-2">
@@ -310,26 +353,32 @@ function MarketDetail() {
       <div className="grid gap-4 xl:grid-cols-12">
         <div className="space-y-4 xl:col-span-8">
           <Card>
-            <CardHeader className="flex-col gap-3 sm:flex-row sm:items-center">
-              <SegmentedControl
-                options={intervalOptions}
-                value={interval}
-                onChange={setInterval}
-                size="sm"
-                ariaLabel="Chart interval"
-                className="overflow-x-auto no-scrollbar"
-              />
-              <div className="flex items-center gap-2 sm:ml-auto">
+            <CardHeader className="flex-col gap-2 sm:flex-row sm:items-center">
+              <div className="flex w-full flex-wrap items-center gap-2">
+                <span className="text-[10.5px] text-fg-subtle">Range</span>
                 <SegmentedControl
-                  options={[
-                    { value: "candles", label: "Candles" },
-                    { value: "area", label: "Line" },
-                  ]}
-                  value={mode}
-                  onChange={setMode}
+                  options={timeframeOptions}
+                  value={timeframe}
+                  onChange={setTimeframe}
                   size="sm"
-                  ariaLabel="Chart style"
+                  ariaLabel="Chart time range"
+                  className="overflow-x-auto no-scrollbar"
                 />
+                <span className="text-[10px] text-fg-subtle">
+                  {timeframeConfig.interval} candles
+                </span>
+                <div className="flex items-center gap-2 sm:ml-auto">
+                  <SegmentedControl
+                    options={[
+                      { value: "candles", label: "Candles" },
+                      { value: "area", label: "Line" },
+                    ]}
+                    value={mode}
+                    onChange={setMode}
+                    size="sm"
+                    ariaLabel="Chart style"
+                  />
+                </div>
               </div>
             </CardHeader>
             <CardContent className="px-1.5 pb-2 sm:px-2">
@@ -363,9 +412,10 @@ function MarketDetail() {
                 <>
                   <CandleChart
                     prices={prices}
-                    interval={interval}
+                    interval={timeframeConfig.interval}
                     mode={mode}
                     height={380}
+                    currentPrice={Number(price) || undefined}
                   />
                   <p className="sr-only">{chartSummary}</p>
                 </>
@@ -374,7 +424,7 @@ function MarketDetail() {
                   compact
                   icon={ChartCandlestick}
                   title="No candles in this window"
-                  description="Try a longer interval or refresh the chart."
+                  description="The provider returned no candles. Try another range, or the pair may be halted."
                   action={
                     <Button
                       variant="secondary"
@@ -545,7 +595,6 @@ function MarketDetail() {
               portfolio={portfolio}
               defaultSymbol={rawSymbol}
               defaultAssetType={assetType}
-              availableQuantity={holding ? Number(holding.quantity) : undefined}
             />
           </div>
 
@@ -567,24 +616,46 @@ function MarketDetail() {
               </CardAction>
             </CardHeader>
             <CardContent>
-              {holding ? (
+              {position.loading ? (
+                <Skeleton className="h-28" />
+              ) : position.error ? (
+                <ErrorState
+                  compact
+                  code={position.error.code}
+                  title="Position unavailable"
+                  description={position.error.message}
+                  action={
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => position.mutateHoldings()}
+                    >
+                      Retry
+                    </Button>
+                  }
+                />
+              ) : position.hasPosition ? (
                 <div className="space-y-3">
                   <div className="flex items-end justify-between">
                     <div>
                       <p className="tnum text-[22px] font-semibold tracking-[-0.03em] text-fg">
-                        {formatCurrency(holdingValue)}
+                        {holdingValue > 0 ? formatCurrency(holdingValue) : "—"}
                       </p>
                       <p className="tnum text-[10.5px] text-fg-subtle">
-                        {formatQuantity(holding.quantity)} units @{" "}
-                        {formatPrice(holding.averageBuyPrice)} avg
+                        {formatQuantity(position.quantity)} {assetType === "CRYPTO" ? tickerOf(rawSymbol) : "shares"} @{" "}
+                        {formatPrice(position.averageBuyPrice)} avg
                       </p>
                     </div>
                     <div className="text-right">
                       <p className={cn("tnum text-[12.5px]", pnlTone(holdingPnl))}>
-                        {formatCurrency(holdingPnl, { signed: true })}
+                        {holdingValue > 0
+                          ? formatCurrency(holdingPnl, { signed: true })
+                          : "—"}
                       </p>
                       <p className={cn("tnum text-[10.5px]", pnlTone(holdingPnl))}>
-                        {formatPercent(holdingPnlPct)}
+                        {holdingValue > 0
+                          ? formatPercent(holdingPnlPct)
+                          : "Live value unavailable"}
                       </p>
                     </div>
                   </div>
@@ -594,25 +665,26 @@ function MarketDetail() {
                         Invested
                       </p>
                       <p className="tnum text-[11.5px] text-fg">
-                        {formatCurrency(holding.totalInvested)}
+                        {formatCurrency(position.totalInvested)}
                       </p>
                     </div>
                     <div className="rounded-[7px] border border-line bg-surface-2/50 px-2.5 py-2">
                       <p className="text-[9px] uppercase tracking-[0.07em] text-fg-subtle">
-                        Allocation
+                        Free to sell
                       </p>
                       <p className="tnum text-[11.5px] text-fg">
-                        {portfolio?.cashBalance
-                          ? formatPercent(
-                              (holdingValue /
-                                (Number(portfolio.cashBalance) + holdingValue)) *
-                                100,
-                              { signed: false },
-                            )
-                          : "—"}
+                        {formatQuantity(position.availableQuantity)}{" "}
+                        {assetType === "CRYPTO" ? tickerOf(rawSymbol) : "shares"}
                       </p>
                     </div>
                   </div>
+                  {position.reservedQuantity > 0 ? (
+                    <p className="text-[10.5px] leading-snug text-fg-subtle">
+                      {formatQuantity(position.reservedQuantity)}{" "}
+                      {assetType === "CRYPTO" ? tickerOf(rawSymbol) : "shares"} are
+                      tied up in pending sell orders and excluded from Max.
+                    </p>
+                  ) : null}
                 </div>
               ) : (
                 <EmptyState

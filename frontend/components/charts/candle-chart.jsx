@@ -8,6 +8,7 @@ import {
   ColorType,
   CrosshairMode,
   HistogramSeries,
+  LineStyle,
   createChart,
 } from "lightweight-charts";
 
@@ -58,11 +59,19 @@ export function CandleChart({
   interval = "1h",
   mode = "candles",
   height = 380,
+  currentPrice,
   className,
 }) {
   const containerRef = useRef(null);
   const chartRef = useRef(null);
+  const seriesRef = useRef(null);
+  const priceLineRef = useRef(null);
+  const currentPriceRef = useRef(currentPrice);
   const theme = useUI((state) => state.theme);
+
+  useEffect(() => {
+    currentPriceRef.current = currentPrice;
+  }, [currentPrice]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -132,9 +141,10 @@ export function CandleChart({
     });
 
     chartRef.current = chart;
+    let series;
 
     if (mode === "area") {
-      const series = chart.addSeries(AreaSeries, {
+      series = chart.addSeries(AreaSeries, {
         lineColor: brand,
         lineWidth: 2,
         topColor: `${brand}3d`,
@@ -148,7 +158,7 @@ export function CandleChart({
         data.map((candle) => ({ time: candle.time, value: candle.close })),
       );
     } else {
-      const series = chart.addSeries(CandlestickSeries, {
+      series = chart.addSeries(CandlestickSeries, {
         upColor: up,
         downColor: down,
         borderVisible: false,
@@ -183,6 +193,27 @@ export function CandleChart({
       }
     }
 
+    seriesRef.current = series;
+
+    // Include the live quote in the y-axis domain so a price line cannot sit
+    // outside the auto-scaled range when the newest candle is older than the
+    // current tick (for example, a weekly candle after a mid-week move).
+    series.applyOptions({
+      autoscaleInfoProvider: (original) => {
+        const result = original();
+        const live = Number(currentPriceRef.current);
+        if (!result?.priceRange || !Number.isFinite(live) || live <= 0) {
+          return result;
+        }
+        return {
+          priceRange: {
+            minValue: Math.min(result.priceRange.minValue, live),
+            maxValue: Math.max(result.priceRange.maxValue, live),
+          },
+        };
+      },
+    });
+
     chart.timeScale().fitContent();
 
     const resizeObserver = new ResizeObserver((entries) => {
@@ -195,8 +226,40 @@ export function CandleChart({
       resizeObserver.disconnect();
       chart.remove();
       chartRef.current = null;
+      seriesRef.current = null;
+      priceLineRef.current = null;
     };
   }, [prices, interval, mode, height, theme]);
+
+  // Keep a live "current price" line on the chart without rebuilding it.
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+
+    const price = Number(currentPrice);
+    if (!Number.isFinite(price) || price <= 0) {
+      if (priceLineRef.current) {
+        series.removePriceLine(priceLineRef.current);
+        priceLineRef.current = null;
+      }
+      return;
+    }
+
+    if (priceLineRef.current) {
+      priceLineRef.current.applyOptions({ price });
+      return;
+    }
+
+    const brand = readToken("--brand", "#6c97ff");
+    priceLineRef.current = series.createPriceLine({
+      price,
+      color: brand,
+      lineWidth: 1,
+      lineStyle: LineStyle.Dashed,
+      axisLabelVisible: true,
+      title: "Current",
+    });
+  }, [currentPrice, prices, mode, height, theme]);
 
   return (
     <div
