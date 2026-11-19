@@ -14,10 +14,12 @@ import { SymbolSearch } from "@/components/market/symbol-search";
 import { ordersApi } from "@/lib/endpoints";
 import { useDebouncedValue, useInvalidateTrading, usePosition, useQuote } from "@/lib/hooks";
 import {
+  floorQuantity,
   formatCurrency,
   formatPercent,
   formatPrice,
   formatQuantity,
+  fractionQuantity,
   isCrypto,
   pnlTone,
   tickerOf,
@@ -25,36 +27,6 @@ import {
 import { ORDER_TYPES, QUICK_ALLOCATIONS } from "@/lib/constants";
 import { orderSchema } from "@/lib/validators";
 import { canonicalMarketSymbol, cn } from "@/lib/utils";
-
-const QUANTITY_SCALE = 8;
-const QUANTITY_FACTOR = 10n ** BigInt(QUANTITY_SCALE);
-
-/** Percent of a decimal quantity without floating-point overshoot. */
-function fractionQuantity(value, percent) {
-  const num = Number(value);
-  if (!Number.isFinite(num) || num <= 0) return "";
-  const text = num.toFixed(QUANTITY_SCALE);
-  const [whole = "0", fraction = ""] = text.split(".");
-  const digits = `${whole}${fraction.padEnd(QUANTITY_SCALE, "0").slice(0, QUANTITY_SCALE)}`;
-  const scaled = (BigInt(digits) * BigInt(percent)) / 100n;
-  const wholePart = scaled / QUANTITY_FACTOR;
-  const fractionPart = (scaled % QUANTITY_FACTOR)
-    .toString()
-    .padStart(QUANTITY_SCALE, "0")
-    .replace(/0+$/, "");
-  const result = `${wholePart}${fractionPart ? `.${fractionPart}` : ""}`;
-  return result === "0" ? "" : result;
-}
-
-/** Round a cash-derived quantity down so the notional can never exceed cash. */
-function floorQuantity(value) {
-  const num = Number(value);
-  if (!Number.isFinite(num) || num <= 0) return "";
-  const truncated = Math.floor(num * 10 ** QUANTITY_SCALE) / 10 ** QUANTITY_SCALE;
-  return truncated > 0
-    ? truncated.toFixed(QUANTITY_SCALE).replace(/\.?0+$/, "")
-    : "";
-}
 
 function unitName(assetType, symbol) {
   return assetType === "CRYPTO" ? tickerOf(symbol) : "shares";

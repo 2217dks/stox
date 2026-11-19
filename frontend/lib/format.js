@@ -1,6 +1,36 @@
-import { CRYPTO_QUOTE_ASSETS } from "./constants";
+import { CRYPTO_QUOTE_ASSETS } from "./constants.js";
 
 const FIAT = "USD";
+
+export const QUANTITY_SCALE = 8;
+export const QUANTITY_FACTOR = 10n ** BigInt(QUANTITY_SCALE);
+
+/** Percent of a decimal quantity without floating-point overshoot. */
+export function fractionQuantity(value, percent) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return "";
+  const text = num.toFixed(QUANTITY_SCALE);
+  const [whole = "0", fraction = ""] = text.split(".");
+  const digits = `${whole}${fraction.padEnd(QUANTITY_SCALE, "0").slice(0, QUANTITY_SCALE)}`;
+  const scaled = (BigInt(digits) * BigInt(percent)) / 100n;
+  const wholePart = scaled / QUANTITY_FACTOR;
+  const fractionPart = (scaled % QUANTITY_FACTOR)
+    .toString()
+    .padStart(QUANTITY_SCALE, "0")
+    .replace(/0+$/, "");
+  const result = `${wholePart}${fractionPart ? `.${fractionPart}` : ""}`;
+  return result === "0" ? "" : result;
+}
+
+/** Round a cash-derived quantity down so the notional can never exceed cash. */
+export function floorQuantity(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return "";
+  const truncated = Math.floor(num * 10 ** QUANTITY_SCALE) / 10 ** QUANTITY_SCALE;
+  return truncated > 0
+    ? truncated.toFixed(QUANTITY_SCALE).replace(/\.?0+$/, "")
+    : "";
+}
 
 export function toNumber(value, fallback = 0) {
   if (value === null || value === undefined || value === "") return fallback;
