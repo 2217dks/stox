@@ -132,6 +132,11 @@ async function handleSendNotification(job, options = {}) {
     where: { userId: notification.userId },
   });
 
+  // The channel results exist only inside the try. Hoist them so a failure of
+  // the final status write can still record what was actually delivered;
+  // otherwise the retry re-sends the push (FCM has no idempotency key).
+  let deliveredChannels;
+
   try {
     const result = await deliverNotification(notification, {
       user: notification.user,
@@ -140,6 +145,8 @@ async function handleSendNotification(job, options = {}) {
       push: options.pushService,
       emit: options.emit,
     });
+
+    deliveredChannels = result.channels;
 
     await prisma.notification.update({
       where: { id: notificationId },
@@ -165,7 +172,7 @@ async function handleSendNotification(job, options = {}) {
         },
         data: {
           deliveryStatus: error.permanent ? "FAILED" : "PENDING",
-          deliveryChannels: error.channels ?? undefined,
+          deliveryChannels: error.channels ?? deliveredChannels,
           deliveredAt: error.permanent ? new Date() : null,
           deliveryStartedAt: null,
         },
