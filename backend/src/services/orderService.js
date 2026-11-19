@@ -765,9 +765,9 @@ async function createOrder({
   // of waiting for the next scan. The repeatable scan and the polling worker
   // remain the fallback, so a Redis outage never blocks order placement.
   // `enqueueOrderExecution` validates its payload and catches Redis errors;
-  // the catch here covers a validation failure so this floating promise can
+  // the catch here covers a validation failure so this promise can
   // never become an unhandled rejection.
-  void enqueueOrderExecution({
+  await enqueueOrderExecution({
     orderId: order.id,
     portfolioId: order.portfolioId,
   }).catch((error) => {
