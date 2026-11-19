@@ -80,7 +80,11 @@ async function getPortfolioHistoricalState(
   }
 
   const msPerDay = 24 * 60 * 60 * 1000;
-  const requestedDays = Math.round((endDate.getTime() - startDate.getTime()) / msPerDay) + 1;
+  // endDate is 23:59:59.999 of the final day, so the difference is already one
+  // day short of the inclusive count. Rounding up added an extra day and made
+  // an exact 365-day request report 366.
+  const requestedDays =
+    Math.floor((endDate.getTime() - startDate.getTime()) / msPerDay) + 1;
 
   if (requestedDays > MAX_RANGE_DAYS) {
     throw AppError.badRequest(
