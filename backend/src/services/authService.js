@@ -300,13 +300,29 @@ async function registerUser({ name, email, password, userAgent, ipAddress }) {
   const passwordHash = await hashPassword(password);
 
   const result = await prisma.$transaction(async (tx) => {
-    const user = await tx.user.create({
-      data: {
-        name: name.trim(),
-        email: normalizedEmail,
-        passwordHash,
-      },
-    });
+    let user;
+
+    try {
+      user = await tx.user.create({
+        data: {
+          name: name.trim(),
+          email: normalizedEmail,
+          passwordHash,
+        },
+      });
+    } catch (error) {
+      // The findUnique check above runs before the transaction, so a
+      // simultaneous registration for the same email reaches the unique index.
+      // Translate it instead of letting Prisma's P2002 become a 500.
+      if (error.code === "P2002") {
+        throw AppError.conflict(
+          "An account with this email already exists.",
+          "EMAIL_ALREADY_EXISTS",
+        );
+      }
+
+      throw error;
+    }
 
     await tx.portfolio.create({
       data: {
@@ -586,16 +602,29 @@ async function loginWithGoogle(credential) {
 
   // New Google account
   const result = await prisma.$transaction(async (tx) => {
-    const newUser = await tx.user.create({
-      data: {
-        email: normalizedEmail,
-        name: name?.trim() || "Stox User",
-        googleId,
-        passwordHash: null,
-        avatarUrl: picture || null,
-        isVerified: Boolean(emailVerified),
-      },
-    });
+    let newUser;
+
+    try {
+      newUser = await tx.user.create({
+        data: {
+          email: normalizedEmail,
+          name: name?.trim() || "Stox User",
+          googleId,
+          passwordHash: null,
+          avatarUrl: picture || null,
+          isVerified: Boolean(emailVerified),
+        },
+      });
+    } catch (error) {
+      if (error.code === "P2002") {
+        throw AppError.conflict(
+          "An account already exists with this email. Sign in with your password before linking Google.",
+          "GOOGLE_ACCOUNT_LINK_REQUIRED",
+        );
+      }
+
+      throw error;
+    }
 
     await tx.portfolio.create({
       data: {
