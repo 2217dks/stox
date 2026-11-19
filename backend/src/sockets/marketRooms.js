@@ -336,9 +336,11 @@ function createMarketRoomRegistry({
     if (state) {
       state.symbols.delete(symbol);
 
-      if (state.symbols.size === 0) {
-        sockets.delete(socket.id);
-      }
+      // Keep the entry when the last symbol goes away: it also holds the
+      // sliding-window rate-limit timestamps. Deleting it here let a client
+      // reset its subscribe budget by unsubscribing, so it could drive
+      // unlimited provider subscribe traffic. removeSocket clears it on
+      // disconnect.
     }
 
     const entry = subscriptions.get(symbol);
