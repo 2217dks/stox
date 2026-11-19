@@ -564,27 +564,58 @@ describe("market-data provider adapters", () => {
     },
   );
 
-  test("maps an unknown Binance pair to not found", async () => {
-    const provider = createBinanceMarketDataProvider(
-      { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
-      {
-        httpClient: {
-          get: jest.fn().mockRejectedValue({
-            response: {
-              status: 400,
-              data: { code: -1121, msg: "Invalid symbol." },
-            },
-          }),
+  test.each([
+    ["NOTAREALCOINUSDT", "NOTAREALCOINUSDT"],
+    ["ETHBTC", "ETHBTC"],
+    ["SOLUNKNOWN", "SOLUNKNOWN"],
+    ["BTCABC", "BTCABC"],
+    ["SOL/UNKNOWN", "SOLUNKNOWN"],
+    ["XYZ/ABC", "XYZABC"],
+  ])(
+    "never mutates explicit pair %s into USDT fallback when rejected",
+    async (requestedSymbol, expectedBinanceParam) => {
+      const get = jest.fn().mockRejectedValue({
+        response: {
+          status: 400,
+          data: { code: -1121, msg: "Invalid symbol." },
         },
-      },
-    );
+      });
+      const provider = createBinanceMarketDataProvider(
+        { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+        { httpClient: { get } },
+      );
 
-    await expect(provider.getQuote("NOTAREALCOINUSDT")).rejects.toMatchObject({
-      statusCode: 404,
-      code: "MARKET_DATA_NOT_FOUND",
-      message: "Market data is unavailable for the requested symbol or range.",
-    });
-  });
+      await expect(provider.getQuote(requestedSymbol)).rejects.toMatchObject({
+        statusCode: 404,
+        code: "MARKET_DATA_NOT_FOUND",
+      });
+      expect(get).toHaveBeenCalledTimes(1);
+      expect(get).toHaveBeenCalledWith("/api/v3/ticker/24hr", {
+        params: { symbol: expectedBinanceParam },
+      });
+    },
+  );
+
+  test.each(["BTC", "ETH", "SOL"])(
+    "accepts short base-only crypto symbol %s",
+    async (symbol) => {
+      const get = jest.fn().mockResolvedValue({
+        data: binanceQuoteResponse({ symbol: `${symbol}USDT` }),
+      });
+      const provider = createBinanceMarketDataProvider(
+        { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+        { httpClient: { get } },
+      );
+
+      const quote = await provider.getQuote(symbol);
+      expect(quote).toMatchObject({
+        symbol: `BINANCE:${symbol}USDT`,
+        currency: "USDT",
+        source: "binance",
+      });
+      expect(get).toHaveBeenCalledTimes(1);
+    },
+  );
 
   test.each([
     ["malformed payload", "not-json"],

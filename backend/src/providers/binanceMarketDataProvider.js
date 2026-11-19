@@ -8,8 +8,13 @@ const {
 } = require("./marketDataHttp");
 const { createMarketDataError } = require("./marketDataErrors");
 const { mapBinanceQuote } = require("./marketQuoteMappers");
-const { toProviderSymbol } = require("../services/symbolMappingService");
+const {
+  toProviderSymbol,
+  MAJOR_CRYPTO_BASE_ASSETS,
+} = require("../services/symbolMappingService");
 const { BINANCE_QUOTE_ASSETS } = require("../utils/cryptoQuoteAssets");
+
+const MAJOR_CRYPTO_BASE_ASSET_SET = new Set(MAJOR_CRYPTO_BASE_ASSETS);
 
 const BINANCE_INTERVALS = new Set([
   "1m",
@@ -28,13 +33,18 @@ function normalizeBinanceSymbol(symbol, options = {}) {
 }
 
 function assertBinanceSymbolShape(symbol) {
-  if (!/^[A-Z0-9]{5,30}$/.test(String(symbol || "").trim().toUpperCase())) {
-    throw createMarketDataError(
-      "The cryptocurrency symbol format is invalid.",
-      400,
-      "MARKET_DATA_INVALID_REQUEST",
-    );
+  const upper = String(symbol || "").trim().toUpperCase();
+  if (/^[A-Z0-9]{5,30}$/.test(upper)) {
+    return;
   }
+  if (/^[A-Z0-9]{2,5}$/.test(upper) && MAJOR_CRYPTO_BASE_ASSET_SET.has(upper)) {
+    return;
+  }
+  throw createMarketDataError(
+    "The cryptocurrency symbol format is invalid.",
+    400,
+    "MARKET_DATA_INVALID_REQUEST",
+  );
 }
 
 function prepareBinanceSymbol(symbol) {
@@ -44,15 +54,42 @@ function prepareBinanceSymbol(symbol) {
   if (!/[:/]/.test(raw)) assertBinanceSymbolShape(raw);
   const normalized = normalizeBinanceSymbol(symbol, { assetClass: "CRYPTO" });
   assertBinanceSymbolShape(normalized);
-  return normalized;
+  return { requestedSymbol: normalized, rawSymbol: raw };
 }
 
-function isExplicitCryptoPair(symbol) {
+function isExplicitCryptoPair(requestedSymbol, rawSymbol) {
+  const symbol = String(requestedSymbol || "").trim().toUpperCase();
+  const raw = String(rawSymbol || symbol).trim().toUpperCase();
+
+  // If raw input has a pair delimiter (/ - _), it's explicitly a pair
+  if (/[/_-]/.test(raw)) {
+    return true;
+  }
+  // If it has a provider prefix with a delimiter, e.g. BINANCE:BTC/USDT or BINANCE:SOL-ETH
+  if (raw.includes(":")) {
+    const afterColon = raw.split(":").slice(1).join(":");
+    if (/[/_-]/.test(afterColon)) return true;
+  }
+
+  // Already ends in USDT
+  if (symbol.endsWith("USDT") && symbol.length > 4) {
+    return true;
+  }
+
+  // Ends in any known quote asset
   for (const quote of BINANCE_QUOTE_ASSETS) {
     if (symbol.endsWith(quote) && symbol.length > quote.length) {
       return true;
     }
   }
+
+  // Starts with any known crypto base asset and has an explicit quote asset (e.g. SOLUNKNOWN, BTCABC, ETHXYZ)
+  for (const base of MAJOR_CRYPTO_BASE_ASSETS) {
+    if (symbol.startsWith(base) && symbol.length > base.length) {
+      return true;
+    }
+  }
+
   return false;
 }
 
@@ -68,6 +105,7 @@ async function getDataWithUsdtFallback(
   params,
   requestedSymbol,
   retryOptions,
+  rawSymbol,
 ) {
   try {
     return {
@@ -77,7 +115,7 @@ async function getDataWithUsdtFallback(
   } catch (error) {
     if (
       error?.code !== "MARKET_DATA_NOT_FOUND" ||
-      isExplicitCryptoPair(requestedSymbol) ||
+      isExplicitCryptoPair(requestedSymbol, rawSymbol) ||
       !/^[A-Z0-9]{2,30}$/.test(requestedSymbol)
     ) {
       throw error;
@@ -122,7 +160,7 @@ function createBinanceMarketDataProvider(config = {}, { httpClient } = {}) {
       normalizeBinanceSymbol(symbol, options),
 
     async getQuote(symbol) {
-      const requestedSymbol = prepareBinanceSymbol(symbol);
+      const { requestedSymbol, rawSymbol } = prepareBinanceSymbol(symbol);
       const { data: payload, symbol: providerSymbol } =
         await getDataWithUsdtFallback(
           client,
@@ -130,6 +168,7 @@ function createBinanceMarketDataProvider(config = {}, { httpClient } = {}) {
           { symbol: requestedSymbol },
           requestedSymbol,
           retryOptions,
+          rawSymbol,
         );
       return mapBinanceQuote(payload, providerSymbol);
     },
@@ -142,7 +181,7 @@ function createBinanceMarketDataProvider(config = {}, { httpClient } = {}) {
           "MARKET_DATA_INVALID_REQUEST",
         );
       }
-      const requestedSymbol = prepareBinanceSymbol(symbol);
+      const { requestedSymbol, rawSymbol } = prepareBinanceSymbol(symbol);
       const { data, symbol: providerSymbol } = await getDataWithUsdtFallback(
         client,
         "/api/v3/klines",
@@ -155,6 +194,7 @@ function createBinanceMarketDataProvider(config = {}, { httpClient } = {}) {
         },
         requestedSymbol,
         retryOptions,
+        rawSymbol,
       );
       if (!Array.isArray(data)) throw invalidProviderResponse();
 
