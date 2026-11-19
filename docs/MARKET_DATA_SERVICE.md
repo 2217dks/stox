@@ -9,19 +9,91 @@ overview response. Search remains internal until its full contract is agreed.
 `backend/src/services/marketDataService.js` exports
 `createMarketDataService({ config, providers })`. The returned service exposes
 `getQuote`, `getHistoricalPrices`, `getMarketOverview`, and `searchSymbols`.
-The service validates inputs, selects an adapter from `providerByAssetClass`,
-checks normalized results, and converts provider/network failures into Stox
-`AppError` values.
+The service validates inputs, selects providers from the configured ordered
+chains, checks normalized results, and converts provider/network failures into
+Stox `AppError` values.
 
 `backend/src/services/marketData.js` creates the default runtime service. The
 composition code is in `backend/src/providers/createMarketDataProviders.js`;
-provider-specific HTTP requests and response parsing live in the adapter
-files. Quote wire formats are mapped by
+that file is the single provider registry. Chain resolution, capability/market
+filtering, symbol translation, and failover live in
+`backend/src/providers/marketDataProviderRouter.js`, independently of any
+concrete provider. Provider-specific HTTP requests and response parsing live in
+the adapter files. Quote wire formats are mapped by
 `backend/src/providers/marketQuoteMappers.js` into the shared
 `backend/src/dtos/marketQuoteDto.js` contract. The service validates and
 normalizes quotes through the same DTO before returning them. Tests can inject
 fake adapters directly into `createMarketDataService` and do not make external
 requests.
+
+## Provider selection and fallback
+
+Each asset class has an ordered provider chain, primary first:
+
+| Asset class | Default chain    | Meaning                                      |
+| ----------- | ---------------- | -------------------------------------------- |
+| `STOCK`     | `finnhub,yahoo`  | Finnhub first; Yahoo history is the fallback |
+| `CRYPTO`    | `binance`        | Binance public market data                   |
+
+The service resolves candidates before making any request:
+
+1. Read the chain for the resolved asset class.
+2. Drop ids that are not registered adapters.
+3. Drop adapters that do not declare the asset class.
+4. Drop adapters that do not implement the requested operation
+   (`quote`, `history`, `overview`, or `search`).
+5. Drop adapters whose `markets` metadata does not cover the instrument's
+   region. Region is inferred from the exchange suffix (`VOD.L` → `GB`,
+   `7203.T` → `JP`, `RELIANCE.NS` → `IN`); plain and unrecognised suffixes
+   default to `US`. `CRYPTO` is `GLOBAL`, and market-wide operations
+   (`overview`, `search`) do not filter by region.
+
+The first remaining adapter is called. On a provider-side failure the next
+candidate is tried; client-side errors are returned immediately.
+
+| Error code                            | Fall back? | Why                                       |
+| ------------------------------------- | ---------- | ----------------------------------------- |
+| `MARKET_DATA_INVALID_REQUEST`         | No         | The request itself is wrong               |
+| `MARKET_DATA_UNSUPPORTED_ASSET_CLASS` | No         | The request itself is wrong               |
+| `MARKET_DATA_NOT_CONFIGURED`          | Yes        | The next provider may be configured       |
+| `MARKET_DATA_INVALID_CREDENTIALS`     | Yes        | A free plan or missing key can still fail |
+| `MARKET_DATA_RATE_LIMITED`            | Yes        | Another provider may have quota           |
+| `MARKET_DATA_TIMEOUT`                 | Yes        | Another provider may respond              |
+| `MARKET_DATA_INVALID_RESPONSE`        | Yes        | A provider may be serving bad data        |
+| `MARKET_DATA_NOT_FOUND`               | Yes        | Another provider may cover the symbol     |
+| `MARKET_DATA_PROVIDER_UNAVAILABLE`    | Yes        | Network/provider outage                   |
+
+When every candidate fails, the last safe domain error is surfaced. The
+fallback attempt is logged with the operation, asset class, provider ids, and
+error code; raw provider messages and response bodies are never logged or
+returned. The service does not retry the same provider within one call.
+
+### Adding a provider
+
+Adding a provider requires one adapter module and one registry entry in
+`createMarketDataProviders.js`. No service, controller, route, or symbol-mapping
+change is required.
+
+Adapters declare what they can serve:
+
+```js
+{
+  id: "provider-id",
+  assetClasses: ["STOCK"],                    // or ["CRYPTO"], or both
+  operations: ["quote", "history"],           // omit to infer from methods
+  markets: ["US", "GB"],                      // ["*"] or omit for global
+  toProviderSymbol(canonicalSymbol, options), // optional translation
+  getQuote(symbol),
+  getHistoricalPrices(symbol, { interval, from, to, limit }),
+  getMarketOverview({ assetClass, limit }),
+  searchSymbols(query),
+}
+```
+
+A provider that only implements `history` is automatically skipped for
+quotes/search/overview. A provider that declares `markets: ["US"]` is
+automatically skipped for a `VOD.L` request; a provider with `markets: ["*"]`
+or no `markets` metadata remains eligible.
 
 ## Methods and normalized results
 
@@ -84,6 +156,11 @@ currency, type, source }`; optional provider metadata is `null` where
 unavailable. The public endpoint narrows query length and result limit as
 documented in `docs/API.md`.
 
+When both asset classes are requested, their result groups are interleaved
+round-robin before the limit is applied. This keeps crypto pairs visible for
+mixed queries such as `BTC`; a plain concatenation lets a stock search fill
+every slot and hide the crypto results.
+
 ## Provider adapter contract
 
 Provider adapters are registry entries keyed by a provider id. Each implements:
@@ -92,6 +169,9 @@ Provider adapters are registry entries keyed by a provider id. Each implements:
 {
   id: "provider-id",
   assetClasses: ["STOCK"],
+  operations: ["quote", "history", "overview", "search"],
+  markets: ["US"],
+  toProviderSymbol(canonicalSymbol, { assetClass }),
   getQuote(symbol),
   getHistoricalPrices(symbol, { interval, from, to, limit }),
   getMarketOverview({ assetClass, limit }),
@@ -101,14 +181,13 @@ Provider adapters are registry entries keyed by a provider id. Each implements:
 
 Adapters return the normalized service result shapes above and throw
 `AppError` or an HTTP-client error. The service remaps unknown adapter errors
-to safe domain errors. To add a provider, implement this interface, register
-it in `createMarketDataProviders`, and select its id through environment
-configuration. Controllers call the configured service; they do not import
-HTTP clients or provider adapters.
+to safe domain errors. Controllers call the configured service; they do not
+import HTTP clients or provider adapters.
 
-The repository's market-data documentation names Finnhub for stocks and
-Binance for crypto. Those are the default adapter selections. The service
-itself does not import either provider implementation.
+The repository's market-data documentation names Finnhub for stocks, Binance
+for crypto, and Yahoo for the stock-history fallback. Those are the default
+adapter selections. The service itself does not import any provider
+implementation.
 
 ### Finnhub stock quotes
 
@@ -124,16 +203,53 @@ The credential is configured in the environment and is not included in the
 quote result or public error messages. The stock quote route uses this adapter
 through the provider-independent service; controllers do not call Finnhub.
 
+Finnhub declares `markets: ["US"]`. International symbols are therefore routed
+straight to the global history fallback instead of being sent to Finnhub with
+an exchange suffix it does not understand.
+
+### Finnhub and Yahoo stock history
+
+Finnhub requests `/stock/candle` with a resolution mapping
+(`1m→1`, `5m→5`, `15m→15`, `30m→30`, `1h→60`, `4h→240`, `1d→D`, `1w→W`,
+`1M→M`). Its free plan currently authorises `/quote` but rejects candle
+requests with HTTP 403. The adapter maps that to
+`MARKET_DATA_INVALID_CREDENTIALS`; the service then tries the next stock
+provider in the chain.
+
+Yahoo Finance is the default stock-history fallback
+(`backend/src/providers/yahooMarketDataProvider.js`). It declares only
+`operations: ["history"]` and `markets: ["*"]`, so it is never used for quotes,
+search, or overview. It requests
+`GET {YAHOO_FINANCE_API_URL}/v8/finance/chart/{symbol}` with Unix-second
+`period1`/`period2`, `interval`, and `events=history`, and sends a browser-like
+`User-Agent` (Yahoo rejects requests without one). The interval mapping is
+`1m→1m`, `5m→5m`, `15m→15m`, `30m→30m`, `1h→60m`, `4h→60m`, `1d→1d`,
+`1w→1wk`, `1M→1mo`.
+
+Yahoo has no native 4h resolution, so the adapter fetches 1h candles and
+aggregates them into UTC 4-hour buckets (open = first, high/low = max/min,
+close = last, volume = sum). Null OHLC rows padded outside a trading session
+are skipped; a response with no timestamps returns an empty series. HTTP 404
+maps to `MARKET_DATA_NOT_FOUND`, 429/418 to `MARKET_DATA_RATE_LIMITED`,
+408/504 and fetch timeouts to `MARKET_DATA_TIMEOUT`, and other non-OK or
+network failures to `MARKET_DATA_PROVIDER_UNAVAILABLE`; an unparsable body maps
+to `MARKET_DATA_INVALID_RESPONSE`.
+
+Yahoo is unofficial and has no SLA or documented programmatic-use guarantee.
+It rate-limits aggressively, and the adapter does not honour `Retry-After`.
+`from`/`to` are epoch milliseconds; passing seconds silently produces a 1970
+window that Yahoo rejects with HTTP 400.
+
 ### Binance quote behavior
 
 The Binance adapter requests the public `/api/v3/ticker/24hr` endpoint using
 the configured `BINANCE_API_URL` and shared request timeout. It accepts the
 Stox crypto pair conventions `BTCUSDT`, `ETHBTC`, and `BINANCE:BTCUSDT`; a
-slash form such as `BTC/USDT` is also normalized to `BTCUSDT`. Pair suffixes
-currently supported by the adapter are `USDT`, `BTC`, and `ETH`. This is
-syntax validation only; Binance determines whether a pair exists and is
-trading. Stock-shaped values such as `AAPL` are rejected before an adapter
-request is sent.
+slash form such as `BTC/USDT` is also normalized to `BTCUSDT`. Quote assets are
+not whitelisted: Binance is the authority for pair existence, quote assets, and
+trading status. Search returns every `TRADING` pair. This is syntax validation
+only; Binance determines whether a pair exists and is trading. Stock-shaped
+values such as `AAPL` are rejected before an adapter request is sent.
 
 The returned internal quote maps Binance `lastPrice`, `priceChange`,
 `priceChangePercent`, `highPrice`, `lowPrice`, `openPrice`, `prevClosePrice`,
@@ -145,24 +261,38 @@ Unknown Binance pairs become `MARKET_DATA_NOT_FOUND`. The public API exposes
 this normalized crypto quote through `GET /market/quote/:symbol` as documented
 in `docs/API.md`.
 
+Binance declares `markets: ["GLOBAL"]` because crypto pairs are not tied to a
+listing country.
+
 ## Configuration
 
 Configuration is environment-based. `backend/.env.example` contains only
 placeholder values.
 
-| Variable                         | Default                     | Purpose                                        |
-| -------------------------------- | --------------------------- | ---------------------------------------------- |
-| `MARKET_DATA_STOCK_PROVIDER`     | `finnhub`                   | Registered stock adapter id                    |
-| `MARKET_DATA_CRYPTO_PROVIDER`    | `binance`                   | Registered crypto adapter id                   |
-| `MARKET_DATA_REQUEST_TIMEOUT_MS` | `5000`                      | HTTP timeout, integer from 100 to 30000 ms     |
-| `FINNHUB_API_KEY`                | unset                       | Finnhub credential; required for Finnhub calls |
-| `FINNHUB_API_URL`                | `https://finnhub.io/api/v1` | Finnhub API base URL                           |
-| `BINANCE_API_URL`                | `https://api.binance.com`   | Binance API base URL                           |
+| Variable                          | Default                            | Purpose                                          |
+| --------------------------------- | ---------------------------------- | ------------------------------------------------ |
+| `MARKET_DATA_STOCK_PROVIDERS`     | `finnhub,yahoo`                    | Ordered stock provider chain, primary first      |
+| `MARKET_DATA_CRYPTO_PROVIDERS`    | `binance`                          | Ordered crypto provider chain, primary first     |
+| `MARKET_DATA_STOCK_PROVIDER`      | `finnhub`                          | Legacy primary stock id; fallbacks remain after  |
+| `MARKET_DATA_CRYPTO_PROVIDER`     | `binance`                          | Legacy primary crypto id                         |
+| `MARKET_DATA_REQUEST_TIMEOUT_MS`  | `5000`                             | HTTP timeout, integer from 100 to 30000 ms       |
+| `FINNHUB_API_KEY`                 | unset                              | Finnhub credential; required for Finnhub calls   |
+| `FINNHUB_API_URL`                 | `https://finnhub.io/api/v1`        | Finnhub API base URL                             |
+| `BINANCE_API_URL`                 | `https://api.binance.com`          | Binance API base URL                             |
+| `YAHOO_FINANCE_API_URL`           | `https://query1.finance.yahoo.com` | Yahoo chart API base URL                         |
+
+The `*_PROVIDERS` chain always wins over the legacy single-provider variable.
+Chain entries are trimmed, lowercased, de-duplicated, and must contain at least
+one id. The first chain entry is the primary provider. The legacy variable
+selects the primary and keeps the documented fallbacks after it, so an
+existing `.env` with `MARKET_DATA_STOCK_PROVIDER=finnhub` still gets the Yahoo
+history fallback.
 
 Missing Finnhub credentials fail lazily with `MARKET_DATA_NOT_CONFIGURED`;
-they do not prevent unrelated backend modules from loading. Invalid timeout
-configuration fails during configuration loading with a clear message.
-Binance public market-data methods do not require credentials.
+they do not prevent unrelated backend modules from loading. Invalid timeout or
+empty-chain configuration fails during configuration loading with a clear
+message. Binance and Yahoo public market-data methods do not require
+credentials.
 
 ## Domain errors
 
@@ -190,9 +320,9 @@ response or the error-handler log. The standard error middleware returns the
 usual `{ success: false, error: { code, message } }` envelope.
 
 Requests use the configured bounded timeout (`100` to `30000` ms, default
-`5000` ms). The service does not automatically retry provider calls: retries
-could amplify throttling and return stale data, and no provider-specific retry
-contract is defined.
+`5000` ms). The service does not retry the same provider: retries could amplify
+throttling and return stale data, and no provider-specific retry contract is
+defined. Fallback is a different provider, not a retry.
 
 ## Contract questions and assumptions
 
@@ -201,16 +331,24 @@ responses. Search still lacks a public query/response contract. History has a
 documented API contract added with its route; its interval/range constraints
 are shared with the internal service.
 
+Region metadata is inferred from common exchange suffixes. A future
+country-specific provider only needs `markets` metadata; per-region provider
+chains are a possible extension if one asset class needs different primary
+providers per country.
+
 ## Tests
 
 Run the mocked, offline market-data unit tests from `backend/`:
 
 ```sh
-npm test -- --runInBand tests/unit/services/marketDataService.test.js tests/unit/services/marketDataProviders.test.js tests/unit/services/marketDataHttp.test.js tests/unit/config/marketDataConfig.test.js
+npm test -- --runInBand tests/unit/services/marketDataService.test.js tests/unit/services/marketDataFallback.test.js tests/unit/services/marketDataProviders.test.js tests/unit/services/marketDataHttp.test.js tests/unit/config/marketDataConfig.test.js tests/unit/providers
 ```
 
 The tests cover success for all four operations, configuration defaults and
-overrides, missing credentials/provider selection, provider swapping,
-Finnhub invalid symbols and authentication failures, timeouts, rate limits,
-malformed payloads, Binance symbol validation, and network failures. They do
-not need credentials, a database, or external API access.
+overrides, ordered chains, primary/fallback routing, terminal client errors,
+provider/operation/market filtering, per-adapter symbol translation, missing
+credentials/provider selection, provider swapping, Finnhub invalid symbols and
+authentication failures, Yahoo history mapping/aggregation/error mapping,
+timeouts, rate limits, malformed payloads, Binance symbol validation, and
+network failures. They do not need credentials, a database, or external API
+access.

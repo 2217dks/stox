@@ -255,7 +255,7 @@ Query: required `query` (trimmed 2–50 chars); optional `assetClass=STOCK|CRYPT
 
 #### `GET /market/quote/:symbol`
 
-Crypto pair path, accepted forms include `BTCUSDT`, `BINANCE:BTCUSDT`, and `BTC/USDT`; quote assets are `USDT`, `BTC`, or `ETH`. Returns normalized quote data under `data` with `symbol`, `assetClass:"CRYPTO"`, decimal-string price/change/high/low/open/previousClose/volume, `currency`, ISO `timestamp`, and `source`. Invalid format is `400 VALIDATION_ERROR`; unknown pair is `404 MARKET_DATA_NOT_FOUND`.
+Crypto pair path, accepted forms include `BTCUSDT`, `BINANCE:BTCUSDT`, and `BTC/USDT`; quote assets are not whitelisted; the provider is the authority for pair existence and trading status. Returns normalized quote data under `data` with `symbol`, `assetClass:"CRYPTO"`, decimal-string price/change/high/low/open/previousClose/volume, `currency`, ISO `timestamp`, and `source`. Invalid format is `400 VALIDATION_ERROR`; unknown pair is `404 MARKET_DATA_NOT_FOUND`.
 
 #### `GET /market/quote/stock/:symbol`
 

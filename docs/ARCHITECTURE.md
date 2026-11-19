@@ -240,8 +240,15 @@ Order execution must therefore use database transactions.
 # 📡 Market Data Flow
 
 ```text
-Finnhub / Binance
+Finnhub / Binance / Yahoo
         │
+        ▼
+Provider Registry (asset class, operation, market metadata)
+        │
+        ▼
+Ordered Provider Chain  (e.g. STOCK: finnhub → yahoo)
+        │
+        ├── primary fails → next provider
         ▼
 Provider Adapter
         │

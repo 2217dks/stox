@@ -1,6 +1,6 @@
 # 📡 Market Data Integration
 
-> **Finnhub (stocks) + Binance (crypto) integration for stox.**
+> **Finnhub (US stocks) + Binance (crypto) + Yahoo Finance (stock-history fallback).**
 
 ---
 
@@ -8,49 +8,65 @@
 
 - [Overview](#-overview)
 - [API Comparison](#-api-comparison)
-- [Why Both?](#-why-both)
+- [Why Multiple Providers?](#-why-multiple-providers)
 - [Symbol Normalization](#-symbol-normalization)
 - [Finnhub Integration](#-finnhub-integration)
 - [Binance Integration](#-binance-integration)
-- [Fallback Strategy](#-fallback-strategy)
+- [Yahoo Finance Integration](#-yahoo-finance-integration)
+- [Provider Registry & Fallback Strategy](#-provider-registry--fallback-strategy)
 - [Rate Limit Handling](#-rate-limit-handling)
 
 ---
 
 ## 📖 Overview
 
-stox uses **two market data providers**:
+stox uses an ordered provider chain per asset class:
 
-- **Finnhub** — US stocks, forex, news, fundamentals
-- **Binance** — Crypto prices, order book, trade tape
+- **Finnhub** — US stock quotes, search, market status, and paid-plan candles
+- **Binance** — public crypto quotes, candles, movers, and symbol search
+- **Yahoo Finance** — free stock-history fallback, including international
+  exchange suffixes such as `VOD.L` (London), `7203.T` (Tokyo), and
+  `RELIANCE.NS` (India)
 
-Both provide **WebSocket streams** for real-time data and **REST APIs** for historical data.
+The runtime defaults are `STOCK: finnhub → yahoo` and `CRYPTO: binance`. The
+service tries the primary provider first and moves to the next provider when
+the primary cannot serve the request (missing/invalid credentials, free-plan
+rejection, timeout, rate limit, outage, malformed response, or unknown symbol).
+Client-side validation errors never trigger a fallback.
+
+Providers are registered in `backend/src/providers/createMarketDataProviders.js`
+and declare their asset classes, supported operations, and market coverage.
+Adding a provider is one adapter module plus one registry entry; the service,
+controllers, and routes do not change.
+
 
 ---
 
 ## 📊 API Comparison
 
-| Feature              | Finnhub                                            | Binance             |
-| -------------------- | -------------------------------------------------- | ------------------- |
-| **Asset Class**      | US Stocks, Forex, Crypto                           | Crypto only         |
-| **Free Tier**        | 60 calls/min                                       | Unlimited (public)  |
-| **WebSocket**        | ✅ Yes                                             | ✅ Yes              |
-| **API Key Required** | ✅ Yes                                             | ❌ No (public data) |
-| **Rate Limit**       | 60/min (REST)                                      | 1200/min            |
-| **Signup**           | [finnhub.io/register](https://finnhub.io/register) | None                |
-| **Best For**         | Stocks + Forex                                     | Crypto              |
+| Feature              | Finnhub                                            | Binance                        | Yahoo Finance (fallback) |
+| -------------------- | -------------------------------------------------- | ------------------------------ | ------------------------ |
+| **Asset Class**      | US stocks                                           | Crypto only                    | Global stocks            |
+| **Operations**       | Quote, history, search, market status               | Quote, history, search, movers | History only             |
+| **Free Tier**        | 60 calls/min; candles require a paid plan           | Unlimited (public)             | Unofficial, rate-limited |
+| **WebSocket**        | ✅ Yes                                             | ✅ Yes                         | ❌ No                    |
+| **API Key Required** | ✅ Yes                                             | ❌ No (public data)            | ❌ No                    |
+| **Rate Limit**       | 60/min (REST)                                       | 1200/min                       | Aggressive; no SLA       |
+| **Signup**           | [finnhub.io/register](https://finnhub.io/register) | None                           | None                     |
+| **Best For**         | US stock quotes + metadata                          | Crypto                         | Stock candle fallback    |
 
 ---
 
-## 🎯 Why Both?
+## 🎯 Why Multiple Providers?
 
-| Reason                         | Explanation                                  |
-| ------------------------------ | -------------------------------------------- |
-| **Dual asset classes**         | Users can trade both stocks AND crypto       |
-| **Crypto never sleeps**        | Binance provides 24/7 live data              |
-| **Stocks for professionalism** | Finnhub adds traditional finance credibility |
-| **Fallback**                   | If one fails, the other keeps working        |
-| **Resume value**               | Shows multiple API integration               |
+| Reason                         | Explanation                                          |
+| ------------------------------ | ---------------------------------------------------- |
+| **Dual asset classes**         | Users can trade both stocks AND crypto               |
+| **Crypto never sleeps**        | Binance provides 24/7 live data                      |
+| **Stocks for professionalism** | Finnhub adds traditional finance credibility         |
+| **Operational fallback**       | A Finnhub free-plan 403 no longer breaks every chart |
+| **International stocks**       | Yahoo suffix routing unlocks non-US listings         |
+| **Resume value**               | Shows a real provider-abstraction layer              |
 
 ---
 
@@ -223,77 +239,100 @@ const depthSocket = new WebSocket(
 
 ---
 
-## 🔄 Fallback Strategy
+## 🟠 Yahoo Finance Integration
+
+Yahoo is the **stock-history fallback**. It is not a full market-data provider:
+the adapter declares `operations: ["history"]`, so quotes, search, and overview
+never route to it.
+
+**No API key.** The adapter calls:
+
+```text
+GET {YAHOO_FINANCE_API_URL}/v8/finance/chart/{symbol}
+    ?period1=<from seconds>&period2=<to seconds + 1>&interval=<yahoo interval>&events=history
+```
+
+- A browser-like `User-Agent` is mandatory; Yahoo rejects requests without one.
+- `from`/`to` are epoch **milliseconds** in the Stox API. They are converted to
+  seconds for Yahoo. Passing seconds produces a 1970 window and an HTTP 400.
+- `4h` is synthetic: 1h candles are aggregated into UTC 4-hour buckets.
+- International listings use Yahoo's exchange suffixes: `VOD.L`, `7203.T`,
+  `RELIANCE.NS`, `SHOP.TO`, `ASML.AS`, `SAP.DE`, `0700.HK`, `BHP.AX`.
+- Null OHLC rows outside a trading session are skipped.
+- HTTP 404 → `MARKET_DATA_NOT_FOUND`; 429/418 → `MARKET_DATA_RATE_LIMITED`;
+  408/504 and fetch timeouts → `MARKET_DATA_TIMEOUT`; other failures →
+  `MARKET_DATA_PROVIDER_UNAVAILABLE`.
+- Yahoo is unofficial, has no SLA, and rate-limits aggressively. A 429 is not
+  retried against the same provider.
+
+---
+
+## 🔄 Provider Registry & Fallback Strategy
+
+The registry lives in `backend/src/providers/createMarketDataProviders.js`.
+Each adapter declares:
 
 ```javascript
-// services/priceService.js
-export async function getPrice(symbol) {
-    // 1. Try Redis cache first
-    const cached = await cache.getPrice(symbol);
-    if (cached) return cached;
-
-    // 2. Try Finnhub REST (stocks)
-    if (!symbol.startsWith("BINANCE:")) {
-        try {
-            await finnhubLimiter.waitIfNeeded();
-            const response = await fetch(
-                `https://finnhub.io/api/v1/quote?symbol=${symbol}&token=${process.env.FINNHUB_API_KEY}`,
-            );
-            const data = await response.json();
-            if (data.c) {
-                const priceData = { symbol, price: data.c, source: "finnhub" };
-                await cache.setPrice(symbol, priceData);
-                return priceData;
-            }
-        } catch (err) {
-            console.error("Finnhub failed:", err);
-        }
-    }
-
-    // 3. Try Binance REST (crypto)
-    if (symbol.startsWith("BINANCE:")) {
-        try {
-            const pair = symbol.replace("BINANCE:", "");
-            const response = await fetch(
-                `https://api.binance.com/api/v3/ticker/price?symbol=${pair}`,
-            );
-            const data = await response.json();
-            if (data.price) {
-                const priceData = {
-                    symbol,
-                    price: parseFloat(data.price),
-                    source: "binance",
-                };
-                await cache.setPrice(symbol, priceData);
-                return priceData;
-            }
-        } catch (err) {
-            console.error("Binance failed:", err);
-        }
-    }
-
-    // 4. Try Yahoo Finance (fallback for stocks)
-    try {
-        const yahooFinance = require("yahoo-finance2").default;
-        const quote = await yahooFinance.quote(symbol);
-        return { symbol, price: quote.regularMarketPrice, source: "yahoo" };
-    } catch (err) {
-        console.error("Yahoo failed:", err);
-    }
-
-    // 5. Return last known price from DB
-    const lastKnown = await prisma.priceHistory.findFirst({
-        where: { symbol: { symbol } },
-        orderBy: { timestamp: "desc" },
-    });
-
-    return lastKnown
-        ? { symbol, price: lastKnown.price, source: "database" }
-        : null;
+{
+    id: "yahoo",
+    assetClasses: ["STOCK"],
+    operations: ["history"], // quote | history | overview | search
+    markets: ["*"],          // ["US"], ["GB", "DE"], or ["GLOBAL"]
+    toProviderSymbol(canonicalSymbol, options),
+    getHistoricalPrices(symbol, options),
+    // ...other supported operations
 }
 ```
 
----
+The service builds an ordered candidate list before calling anything:
+
+1. Read the asset-class chain (`STOCK: finnhub,yahoo`, `CRYPTO: binance` by
+   default; override with `MARKET_DATA_STOCK_PROVIDERS` /
+   `MARKET_DATA_CRYPTO_PROVIDERS`).
+2. Remove ids that are not registered.
+3. Remove adapters that do not serve the asset class or operation.
+4. For symbol-specific calls (quote/history), remove adapters whose `markets`
+   do not cover the instrument's inferred region.
+
+The region comes from the exchange suffix (`VOD.L` → `GB`, `7203.T` → `JP`);
+plain and unrecognised suffixes default to `US`, and crypto is `GLOBAL`.
+`overview` and `search` are market-wide, so they are not region-filtered.
+
+The primary provider is tried first. A provider-side failure moves to the next
+provider; a client-side validation error is returned immediately.
+
+| Failure                                   | Fallback? |
+| ----------------------------------------- | --------- |
+| Missing/invalid credentials               | Yes       |
+| Free-plan resource rejection (Finnhub 403) | Yes       |
+| Timeout, rate limit, provider outage      | Yes       |
+| Unknown symbol / no data                  | Yes       |
+| Malformed provider payload                | Yes       |
+| Invalid request or wrong asset class      | No        |
+
+When every provider fails, the last safe domain error is returned. The API
+envelope never contains raw provider messages, response bodies, or credentials.
+Fallback attempts are logged with provider ids and a stable error code.
+
+### Adding a provider or a new country
+
+1. Create `backend/src/providers/<id>MarketDataProvider.js` implementing the
+   adapter contract.
+2. Add one entry to `PROVIDER_DEFINITIONS` in `createMarketDataProviders.js`.
+3. Add its environment config (base URL / key) to `marketDataConfig.js` and
+   `.env.example`.
+4. Put its id in the relevant `MARKET_DATA_*_PROVIDERS` chain.
+5. Declare `markets` so it is selected only for the countries it covers.
+
+No controller, route, service, or symbol-mapping change is required. The
+service filters by declared capability and region, and calls the provider's own
+`toProviderSymbol` so each provider can express symbols in its native format.
+
+### Why not retry the same provider?
+
+In-call retries amplify throttling and can return stale data. The implemented
+strategy is failover to a different provider, not retry. Queue-level retries
+remain the right place for transient background work.
 
 ## ⏱️ Rate Limit Handling
 
