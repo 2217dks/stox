@@ -34,6 +34,24 @@ const updatePortfolioSchema = z
     },
   );
 
+// POST /portfolios
+//
+// Without this, a non-string name reaches `name.trim()` and becomes a 500.
+const createPortfolioSchema = z.object({
+  name: z
+    .string({ error: "Portfolio name must be a string." })
+    .trim()
+    .min(1, "Portfolio name is required.")
+    .max(100, "Portfolio name must not exceed 100 characters."),
+
+  description: z
+    .union([
+      z.string().trim().max(500, "Description must not exceed 500 characters."),
+      z.null(),
+    ])
+    .optional(),
+});
+
 const periodSchema = z
   .string()
   .trim()
@@ -327,6 +345,7 @@ const portfolioAllocationQuerySchema = z.object({
 
 module.exports = {
   portfolioIdParamsSchema,
+  createPortfolioSchema,
   updatePortfolioSchema,
   pnlHeatmapQuerySchema,
   benchmarkQuerySchema,
