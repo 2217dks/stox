@@ -88,4 +88,58 @@ describe("Yahoo historical price mapping", () => {
       "Stock history provider returned an invalid response.",
     );
   });
+
+  test("maps Yahoo chart error for delisted/not found symbols to 404 MARKET_DATA_NOT_FOUND", () => {
+    const errorPayload = {
+      chart: {
+        result: null,
+        error: {
+          code: "Not Found",
+          description: "No data found, symbol may be delisted",
+        },
+      },
+    };
+
+    expect(() =>
+      mapYahooChart(errorPayload, { symbol: "DELISTED", interval: "1d" }),
+    ).toThrow(
+      expect.objectContaining({
+        statusCode: 404,
+        code: "MARKET_DATA_NOT_FOUND",
+      }),
+    );
+  });
+
+  test("preserves decimal precision without IEEE-754 drift during 4h aggregation", () => {
+    const precisionPayload = {
+      chart: {
+        result: [
+          {
+            timestamp: [BASE_SECONDS, BASE_SECONDS + 3600],
+            indicators: {
+              quote: [
+                {
+                  open: [100.1, 100.2],
+                  high: ["100.10000001", "100.20000005"],
+                  low: ["99.00000001", "99.00000005"],
+                  close: [100.15, 100.25],
+                  volume: ["1000.12345678", "2000.87654322"],
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+
+    const result = mapYahooChart(precisionPayload, {
+      symbol: "AAPL",
+      interval: "4h",
+    });
+
+    expect(result.prices).toHaveLength(1);
+    expect(result.prices[0].high).toBe("100.20000005");
+    expect(result.prices[0].low).toBe("99.00000001");
+    expect(result.prices[0].volume).toBe("3001");
+  });
 });

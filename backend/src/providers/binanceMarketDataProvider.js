@@ -9,6 +9,7 @@ const {
 const { createMarketDataError } = require("./marketDataErrors");
 const { mapBinanceQuote } = require("./marketQuoteMappers");
 const { toProviderSymbol } = require("../services/symbolMappingService");
+const { BINANCE_QUOTE_ASSETS } = require("../utils/cryptoQuoteAssets");
 
 const BINANCE_INTERVALS = new Set([
   "1m",
@@ -46,10 +47,20 @@ function prepareBinanceSymbol(symbol) {
   return normalized;
 }
 
+function isExplicitCryptoPair(symbol) {
+  for (const quote of BINANCE_QUOTE_ASSETS) {
+    if (symbol.endsWith(quote) && symbol.length > quote.length) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Binance base assets are not always obvious from the symbol alone
  * (`1000SATS`, `1INCH`, `HYPER`). If an explicit pair is rejected as unknown,
- * retry once as `<base>USDT`; genuine unknown symbols still end as 404.
+ * do NOT mutate it. If a lone base asset is queried, retry once as `<base>USDT`;
+ * genuine unknown symbols still end as 404.
  */
 async function getDataWithUsdtFallback(
   client,
@@ -66,7 +77,7 @@ async function getDataWithUsdtFallback(
   } catch (error) {
     if (
       error?.code !== "MARKET_DATA_NOT_FOUND" ||
-      requestedSymbol.endsWith("USDT") ||
+      isExplicitCryptoPair(requestedSymbol) ||
       !/^[A-Z0-9]{2,30}$/.test(requestedSymbol)
     ) {
       throw error;
@@ -223,11 +234,14 @@ function createBinanceMarketDataProvider(config = {}, { httpClient } = {}) {
     },
 
     async searchSymbols(query) {
+      if (typeof query !== "string" || !query.trim()) {
+        return [];
+      }
       const data = assertObject(
         await getData(client, "/api/v3/exchangeInfo", {}, retryOptions),
       );
       if (!Array.isArray(data.symbols)) throw invalidProviderResponse();
-      const normalizedQuery = query.toUpperCase();
+      const normalizedQuery = query.trim().toUpperCase();
 
       // exchangeInfo is not relevance-ordered, so a plain slice can put
       // ETHBTC ahead of BTCUSDT for the query "BTC". Rank exact base-asset

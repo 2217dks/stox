@@ -1,3 +1,4 @@
+const { Prisma } = require("@prisma/client");
 const { createMarketDataError } = require("./marketDataErrors");
 const { decimalString, isoTimestamp } = require("./marketDataHttp");
 
@@ -93,15 +94,28 @@ function aggregateCandles(candles, bucketMs) {
       continue;
     }
 
-    existing.high = String(
-      Math.max(Number(existing.high), Number(candle.high)),
-    );
-    existing.low = String(Math.min(Number(existing.low), Number(candle.low)));
+    try {
+      const highDec = Prisma.Decimal.max(existing.high, candle.high);
+      const lowDec = Prisma.Decimal.min(existing.low, candle.low);
+      const volDec = new Prisma.Decimal(existing.volume).plus(
+        new Prisma.Decimal(candle.volume),
+      );
+      existing.high = highDec.toString();
+      existing.low = lowDec.toString();
+      existing.volume = volDec.toString();
+    } catch {
+      existing.high = String(
+        Math.max(Number(existing.high), Number(candle.high)),
+      );
+      existing.low = String(Math.min(Number(existing.low), Number(candle.low)));
+      existing.volume = String(Number(existing.volume) + Number(candle.volume));
+    }
     existing.close = candle.close;
-    existing.volume = String(Number(existing.volume) + Number(candle.volume));
   }
 
-  return Array.from(buckets.values());
+  return Array.from(buckets.values()).sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+  );
 }
 
 /**
@@ -110,6 +124,19 @@ function aggregateCandles(candles, bucketMs) {
  * network access.
  */
 function mapYahooChart(payload, { symbol, interval }) {
+  const chartError = payload?.chart?.error;
+  if (chartError) {
+    const errorMsg = String(chartError.description || chartError.code || "");
+    if (/not found|no data|delisted|invalid symbol/i.test(errorMsg)) {
+      throw createMarketDataError(
+        "Historical prices are unavailable for this symbol.",
+        404,
+        "MARKET_DATA_NOT_FOUND",
+      );
+    }
+    throw invalidResponse();
+  }
+
   const result = payload?.chart?.result?.[0];
 
   if (!result) {

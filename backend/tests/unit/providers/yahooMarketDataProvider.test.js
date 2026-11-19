@@ -187,4 +187,13 @@ describe("Yahoo market-data provider", () => {
     });
     expect(fetchImpl).not.toHaveBeenCalled();
   });
+
+  test("does not expose getQuote, getMarketOverview, or searchSymbols", () => {
+    const provider = createProvider();
+
+    expect(provider.getQuote).toBeUndefined();
+    expect(provider.getMarketOverview).toBeUndefined();
+    expect(provider.searchSymbols).toBeUndefined();
+    expect(provider.operations).toEqual(["history"]);
+  });
 });
