@@ -1,3 +1,5 @@
+import { CRYPTO_QUOTE_ASSETS } from "./constants";
+
 const FIAT = "USD";
 
 export function toNumber(value, fallback = 0) {
@@ -8,7 +10,13 @@ export function toNumber(value, fallback = 0) {
 
 export function isCrypto(symbol = "", assetType) {
   if (assetType) return assetType === "CRYPTO";
-  return /USDT$|USDC$|BUSD$|BTC$|ETH$/i.test(symbol);
+  const upper = String(symbol).trim().toUpperCase();
+  const clean = upper.replace(/^BINANCE:/, "");
+  if (upper.startsWith("BINANCE:") || clean.includes("/")) return true;
+  // Pair-shape heuristic: Binance pairs are at least 6 characters once the
+  // base and quote are joined (ETHBTC). Short stock tickers stay stocks; an
+  // explicit asset class or a search result always wins over this heuristic.
+  return /^[A-Z0-9]{6,30}$/.test(clean);
 }
 
 export function isForex(assetType) {
@@ -172,19 +180,24 @@ export function symbolLabel(symbol = "") {
   if (!symbol) return "—";
   symbol = symbol.replace(/^BINANCE:/i, "");
   if (symbol.includes("/")) return symbol.replace("/", " / ");
-  if (/USDT$/i.test(symbol)) return `${symbol.slice(0, -4)} / USDT`;
-  if (/USDC$/i.test(symbol)) return `${symbol.slice(0, -4)} / USDC`;
-  if (/BTC$/i.test(symbol)) return `${symbol.slice(0, -3)} / BTC`;
-  if (/ETH$/i.test(symbol)) return `${symbol.slice(0, -3)} / ETH`;
+
+  const upper = symbol.toUpperCase();
+  const quote = CRYPTO_QUOTE_ASSETS.find(
+    (asset) => upper.length > asset.length && upper.endsWith(asset),
+  );
+  if (quote) return `${symbol.slice(0, -quote.length)} / ${quote}`;
   return symbol;
 }
 
 export function tickerOf(symbol = "") {
   symbol = symbol.replace(/^BINANCE:/i, "");
   if (symbol.includes("/")) return symbol.split("/")[0].trim();
-  if (/USDT$/i.test(symbol)) return symbol.slice(0, -4);
-  if (/USDC$/i.test(symbol)) return symbol.slice(0, -4);
-  return symbol;
+
+  const upper = symbol.toUpperCase();
+  const quote = CRYPTO_QUOTE_ASSETS.find(
+    (asset) => upper.length > asset.length && upper.endsWith(asset),
+  );
+  return quote ? symbol.slice(0, -quote.length) : symbol;
 }
 
 export function assetClassLabel(assetType) {

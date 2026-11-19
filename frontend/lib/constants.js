@@ -1,6 +1,44 @@
 export const APP_NAME = "Stox";
 export const APP_TAGLINE = "Paper trading, real markets.";
 
+/**
+ * Quote-asset hints used only for display (ticker and pair labels).
+ *
+ * Requests are never gated by this list: Binance is the authority for which
+ * pairs exist. Longer ids must come first so suffix matching stays
+ * unambiguous. The one-letter `U` quote asset is intentionally omitted
+ * because it would mislabel short stock tickers.
+ */
+export const CRYPTO_QUOTE_ASSETS = [
+  "FDUSD",
+  "RLUSD",
+  "USDT",
+  "USDC",
+  "TUSD",
+  "BUSD",
+  "USDS",
+  "USD1",
+  "EURI",
+  "USDP",
+  "BTC",
+  "ETH",
+  "BNB",
+  "XRP",
+  "TRY",
+  "EUR",
+  "ZAR",
+  "BRL",
+  "ARS",
+  "JPY",
+  "MXN",
+  "COP",
+  "IDR",
+  "KZT",
+  "AED",
+  "THB",
+  "USD",
+];
+
 export const ORDER_SIDES = [
   { value: "BUY", label: "Buy", tone: "up" },
   { value: "SELL", label: "Sell", tone: "down" },

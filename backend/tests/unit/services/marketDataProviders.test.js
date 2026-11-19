@@ -461,6 +461,76 @@ describe("market-data provider adapters", () => {
     });
   });
 
+  test.each([
+    ["HYPERUSDC", "USDC"],
+    ["HYPERFDUSD", "FDUSD"],
+  ])(
+    "maps the supported stablecoin quote for %s",
+    async (symbol, currency) => {
+      const provider = createBinanceMarketDataProvider(
+        { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+        { httpClient: fakeClient(binanceQuoteResponse({ symbol })) },
+      );
+
+      await expect(provider.getQuote(symbol)).resolves.toMatchObject({
+        symbol: `BINANCE:${symbol}`,
+        currency,
+        source: "binance",
+      });
+    },
+  );
+
+  test("maps an unavailable Binance previous close to null", async () => {
+    const provider = createBinanceMarketDataProvider(
+      { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+      {
+        httpClient: fakeClient(
+          binanceQuoteResponse({
+            symbol: "HYPERFDUSD",
+            prevClosePrice: "0.00000000",
+          }),
+        ),
+      },
+    );
+
+    await expect(provider.getQuote("HYPERFDUSD")).resolves.toMatchObject({
+      symbol: "BINANCE:HYPERFDUSD",
+      currency: "FDUSD",
+      previousClose: null,
+    });
+  });
+
+  test("retries a base-only symbol as its USDT pair", async () => {
+    const client = {
+      get: jest
+        .fn()
+        .mockRejectedValueOnce({
+          response: {
+            status: 400,
+            data: { code: -1121, msg: "Invalid symbol." },
+          },
+        })
+        .mockResolvedValueOnce({
+          data: binanceQuoteResponse({ symbol: "1000SATSUSDT" }),
+        }),
+    };
+    const provider = createBinanceMarketDataProvider(
+      { baseUrl: "https://api.binance.com", timeoutMs: 5000 },
+      { httpClient: client },
+    );
+
+    const quote = await provider.getQuote("1000SATS");
+
+    expect(client.get).toHaveBeenNthCalledWith(1, "/api/v3/ticker/24hr", {
+      params: { symbol: "1000SATS" },
+    });
+    expect(client.get).toHaveBeenNthCalledWith(2, "/api/v3/ticker/24hr", {
+      params: { symbol: "1000SATSUSDT" },
+    });
+    expect(quote.symbol).toBe("BINANCE:1000SATSUSDT");
+    expect(quote.currency).toBe("USDT");
+  });
+
   test("preserves Binance decimal precision as provider strings", async () => {
     const precise = binanceQuoteResponse({
       lastPrice: "0.000000000000000001",

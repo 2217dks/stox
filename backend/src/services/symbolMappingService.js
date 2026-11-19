@@ -1,5 +1,6 @@
 const { AppError } = require("../utils/errors");
 const { createMarketDataError } = require("../providers/marketDataErrors");
+const { CRYPTO_QUOTE_ASSETS } = require("../utils/cryptoQuoteAssets");
 
 const ASSET_CLASSES = Object.freeze(["STOCK", "CRYPTO"]);
 const ASSET_CLASS_SET = new Set(ASSET_CLASSES);
@@ -17,7 +18,6 @@ const DEFAULT_ASSET_CLASS_BY_PROVIDER = Object.freeze({
   finnhub: "STOCK",
 });
 
-const CRYPTO_QUOTE_ASSETS = Object.freeze(["USDT", "BTC", "ETH"]);
 const CRYPTO_QUOTE_ASSET_SET = new Set(CRYPTO_QUOTE_ASSETS);
 
 const MAJOR_CRYPTO_BASE_ASSETS = Object.freeze([
@@ -133,6 +133,14 @@ function parseProviderPrefix(symbol) {
     );
   }
 
+  if ((clean.match(/\//g) || []).length > 1) {
+    throw createMarketDataError(
+      "The symbol format is invalid.",
+      400,
+      "MARKET_DATA_INVALID_REQUEST",
+    );
+  }
+
   return { raw: value, prefix, clean };
 }
 
@@ -228,7 +236,14 @@ function inferAssetClass(symbol) {
     return "STOCK";
   }
 
-  return CRYPTO_PAIR_PATTERN.test(clean) ? "CRYPTO" : "STOCK";
+  if (CRYPTO_PAIR_PATTERN.test(clean)) {
+    return "CRYPTO";
+  }
+
+  // Pair conventions are not restricted to a quote whitelist. A plain symbol
+  // of at least six characters is pair-shaped (ETHBTC, HYPERTRY, 1000SATSUSDT)
+  // while common stock tickers are shorter or use a dot/hyphen.
+  return /^[A-Z0-9]{6,30}$/.test(clean) ? "CRYPTO" : "STOCK";
 }
 
 /**
@@ -374,9 +389,16 @@ function toProviderSymbol(symbol, providerId, options = {}) {
       return canonical;
     }
 
-    if (explicitAssetClass === "CRYPTO" && /^[A-Z0-9]{2,10}$/.test(canonical)) {
-      const quote = options.quoteAsset || "USDT";
-      return `${canonical}${quote}`;
+    // No quote-asset whitelist: an explicit crypto request is trusted and the
+    // provider decides whether the pair exists. Short symbols are treated as a
+    // base asset and default to USDT; longer symbols are passed through as the
+    // caller supplied pair (for example HYPERTRY or HYPEREUR).
+    if (explicitAssetClass === "CRYPTO") {
+      if (/^[A-Z0-9]{6,30}$/.test(canonical)) return canonical;
+      if (/^[A-Z0-9]{2,5}$/.test(canonical)) {
+        const quote = options.quoteAsset || "USDT";
+        return `${canonical}${quote}`;
+      }
     }
 
     throw createMarketDataError(

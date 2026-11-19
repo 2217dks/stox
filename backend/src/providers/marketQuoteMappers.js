@@ -4,6 +4,7 @@ const {
 } = require("../dtos/marketQuoteDto");
 const { createMarketDataError } = require("./marketDataErrors");
 const { assertObject, invalidProviderResponse } = require("./marketDataHttp");
+const { BINANCE_QUOTE_ASSETS } = require("../utils/cryptoQuoteAssets");
 
 function decimalOrInvalid(value) {
   const decimal = normalizeQuoteDecimal(value);
@@ -81,9 +82,17 @@ function mapBinanceQuote(payload, requestedSymbol) {
       decimalOrInvalid(value),
     ]),
   );
-  const currency = ["USDT", "BTC", "ETH"].find((asset) =>
+  const currency = BINANCE_QUOTE_ASSETS.find((asset) =>
     requestedSymbol.endsWith(asset),
   );
+
+  // Binance reports prevClosePrice as 0 for pairs with no completed prior
+  // session (for example a halted/break market). The DTO treats a non-null
+  // previous close as positive, so an unknown close must be null rather than
+  // "0"; otherwise an otherwise usable quote becomes a 502.
+  if (decimals.previousClose === "0") {
+    decimals.previousClose = null;
+  }
 
   return createMarketQuoteDto({
     symbol: `BINANCE:${requestedSymbol}`,

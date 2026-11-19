@@ -5,6 +5,11 @@ const {
   isValidHistoricalRange,
 } = require("../utils/historicalRange");
 
+// Shape-only check. The quote asset is intentionally not whitelisted: Binance
+// is the authority for which pairs exist and are trading. This keeps new
+// quote assets working without a code change.
+const CRYPTO_PAIR_PATTERN = /^(?:BINANCE:)?[A-Z0-9]{2,20}\/?[A-Z0-9]{3,10}$/;
+
 const historicalSymbolSchema = z
   .string()
   .trim()
@@ -26,7 +31,7 @@ const cryptoQuoteParamsSchema = z.object({
     .min(1)
     .max(30)
     .regex(
-      /^(?:BINANCE:)?[A-Z0-9]{2,20}\/?(?:USDT|BTC|ETH)$/,
+      CRYPTO_PAIR_PATTERN,
       "A valid Binance crypto pair is required.",
     ),
 });

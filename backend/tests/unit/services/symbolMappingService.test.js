@@ -128,6 +128,13 @@ describe("symbolMappingService", () => {
       expect(inferAssetClass("SOLUSDT")).toBe("CRYPTO");
       expect(inferAssetClass("BTC/USDT")).toBe("CRYPTO");
       expect(inferAssetClass("ETH/BTC")).toBe("CRYPTO");
+      expect(inferAssetClass("HYPERUSDC")).toBe("CRYPTO");
+      expect(inferAssetClass("HYPERFDUSD")).toBe("CRYPTO");
+      expect(inferAssetClass("HYPERTUSD")).toBe("CRYPTO");
+      expect(inferAssetClass("HYPERBUSD")).toBe("CRYPTO");
+      expect(inferAssetClass("HYPERTRY")).toBe("CRYPTO");
+      expect(inferAssetClass("HYPEREUR")).toBe("CRYPTO");
+      expect(inferAssetClass("1000SATSUSDT")).toBe("CRYPTO");
     });
 
     test("infers STOCK for FINNHUB prefix", () => {
@@ -222,6 +229,8 @@ describe("symbolMappingService", () => {
         expect(toProviderSymbol("BINANCE:BTCUSDT", "binance")).toBe("BTCUSDT");
         expect(toProviderSymbol("BTC/USDT", "binance")).toBe("BTCUSDT");
         expect(toProviderSymbol("ETHBTC", "binance")).toBe("ETHBTC");
+        expect(toProviderSymbol("HYPER/USDC", "binance")).toBe("HYPERUSDC");
+        expect(toProviderSymbol("HYPERFDUSD", "binance")).toBe("HYPERFDUSD");
       });
 
       test("rejects stock symbols for Binance with 400", () => {
@@ -270,6 +279,8 @@ describe("symbolMappingService", () => {
       expect(toDisplaySymbol("BTCUSDT")).toBe("BTC/USDT");
       expect(toDisplaySymbol("ETHBTC")).toBe("ETH/BTC");
       expect(toDisplaySymbol("SOLUSDT")).toBe("SOL/USDT");
+      expect(toDisplaySymbol("HYPERUSDC")).toBe("HYPER/USDC");
+      expect(toDisplaySymbol("HYPERFDUSD")).toBe("HYPER/FDUSD");
     });
 
     test("preserves stock tickers for display", () => {

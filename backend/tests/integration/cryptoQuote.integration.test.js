@@ -74,6 +74,43 @@ describe("crypto quote API integration", () => {
     expect(marketDataService.getQuote).not.toHaveBeenCalled();
   });
 
+  test.each(["HYPERUSDC", "HYPERFDUSD", "HYPERTUSD", "HYPERBUSD"])(
+    "accepts the supported stablecoin-quoted pair %s",
+    async (symbol) => {
+      const stablecoinQuote = {
+        ...quote,
+        symbol: `BINANCE:${symbol}`,
+        currency: symbol.endsWith("FDUSD") ? "FDUSD" : symbol.slice(-4),
+      };
+      marketDataService.getQuote.mockResolvedValue(stablecoinQuote);
+
+      const response = await request(app).get(
+        `/api/v1/market/quote/${symbol}`,
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.body.data.symbol).toBe(`BINANCE:${symbol}`);
+      expect(marketDataService.getQuote).toHaveBeenCalledWith(symbol, {
+        assetClass: "CRYPTO",
+      });
+    },
+  );
+
+  test("accepts a non-stablecoin quote asset and lets Binance decide", async () => {
+    const tryQuote = { ...quote, symbol: "BINANCE:HYPERTRY", currency: "TRY" };
+    marketDataService.getQuote.mockResolvedValue(tryQuote);
+
+    const response = await request(app).get(
+      "/api/v1/market/quote/HYPERTRY",
+    );
+
+    expect(response.status).toBe(200);
+    expect(response.body.data.symbol).toBe("BINANCE:HYPERTRY");
+    expect(marketDataService.getQuote).toHaveBeenCalledWith("HYPERTRY", {
+      assetClass: "CRYPTO",
+    });
+  });
+
   test("maps an unknown Binance pair to the standard not-found error", async () => {
     marketDataService.getQuote.mockRejectedValue(
       new AppError(
