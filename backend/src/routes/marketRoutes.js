@@ -7,8 +7,10 @@ const {
   getMarketOverview,
   searchMarketSymbols,
   getStockQuote,
+  getQuotes,
 } = require("../controllers/marketController");
 const {
+  batchQuotesQuerySchema,
   cryptoQuoteParamsSchema,
   quoteQuerySchema,
   historicalPricesParamsSchema,
@@ -24,6 +26,12 @@ router.get(
   "/search",
   validate(marketSearchQuerySchema, "query", "validatedQuery"),
   searchMarketSymbols,
+);
+
+router.get(
+  "/quotes",
+  validate(batchQuotesQuerySchema, "query", "validatedQuery"),
+  getQuotes,
 );
 
 router.get(

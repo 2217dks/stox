@@ -120,19 +120,19 @@ export function useQuotes(symbols = [], assetTypes = {}, options = {}) {
   const { data, error, isLoading, mutate } = useSWR(
     key,
     async () => {
-      const results = await Promise.all(
-        symbols.map(async (symbol) => {
-          const assetClass =
-            assetTypes[symbol] || (isCrypto(symbol) ? "CRYPTO" : "STOCK");
-          try {
-            const quote = await marketApi.quote(symbol, assetClass);
-            return [symbol, quote];
-          } catch {
-            return [symbol, null];
-          }
-        }),
+      // One request for the whole set: a per-symbol fan-out costs the global
+      // rate-limit budget N times for what is one screen.
+      const quotes = await marketApi.quotes(symbols);
+      const byCanonical = new Map(
+        quotes.map((quote) => [canonicalMarketSymbol(quote.symbol), quote]),
       );
-      return Object.fromEntries(results);
+
+      return Object.fromEntries(
+        symbols.map((symbol) => [
+          symbol,
+          byCanonical.get(canonicalMarketSymbol(symbol)) ?? null,
+        ]),
+      );
     },
     {
       // Live prices arrive over the market socket. HTTP is only the initial

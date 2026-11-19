@@ -117,6 +117,8 @@ export const marketApi = {
     assetClass === "CRYPTO"
       ? marketApi.cryptoQuote(symbol)
       : marketApi.stockQuote(symbol),
+  quotes: (symbols) =>
+    call("/market/quotes", { query: { symbols: symbols.join(",") } }),
   history: (symbol, query) =>
     call(`/market/history/${encodeURIComponent(symbol)}`, { query }),
   overview: (query) => call("/market/overview", { query }),

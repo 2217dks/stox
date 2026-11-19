@@ -98,6 +98,33 @@ const marketSearchQuerySchema = z
   })
   .strict();
 
+const batchQuotesQuerySchema = z
+  .object({
+    symbols: z
+      .string()
+      .trim()
+      .min(1, "symbols is required.")
+      .transform((value) =>
+        value
+          .split(",")
+          .map((symbol) => symbol.trim())
+          .filter(Boolean),
+      )
+      .pipe(
+        z
+          .array(
+            z
+              .string()
+              .min(1)
+              .max(30)
+              .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/, "Invalid symbol."),
+          )
+          .min(1, "At least one symbol is required.")
+          .max(20, "At most 20 symbols may be requested at once."),
+      ),
+  })
+  .strict();
+
 function queryBoolean(val) {
   if (typeof val === "string") {
     const lower = val.trim().toLowerCase();
@@ -121,6 +148,7 @@ const quoteQuerySchema = z
   .strict();
 
 module.exports = {
+  batchQuotesQuerySchema,
   cryptoQuoteParamsSchema,
   stockQuoteParamsSchema,
   quoteQuerySchema,

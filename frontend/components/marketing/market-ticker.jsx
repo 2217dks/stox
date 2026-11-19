@@ -21,11 +21,14 @@ const symbols = [
 ];
 
 export function MarketTicker() {
-  const { quotes } = useQuotes(
-    symbols,
-    { AAPL: "STOCK", NVDA: "STOCK", TSLA: "STOCK", MSFT: "STOCK" },
-    { refreshInterval: 120000 },
-  );
+  // No polling: the market socket streams ticks, and the global API limiter
+  // is tight enough that an idle landing tab would exhaust it.
+  const { quotes } = useQuotes(symbols, {
+    AAPL: "STOCK",
+    NVDA: "STOCK",
+    TSLA: "STOCK",
+    MSFT: "STOCK",
+  });
 
   const items = symbols.map((symbol) => ({
     symbol,

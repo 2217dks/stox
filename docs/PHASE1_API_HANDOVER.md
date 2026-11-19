@@ -247,7 +247,7 @@ After a source order executes, the backend fans out one market order per active 
 
 ### Public market data
 
-All five routes are public and validated, with global rate limiting.
+All six routes are public and validated, with global rate limiting.
 
 #### `GET /market/search`
 
@@ -260,6 +260,10 @@ Crypto pair path, accepted forms include `BTCUSDT`, `BINANCE:BTCUSDT`, and `BTC/
 #### `GET /market/quote/stock/:symbol`
 
 Stock ticker path (letters/digits and `.`/`-`, max 20 chars). Returns the same quote DTO with `assetClass:"STOCK"`; `volume` is currently `null` because Finnhub's quote response does not provide it. Invalid ticker is `400`; unknown symbol is `404 MARKET_DATA_NOT_FOUND`.
+
+#### `GET /market/quotes`
+
+Batch quote read for screens that show many symbols at once. Query: required `symbols`, a comma-separated list of 1–20 symbols (each 1–30 chars, same alphabet as the single-symbol routes). Asset class is inferred per symbol. Returns `200` with `data.quotes` as an array of the same quote DTO used by the single-symbol routes, keyed by the provider-canonical `symbol` (`BTCUSDT` comes back as `BINANCE:BTCUSDT`). A symbol whose provider lookup fails is omitted from the array rather than failing the batch; the caller renders it as unavailable. Missing or empty `symbols`, more than 20 symbols, or an invalid symbol is `400 VALIDATION_ERROR`. Each symbol still goes through the normal quote cache, so repeated symbols across clients do not multiply provider calls.
 
 #### `GET /market/history/:symbol`
 

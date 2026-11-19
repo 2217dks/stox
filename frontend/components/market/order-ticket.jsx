@@ -107,8 +107,10 @@ export function OrderTicket({
   const limitPrice = watch("limitPrice");
   const stopPrice = watch("stopPrice");
 
-  const { quote } = useQuote(symbol, assetType);
+  // Debounce before fetching: the symbol field writes on every keystroke, so
+  // an undebounced quote key fires one request per typed character.
   const positionSymbol = useDebouncedValue(symbol, 300);
+  const { quote } = useQuote(positionSymbol, assetType);
   const position = usePosition(portfolioId, positionSymbol);
 
   useEffect(() => {

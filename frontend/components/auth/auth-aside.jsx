@@ -17,7 +17,7 @@ const proof = [
 ];
 
 export function AuthAside() {
-  const { quotes } = useQuotes(symbols, {}, { refreshInterval: 120000 });
+  const { quotes } = useQuotes(symbols, {});
 
   return (
     <aside className="relative hidden overflow-hidden border-r border-line bg-canvas-deep px-12 py-10 lg:flex lg:flex-col">

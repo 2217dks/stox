@@ -68,6 +68,24 @@ module.exports = {
     });
   },
 
+  /**
+   * Fetch many quotes for one request.
+   *
+   * Each symbol goes through the normal cached getQuote path, so repeated
+   * symbols across clients still hit the 5-second price cache. Failed symbols
+   * are omitted instead of failing the whole batch; the caller renders them
+   * as unavailable.
+   */
+  async getQuotes(symbols = [], options = {}) {
+    const results = await Promise.allSettled(
+      symbols.map((symbol) => this.getQuote(symbol, options)),
+    );
+
+    return results
+      .filter((result) => result.status === "fulfilled")
+      .map((result) => result.value);
+  },
+
   async searchSymbols(query, options = {}) {
     if (typeof query !== "string" || !query.trim()) {
       return marketDataService.searchSymbols(query, options);
