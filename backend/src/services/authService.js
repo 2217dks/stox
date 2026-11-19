@@ -37,6 +37,9 @@ function requireEnv(name, value) {
 
 requireEnv("JWT_ACCESS_SECRET", ACCESS_TOKEN_SECRET);
 requireEnv("JWT_REFRESH_SECRET", REFRESH_TOKEN_SECRET);
+// google-auth-library only verifies the token audience when one is passed, so a
+// missing client id would silently accept tokens minted for any OAuth client.
+requireEnv("GOOGLE_CLIENT_ID", process.env.GOOGLE_CLIENT_ID);
 
 /**
  * Normalize email addresses before storing or querying them.

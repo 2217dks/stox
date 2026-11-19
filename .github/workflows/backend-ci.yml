@@ -24,6 +24,7 @@ env:
     RATE_LIMIT_ENABLED: false
     JWT_ACCESS_SECRET: ci-test-access-secret-not-for-production-1234567890
     JWT_REFRESH_SECRET: ci-test-refresh-secret-not-for-production-0987654321
+    GOOGLE_CLIENT_ID: ci-test-client-id.apps.googleusercontent.com
 
 jobs:
     prisma-validation:
