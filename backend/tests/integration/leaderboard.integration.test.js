@@ -18,6 +18,7 @@ const buildUser = (index) => ({
 let snapshotDate;
 let snapshotId;
 let emptySnapshotId;
+let emptyWeeklySnapshotId;
 
 let user1Id;
 let user2Id;
@@ -122,6 +123,12 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  if (emptyWeeklySnapshotId) {
+    await prisma.leaderboardSnapshot.deleteMany({
+      where: { id: emptyWeeklySnapshotId },
+    });
+  }
+
   if (emptySnapshotId) {
     await prisma.leaderboardSnapshot.deleteMany({
       where: { id: emptySnapshotId },
@@ -173,7 +180,33 @@ describe("Leaderboard integration API", () => {
     expect(leaderboard[0].returnPct).toBe("10.5");
   });
 
-  test("returns an empty board when no snapshot exists for the period", async () => {
+  test("returns an empty board when the latest weekly snapshot has no entries", async () => {
+    // Integration tests share a local database that may already contain
+    // production-like or previously generated snapshots. Create a snapshot
+    // later than any real one so the assertion is deterministic without
+    // deleting existing leaderboard history. The true "no snapshot at all"
+    // branch is covered by the service unit tests.
+    const emptyWeeklyDate = new Date("2099-06-19T00:00:00.000Z");
+
+    // Recover from a previous interrupted run that left this test-only row.
+    await prisma.leaderboardSnapshot.deleteMany({
+      where: {
+        scope: "GLOBAL",
+        period: "WEEKLY",
+        snapshotDate: emptyWeeklyDate,
+      },
+    });
+
+    const emptySnapshot = await prisma.leaderboardSnapshot.create({
+      data: {
+        scope: "GLOBAL",
+        period: "WEEKLY",
+        snapshotDate: emptyWeeklyDate,
+      },
+    });
+
+    emptyWeeklySnapshotId = emptySnapshot.id;
+
     const response = await request(app)
       .get("/api/v1/leaderboard?period=WEEKLY")
       .set("Authorization", `Bearer ${user1AccessToken}`);
@@ -488,23 +521,33 @@ describe("Leaderboard integration API", () => {
 
     // Intercept Prisma's interactive transaction client to simulate lease loss during final period (ALL_TIME) DB work
     const origTransaction = prisma.$transaction.bind(prisma);
-    const transactionSpy = jest.spyOn(prisma, "$transaction").mockImplementation(async (cb, ...args) => {
-      if (typeof cb === "function") {
-        return origTransaction(async (tx) => {
-          const origUpsert = tx.leaderboardSnapshot.upsert.bind(tx.leaderboardSnapshot);
-          tx.leaderboardSnapshot.upsert = async (params) => {
-            const res = await origUpsert(params);
-            // In the final period (ALL_TIME), trigger the lost lease abort signal
-            if (params?.where?.scope_period_snapshotDate?.period === "ALL_TIME") {
-              abortController.abort();
-            }
-            return res;
-          };
-          return cb(tx);
-        }, ...args);
-      }
-      return origTransaction(cb, ...args);
-    });
+    const transactionSpy = jest
+      .spyOn(prisma, "$transaction")
+      .mockImplementation(async (cb, ...args) => {
+        if (typeof cb === "function") {
+          return origTransaction(
+            async (tx) => {
+              const origUpsert = tx.leaderboardSnapshot.upsert.bind(
+                tx.leaderboardSnapshot,
+              );
+              tx.leaderboardSnapshot.upsert = async (params) => {
+                const res = await origUpsert(params);
+                // In the final period (ALL_TIME), trigger the lost lease abort signal
+                if (
+                  params?.where?.scope_period_snapshotDate?.period ===
+                  "ALL_TIME"
+                ) {
+                  abortController.abort();
+                }
+                return res;
+              };
+              return cb(tx);
+            },
+            ...args,
+          );
+        }
+        return origTransaction(cb, ...args);
+      });
 
     try {
       await expect(
@@ -657,7 +700,9 @@ describe("Leaderboard integration API", () => {
 
       try {
         const page1 = await request(app)
-          .get("/api/v1/leaderboard/history?period=DAILY&from=2025-01-01&to=2025-01-02&page=1&limit=2")
+          .get(
+            "/api/v1/leaderboard/history?period=DAILY&from=2025-01-01&to=2025-01-02&page=1&limit=2",
+          )
           .set("Authorization", `Bearer ${user1AccessToken}`);
 
         expect(page1.status).toBe(200);
@@ -665,20 +710,30 @@ describe("Leaderboard integration API", () => {
         expect(page1.body.data.pagination.totalPages).toBe(2);
         expect(page1.body.data.leaderboard).toHaveLength(2);
         // newer date comes first (snapshotDate desc)
-        expect(page1.body.data.leaderboard[0].snapshotDate.slice(0, 10)).toBe("2025-01-02");
+        expect(page1.body.data.leaderboard[0].snapshotDate.slice(0, 10)).toBe(
+          "2025-01-02",
+        );
         expect(page1.body.data.leaderboard[0].rank).toBe(1);
-        expect(page1.body.data.leaderboard[1].snapshotDate.slice(0, 10)).toBe("2025-01-02");
+        expect(page1.body.data.leaderboard[1].snapshotDate.slice(0, 10)).toBe(
+          "2025-01-02",
+        );
         expect(page1.body.data.leaderboard[1].rank).toBe(2);
 
         const page2 = await request(app)
-          .get("/api/v1/leaderboard/history?period=DAILY&from=2025-01-01&to=2025-01-02&page=2&limit=2")
+          .get(
+            "/api/v1/leaderboard/history?period=DAILY&from=2025-01-01&to=2025-01-02&page=2&limit=2",
+          )
           .set("Authorization", `Bearer ${user1AccessToken}`);
 
         expect(page2.status).toBe(200);
         expect(page2.body.data.leaderboard).toHaveLength(2);
-        expect(page2.body.data.leaderboard[0].snapshotDate.slice(0, 10)).toBe("2025-01-01");
+        expect(page2.body.data.leaderboard[0].snapshotDate.slice(0, 10)).toBe(
+          "2025-01-01",
+        );
         expect(page2.body.data.leaderboard[0].rank).toBe(1);
-        expect(page2.body.data.leaderboard[1].snapshotDate.slice(0, 10)).toBe("2025-01-01");
+        expect(page2.body.data.leaderboard[1].snapshotDate.slice(0, 10)).toBe(
+          "2025-01-01",
+        );
         expect(page2.body.data.leaderboard[1].rank).toBe(2);
       } finally {
         await prisma.leaderboardSnapshot.deleteMany({
