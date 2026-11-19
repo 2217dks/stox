@@ -10,6 +10,7 @@ const { recordOrderEvent, getOrderEvents } = require("./orderEventService");
 const {
   createOrderCancelledNotification,
 } = require("./notificationEvents");
+const cacheService = require("./cacheService");
 
 const ZERO = new Prisma.Decimal(0);
 const MAX_MONEY = new Prisma.Decimal("9999999999.99999999");
@@ -456,6 +457,8 @@ async function cancelOrder({ userId, orderId }) {
     throw error;
   }
 
+  await cacheService.invalidatePortfolio(order.portfolioId);
+
   const updated = await prisma.order.findUnique({
     where: {
       id: orderId,
@@ -750,6 +753,11 @@ async function createOrder({
   if (reusedCopyOrder) {
     return serialized;
   }
+
+  // The summary endpoint serves availableCash = cash - reserved from a 30s
+  // cache. A new reservation must not leave the dashboard showing cash that
+  // is already committed.
+  await cacheService.invalidatePortfolio(portfolioId);
 
   triggerOrderStatus(serialized);
 
