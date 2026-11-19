@@ -27,8 +27,8 @@ describe("market data configuration", () => {
 
   test("reads explicit provider selection, credentials, URLs, timeout, and clock skew", () => {
     const config = loadMarketDataConfig({
-      MARKET_DATA_STOCK_PROVIDER: "custom-stock",
-      MARKET_DATA_CRYPTO_PROVIDER: "custom-crypto",
+      MARKET_DATA_STOCK_PROVIDER: "yahoo",
+      MARKET_DATA_CRYPTO_PROVIDER: "binance",
       MARKET_DATA_REQUEST_TIMEOUT_MS: "2500",
       MARKET_DATA_MAX_CLOCK_SKEW_SECONDS: "10",
       FINNHUB_API_KEY: "  test-key  ",
@@ -38,12 +38,12 @@ describe("market data configuration", () => {
     });
 
     expect(config.providerByAssetClass).toEqual({
-      STOCK: "custom-stock",
-      CRYPTO: "custom-crypto",
+      STOCK: "yahoo",
+      CRYPTO: "binance",
     });
     expect(config.providerChains).toEqual({
-      STOCK: ["custom-stock", "finnhub", "yahoo"],
-      CRYPTO: ["custom-crypto", "binance"],
+      STOCK: ["yahoo", "finnhub"],
+      CRYPTO: ["binance"],
     });
     expect(config.timeoutMs).toBe(2500);
     expect(config.maxClockSkewSeconds).toBe(10);
@@ -59,12 +59,12 @@ describe("market data configuration", () => {
 
   test("reads an ordered fallback chain and keeps the first provider primary", () => {
     const config = loadMarketDataConfig({
-      MARKET_DATA_STOCK_PROVIDERS: " Alpaca, yahoo , alpaca, ",
+      MARKET_DATA_STOCK_PROVIDERS: " yahoo, finnhub , yahoo, ",
       MARKET_DATA_CRYPTO_PROVIDER: "binance",
     });
 
-    expect(config.providerChains.STOCK).toEqual(["alpaca", "yahoo"]);
-    expect(config.providerByAssetClass.STOCK).toBe("alpaca");
+    expect(config.providerChains.STOCK).toEqual(["yahoo", "finnhub"]);
+    expect(config.providerByAssetClass.STOCK).toBe("yahoo");
   });
 
   test("uses the chain variable instead of the legacy primary when both are set", () => {
@@ -96,5 +96,33 @@ describe("market data configuration", () => {
     expect(() =>
       loadMarketDataConfig({ MARKET_DATA_REQUEST_TIMEOUT_MS: "5" }),
     ).toThrow("MARKET_DATA_REQUEST_TIMEOUT_MS must be an integer");
+  });
+
+  test("rejects unknown provider in chain configuration", () => {
+    expect(() =>
+      loadMarketDataConfig({
+        MARKET_DATA_STOCK_PROVIDERS: "finnhub,unknown_provider",
+      }),
+    ).toThrow("Unknown market data provider 'unknown_provider' configured in MARKET_DATA_STOCK_PROVIDERS");
+
+    expect(() =>
+      loadMarketDataConfig({
+        MARKET_DATA_CRYPTO_PROVIDERS: "fake_crypto",
+      }),
+    ).toThrow("Unknown market data provider 'fake_crypto' configured in MARKET_DATA_CRYPTO_PROVIDERS");
+  });
+
+  test("rejects unknown legacy primary provider", () => {
+    expect(() =>
+      loadMarketDataConfig({
+        MARKET_DATA_STOCK_PROVIDER: "not_a_provider",
+      }),
+    ).toThrow("Unknown market data provider 'not_a_provider' configured in MARKET_DATA_STOCK_PROVIDER");
+
+    expect(() =>
+      loadMarketDataConfig({
+        MARKET_DATA_CRYPTO_PROVIDER: "not_a_crypto_provider",
+      }),
+    ).toThrow("Unknown market data provider 'not_a_crypto_provider' configured in MARKET_DATA_CRYPTO_PROVIDER");
   });
 });

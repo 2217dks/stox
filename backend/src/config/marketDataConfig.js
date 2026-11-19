@@ -3,6 +3,12 @@ const DEFAULT_TIMEOUT_MS = 5000;
 const MIN_TIMEOUT_MS = 100;
 const MAX_TIMEOUT_MS = 30000;
 
+const SUPPORTED_MARKET_DATA_PROVIDERS = Object.freeze([
+  "finnhub",
+  "binance",
+  "yahoo",
+]);
+
 const DEFAULT_PROVIDER_CHAINS = Object.freeze({
   // Finnhub serves US stocks; Yahoo is the free stock-history fallback used
   // when Finnhub's plan rejects /stock/candle. The chain order is priority.
@@ -113,6 +119,13 @@ function readProviderChain(assetClass, env) {
         `${chainEnvName} must list at least one market-data provider.`,
       );
     }
+    for (const id of unique) {
+      if (!SUPPORTED_MARKET_DATA_PROVIDERS.includes(id)) {
+        throw new Error(
+          `Unknown market data provider '${id}' configured in ${chainEnvName}. Supported providers: ${SUPPORTED_MARKET_DATA_PROVIDERS.join(", ")}.`,
+        );
+      }
+    }
     return unique;
   }
 
@@ -125,6 +138,12 @@ function readProviderChain(assetClass, env) {
     normalizeProviderId(primaryValue) || defaults[0] || null;
   if (!primary) {
     throw new Error(`${primaryEnvName} must name a market-data provider.`);
+  }
+
+  if (!SUPPORTED_MARKET_DATA_PROVIDERS.includes(primary)) {
+    throw new Error(
+      `Unknown market data provider '${primary}' configured in ${primaryEnvName}. Supported providers: ${SUPPORTED_MARKET_DATA_PROVIDERS.join(", ")}.`,
+    );
   }
 
   return [...new Set([primary, ...defaults])];
@@ -215,6 +234,7 @@ function loadMarketDataConfig(env = process.env) {
 }
 
 module.exports = {
+  SUPPORTED_MARKET_DATA_PROVIDERS,
   DEFAULT_PROVIDER_CHAINS,
   DEFAULT_TIMEOUT_MS,
   MIN_TIMEOUT_MS,
