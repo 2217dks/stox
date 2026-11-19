@@ -478,3 +478,36 @@ describe("marketDataService provider-independent interface", () => {
     ]);
   });
 });
+
+describe("historical price truncation", () => {
+  test("keeps the newest candles when the provider returns more than limit", async () => {
+    const candle = (day, close) => ({
+      timestamp: `2026-11-0${day}T00:00:00.000Z`,
+      open: close,
+      high: close,
+      low: close,
+      close,
+      volume: "10",
+    });
+
+    const stockProvider = createProvider({
+      getHistoricalPrices: jest.fn(async (symbol, options) => ({
+        symbol,
+        assetClass: "STOCK",
+        interval: options.interval,
+        prices: [candle(1, "1"), candle(2, "2"), candle(3, "3")],
+      })),
+    });
+
+    const service = createService({ stockProvider });
+
+    const result = await service.getHistoricalPrices("AAPL", {
+      interval: "1d",
+      from: Date.parse("2026-11-01T00:00:00.000Z"),
+      to: Date.parse("2026-11-03T00:00:00.000Z"),
+      limit: 2,
+    });
+
+    expect(result.prices.map((price) => price.close)).toEqual(["2", "3"]);
+  });
+});

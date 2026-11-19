@@ -319,7 +319,9 @@ function createMarketDataService({ config, providers } = {}) {
             interval,
           ),
       });
-      return { ...normalized, prices: normalized.prices.slice(0, limit) };
+      // The window always ends at `to`, so keep the newest candles. Providers
+      // can return limit+1 rows for a window that includes a partial period.
+      return { ...normalized, prices: normalized.prices.slice(-limit) };
     },
 
     /**
