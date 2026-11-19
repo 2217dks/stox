@@ -82,6 +82,7 @@ describe("BullMQ queue foundation", () => {
     }
 
     await closeQueues();
+    process.env.QUEUES_ENABLED = "false";
   });
 
   test("processes a job end to end with the real Redis backend", async () => {

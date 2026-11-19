@@ -1,5 +1,3 @@
-const http = require("http");
-const https = require("https");
 const { disconnectRedis } = require("../src/config/redis");
 const { closeQueues } = require("../src/queues");
 const prisma = require("../src/config/database");
@@ -32,12 +30,7 @@ afterAll(async () => {
     console.error("CRITICAL: Failed to disconnect Prisma during Jest teardown:", err);
   }
 
-  if (http && http.globalAgent && typeof http.globalAgent.destroy === "function") {
-    http.globalAgent.destroy();
-  }
-  if (https && https.globalAgent && typeof https.globalAgent.destroy === "function") {
-    https.globalAgent.destroy();
-  }
+  process.env.QUEUES_ENABLED = "false";
 
   if (errors.length > 0) {
     throw new Error(
@@ -45,4 +38,3 @@ afterAll(async () => {
     );
   }
 });
-

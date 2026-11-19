@@ -175,8 +175,6 @@ afterAll(async () => {
     await queue.obliterate({ force: true }).catch(() => {});
   }
 
-  await closeQueues();
-
   if (portfolioId) {
     await prisma.trade.deleteMany({ where: { portfolioId } });
     await prisma.order.deleteMany({ where: { portfolioId } });
@@ -188,7 +186,9 @@ afterAll(async () => {
     await prisma.user.delete({ where: { id: userId } });
   }
 
+  await closeQueues();
   await prisma.$disconnect();
+  process.env.QUEUES_ENABLED = "false";
 });
 
 describe("order queue scan/direct-enqueue race", () => {

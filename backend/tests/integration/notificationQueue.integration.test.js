@@ -114,6 +114,7 @@ describe("Notification queue integration", () => {
 
     await closeQueues();
     await prisma.$disconnect();
+    process.env.QUEUES_ENABLED = "false";
   });
 
   test("delivers a notification end to end and persists the channels", async () => {
