@@ -87,6 +87,7 @@ async function getPortfolioAggregatePnl(
       allowStale,
       maxAgeSeconds,
       asOf,
+      symbol,
     }),
   ]);
 

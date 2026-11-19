@@ -179,6 +179,7 @@ async function getPortfolioUnrealizedPnl(
     allowStale = false,
     maxAgeSeconds = undefined,
     asOf = new Date(),
+    symbol = null,
   } = {},
 ) {
   const portfolio = await prisma.portfolio.findFirst({
@@ -203,6 +204,7 @@ async function getPortfolioUnrealizedPnl(
     where: {
       portfolioId,
       quantity: { gt: 0 },
+      ...(symbol ? { symbol } : {}),
     },
     orderBy: { symbol: "asc" },
   });
