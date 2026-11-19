@@ -45,6 +45,7 @@ jest.mock("../../../src/services/marketData", () => ({
   getQuote: jest.fn(),
 }));
 
+const { Prisma } = require("@prisma/client");
 const prisma = require("../../../src/config/database");
 const marketDataService = require("../../../src/services/marketData");
 const orderService = require("../../../src/services/orderService");
@@ -69,6 +70,8 @@ function mockActivePortfolio() {
 function createTransactionMock({
   cashBalance = "10000",
   reservedCash = "0",
+  holdingQuantity = "10",
+  pendingSellOrders = [],
   orderOverrides = {},
   transactionOrder = {
     id: ORDER_ID,
@@ -89,6 +92,17 @@ function createTransactionMock({
         reservedCash,
       },
     ]),
+    holding: {
+      findFirst: jest.fn().mockImplementation(async () => {
+        if (holdingQuantity === null) return null;
+        return {
+          id: "holding-1",
+          portfolioId: "33333333-3333-4333-8333-333333333333",
+          symbol: "AAPL",
+          quantity: holdingQuantity,
+        };
+      }),
+    },
     portfolio: {
       update: jest.fn().mockResolvedValue({}),
     },
@@ -98,6 +112,7 @@ function createTransactionMock({
     },
     order: {
       findFirst: jest.fn().mockResolvedValue(transactionOrder),
+      findMany: jest.fn().mockResolvedValue(pendingSellOrders),
       updateMany: jest.fn().mockResolvedValue({
         count: transitionCount,
       }),
@@ -638,7 +653,7 @@ describe("createOrder cash reservations", () => {
     });
 
     test("rejects short selling on league portfolio when heldQty < quantity", async () => {
-      createTransactionMock();
+      createTransactionMock({ holdingQuantity: "1" });
 
       prisma.leagueMember.findUnique.mockResolvedValueOnce({
         portfolioId: PORTFOLIO_ID,
@@ -670,6 +685,87 @@ describe("createOrder cash reservations", () => {
       ).rejects.toMatchObject({
         code: "SHORT_SELLING_DISALLOWED",
       });
+    });
+  });
+
+  describe("backend SELL order protection", () => {
+    const PORTFOLIO_ID = "33333333-3333-4333-8333-333333333333";
+
+    test("rejects a SELL order when holding is not present (0 shares)", async () => {
+      createTransactionMock({ holdingQuantity: null });
+
+      await expect(
+        orderService.createOrder({
+          userId: USER_ID,
+          portfolioId: PORTFOLIO_ID,
+          symbol: "AAPL",
+          assetType: "STOCK",
+          side: "SELL",
+          type: "MARKET",
+          quantity: "5",
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: "INSUFFICIENT_POSITION",
+        details: {
+          required: "5",
+          available: "0",
+        },
+      });
+    });
+
+    test("rejects a SELL order when pending SELL orders exhaust held quantity", async () => {
+      createTransactionMock({
+        holdingQuantity: "10",
+        pendingSellOrders: [
+          { quantity: new Prisma.Decimal("7") },
+          { quantity: new Prisma.Decimal("2") },
+        ],
+      });
+
+      await expect(
+        orderService.createOrder({
+          userId: USER_ID,
+          portfolioId: PORTFOLIO_ID,
+          symbol: "AAPL",
+          assetType: "STOCK",
+          side: "SELL",
+          type: "MARKET",
+          quantity: "2",
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: "INSUFFICIENT_POSITION",
+        details: {
+          required: "2",
+          available: "1",
+        },
+      });
+    });
+
+    test("allows a SELL order when available quantity is sufficient", async () => {
+      const tx = createTransactionMock({
+        holdingQuantity: "10",
+        pendingSellOrders: [{ quantity: new Prisma.Decimal("4") }],
+      });
+
+      const order = await orderService.createOrder({
+        userId: USER_ID,
+        portfolioId: PORTFOLIO_ID,
+        symbol: "AAPL",
+        assetType: "STOCK",
+        side: "SELL",
+        type: "MARKET",
+        quantity: "6",
+      });
+
+      expect(order).toMatchObject({
+        symbol: "AAPL",
+        side: "SELL",
+        quantity: "6",
+        status: "PENDING",
+      });
+      expect(tx.order.create).toHaveBeenCalledTimes(1);
     });
   });
 });

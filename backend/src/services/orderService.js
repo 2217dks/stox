@@ -592,25 +592,6 @@ async function createOrder({
         })
         .catch(() => {});
     }
-
-    if (side === "SELL") {
-      const holding = prisma.holding
-        ? await prisma.holding.findFirst({
-            where: {
-              portfolioId,
-              symbol: normalizedSymbol,
-            },
-          })
-        : null;
-      const heldQty = holding ? new Prisma.Decimal(holding.quantity) : ZERO;
-
-      if (heldQty.lt(new Prisma.Decimal(quantity))) {
-        throw AppError.badRequest(
-          "Short selling is not permitted in league portfolios. Insufficient shares held.",
-          "SHORT_SELLING_DISALLOWED",
-        );
-      }
-    }
   }
 
   // Calculate the reservation before opening the database transaction.
@@ -670,6 +651,67 @@ async function createOrder({
             available: availableCash.toString(),
           },
         );
+      }
+
+      if (side === "SELL") {
+        const holding = tx.holding
+          ? await tx.holding.findFirst({
+              where: {
+                portfolioId,
+                symbol: normalizedSymbol,
+              },
+            })
+          : prisma.holding
+            ? await prisma.holding.findFirst({
+                where: {
+                  portfolioId,
+                  symbol: normalizedSymbol,
+                },
+              })
+            : null;
+
+        const heldQty = holding ? new Prisma.Decimal(holding.quantity) : ZERO;
+
+        let pendingSellQty = ZERO;
+        const orderDelegate = tx.order || prisma.order;
+        if (orderDelegate && typeof orderDelegate.findMany === "function") {
+          const pendingSellOrders = await orderDelegate.findMany({
+            where: {
+              portfolioId,
+              symbol: normalizedSymbol,
+              side: "SELL",
+              status: "PENDING",
+            },
+            select: {
+              quantity: true,
+            },
+          });
+          for (const pending of pendingSellOrders) {
+            pendingSellQty = pendingSellQty.plus(
+              new Prisma.Decimal(pending.quantity),
+            );
+          }
+        }
+
+        const availableQty = heldQty.minus(pendingSellQty);
+        const requestedQty = new Prisma.Decimal(quantity);
+
+        if (availableQty.lt(requestedQty)) {
+          if (leagueMember && leagueMember.league) {
+            throw AppError.badRequest(
+              "Short selling is not permitted in league portfolios. Insufficient shares held.",
+              "SHORT_SELLING_DISALLOWED",
+            );
+          }
+          throw AppError.badRequest(
+            "Insufficient position to sell.",
+            "INSUFFICIENT_POSITION",
+            {
+              required: requestedQty.toString(),
+              available: availableQty.gt(ZERO) ? availableQty.toString() : "0",
+            },
+          );
+        }
       }
 
       // Increase the portfolio's aggregate reservation.

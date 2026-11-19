@@ -237,6 +237,17 @@ describe("Order-Event Audit Trail Integration", () => {
 
   describe("Order Rejection Lifecycle Events", () => {
     test("records a REJECTED event on terminal failure (insufficient position on sell)", async () => {
+      await prisma.holding.create({
+        data: {
+          portfolioId: portfolioAId,
+          symbol: "UNOWNED",
+          assetType: "STOCK",
+          quantity: 10,
+          averageBuyPrice: 100,
+          totalInvested: 1000,
+        },
+      });
+
       const order = await orderService.createOrder({
         userId: userA.id,
         portfolioId: portfolioAId,
@@ -245,6 +256,10 @@ describe("Order-Event Audit Trail Integration", () => {
         side: "SELL",
         type: "MARKET",
         quantity: "10",
+      });
+
+      await prisma.holding.deleteMany({
+        where: { portfolioId: portfolioAId, symbol: "UNOWNED" },
       });
 
       const fakeProvider = {

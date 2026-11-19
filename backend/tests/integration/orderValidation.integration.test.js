@@ -52,11 +52,64 @@ beforeAll(async () => {
     (portfolio) => portfolio.isDefault,
   );
   mainPortfolioId = mainPortfolio.id;
+
+  await prisma.holding.createMany({
+    data: [
+      {
+        portfolioId: mainPortfolioId,
+        symbol: `H${timestamp}2`,
+        assetType: "STOCK",
+        quantity: 10,
+        averageBuyPrice: 100,
+        totalInvested: 1000,
+      },
+      {
+        portfolioId: mainPortfolioId,
+        symbol: `C${timestamp}1`,
+        assetType: "STOCK",
+        quantity: 10,
+        averageBuyPrice: 100,
+        totalInvested: 1000,
+      },
+      {
+        portfolioId: mainPortfolioId,
+        symbol: `C${timestamp}3`,
+        assetType: "STOCK",
+        quantity: 10,
+        averageBuyPrice: 100,
+        totalInvested: 1000,
+      },
+      {
+        portfolioId: mainPortfolioId,
+        symbol: `C${timestamp}RACE`,
+        assetType: "STOCK",
+        quantity: 10,
+        averageBuyPrice: 100,
+        totalInvested: 1000,
+      },
+    ],
+  });
 });
 
 afterAll(async () => {
   for (const orderId of createdOrderIds) {
     await prisma.order.delete({ where: { id: orderId } }).catch(() => {});
+  }
+
+  if (mainPortfolioId) {
+    await prisma.holding.deleteMany({
+      where: {
+        portfolioId: mainPortfolioId,
+        symbol: {
+          in: [
+            `H${timestamp}2`,
+            `C${timestamp}1`,
+            `C${timestamp}3`,
+            `C${timestamp}RACE`,
+          ],
+        },
+      },
+    }).catch(() => {});
   }
 
   if (userBOrderId) {
@@ -1562,6 +1615,72 @@ describe("cancel order endpoint (black-box via DELETE /orders/:id)", () => {
         select: { status: true },
       });
       expect(stored.status).toBe("EXECUTED");
+    });
+  });
+
+  describe("backend SELL order position validation", () => {
+    test("rejects SELL order for an unowned symbol with 400 INSUFFICIENT_POSITION", async () => {
+      const response = await postOrder({
+        portfolioId: mainPortfolioId,
+        symbol: `NO${timestamp % 1000000}`,
+        assetType: "STOCK",
+        side: "SELL",
+        quantity: "5",
+      });
+
+      expect(response.status).toBe(400);
+      expectErrorEnvelope(response.body);
+      expect(response.body.error.code).toBe("INSUFFICIENT_POSITION");
+      expect(response.body.error.details).toEqual({
+        required: "5",
+        available: "0",
+      });
+    });
+
+    test("accounts for pending SELL orders against available holding", async () => {
+      const testSymbol = `SL${timestamp % 1000000}`;
+      await prisma.holding.create({
+        data: {
+          portfolioId: mainPortfolioId,
+          symbol: testSymbol,
+          assetType: "STOCK",
+          quantity: 5,
+          averageBuyPrice: 100,
+          totalInvested: 500,
+        },
+      });
+
+      // First order: SELL 4 shares (succeeds, 1 available)
+      const first = await postOrder({
+        portfolioId: mainPortfolioId,
+        symbol: testSymbol,
+        assetType: "STOCK",
+        side: "SELL",
+        quantity: "4",
+      });
+      expect(first.status).toBe(201);
+      createdOrderIds.push(first.body.data.order.id);
+
+      // Second order: attempt to SELL 2 shares (fails, only 1 available)
+      const second = await postOrder({
+        portfolioId: mainPortfolioId,
+        symbol: testSymbol,
+        assetType: "STOCK",
+        side: "SELL",
+        quantity: "2",
+      });
+      expect(second.status).toBe(400);
+      expectErrorEnvelope(second.body);
+      expect(second.body.error.code).toBe("INSUFFICIENT_POSITION");
+      expect(second.body.error.details).toEqual({
+        required: "2",
+        available: "1",
+      });
+
+      // Cleanup test holding
+      await prisma.holding.deleteMany({
+        where: { portfolioId: mainPortfolioId, symbol: testSymbol },
+      });
     });
   });
 });
