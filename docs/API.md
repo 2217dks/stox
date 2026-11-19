@@ -367,7 +367,7 @@ Freshness & Stale Handling:
 | Parameter       | Type    | Default | Description |
 |-----------------|---------|---------|-------------|
 | `rejectStale`   | boolean | `false` | When true, rejects quotes exceeding configured freshness thresholds with `503 MARKET_DATA_STALE_QUOTE` |
-| `allowStale`    | boolean | `false` | When true, permits stale quotes to be included while explicitly marking them `isStale: true` |
+| `allowStale`    | boolean | `false` | When true, stale quotes are included even if `rejectStale` is set; they are still marked `isStale: true` |
 | `maxAgeSeconds` | int     | -       | Optional client-requested maximum quote age limit in seconds (1 to 86400) |
 
 ### Response
@@ -430,7 +430,7 @@ Reconciles:
 | `to`            | string  | -       | ISO datetime upper bound |
 | `symbol`        | string  | -       | Optional symbol filter |
 | `rejectStale`   | boolean | `false` | When true, rejects quotes exceeding freshness thresholds with `503 MARKET_DATA_STALE_QUOTE` |
-| `allowStale`    | boolean | `false` | When true, permits stale quotes to be included while marking `isStale: true` |
+| `allowStale`    | boolean | `false` | When true, stale quotes are included even if `rejectStale` is set; they are still marked `isStale: true` |
 | `maxAgeSeconds` | int     | -       | Optional client-requested maximum quote age limit in seconds |
 
 ### Response

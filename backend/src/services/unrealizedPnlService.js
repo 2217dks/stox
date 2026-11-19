@@ -119,7 +119,9 @@ function calculatePositionUnrealizedPnl(holding, quote, options = {}) {
 
   const freshness = evaluateHoldingFreshness(quote, holding.assetType, options);
 
-  if (freshness.isStale && options.rejectStale) {
+  // allowStale is the documented override: with both flags set the caller
+  // explicitly asked for stale values to be included.
+  if (freshness.isStale && options.rejectStale && !options.allowStale) {
     throw new AppError(
       `Market data quote is stale for ${holding.symbol}.`,
       {
