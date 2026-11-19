@@ -1,6 +1,12 @@
 const fs = require("fs");
 const path = require("path");
 
+const {
+  calculatePosition,
+  filterHoldingsForPosition,
+  aggregateHoldings,
+} = require("../../../../frontend/lib/position.js");
+
 const QUANTITY_SCALE = 8;
 const QUANTITY_FACTOR = 10n ** BigInt(QUANTITY_SCALE);
 
@@ -85,128 +91,6 @@ function isCrypto(symbol = "", assetType) {
   const clean = upper.replace(/^BINANCE:/, "");
   if (upper.startsWith("BINANCE:") || clean.includes("/")) return true;
   return /^[A-Z0-9]{6,30}$/.test(clean);
-}
-
-/** Position calculation matching frontend/lib/hooks.js (usePosition) */
-function calculatePosition({
-  holding = null,
-  holdings = [],
-  pendingOrders = [],
-  targetSymbol,
-  assetType = null,
-}) {
-  const symbolKey = canonicalMarketSymbol(targetSymbol);
-  if (!symbolKey) {
-    return {
-      holding: null,
-      quantity: 0,
-      reservedQuantity: 0,
-      availableQuantity: 0,
-      averageBuyPrice: 0,
-      totalInvested: 0,
-      hasPosition: false,
-    };
-  }
-
-  const rawList = holdings.length > 0 ? holdings : holding ? [holding] : [];
-  const matches = rawList.filter(
-    (item) => canonicalMarketSymbol(item.symbol) === symbolKey,
-  );
-  if (!matches.length) {
-    return {
-      holding: null,
-      quantity: 0,
-      reservedQuantity: 0,
-      availableQuantity: 0,
-      averageBuyPrice: 0,
-      totalInvested: 0,
-      hasPosition: false,
-    };
-  }
-
-  let matchedHoldings = matches;
-  if (assetType) {
-    matchedHoldings = matches.filter((item) => item.assetType === assetType);
-  } else {
-    const firstType = matches[0]?.assetType;
-    const hasMixedTypes = matches.some(
-      (item) => item.assetType && firstType && item.assetType !== firstType,
-    );
-    if (hasMixedTypes) {
-      const preferredType = isCrypto(targetSymbol) ? "CRYPTO" : "STOCK";
-      const preferredMatches = matches.filter(
-        (item) => item.assetType === preferredType,
-      );
-      matchedHoldings = preferredMatches.length > 0
-        ? preferredMatches
-        : matches.filter((item) => item.assetType === firstType);
-    }
-  }
-
-  if (!matchedHoldings.length) {
-    return {
-      holding: null,
-      quantity: 0,
-      reservedQuantity: 0,
-      availableQuantity: 0,
-      averageBuyPrice: 0,
-      totalInvested: 0,
-      hasPosition: false,
-    };
-  }
-
-  const first = matchedHoldings[0];
-  let totalQty = 0;
-  let totalReserved = 0;
-  let totalInvested = 0;
-
-  for (const h of matchedHoldings) {
-    totalQty += Number(h.quantity || 0);
-    if (h.reservedQuantity !== undefined && h.reservedQuantity !== null) {
-      totalReserved += Number(h.reservedQuantity);
-    }
-    totalInvested += Number(
-      h.totalInvested ||
-        Number(h.quantity || 0) * Number(h.averageBuyPrice || 0),
-    );
-  }
-
-  if (totalReserved === 0 && pendingOrders.length > 0) {
-    totalReserved = pendingOrders
-      .filter(
-        (order) =>
-          order.side === "SELL" &&
-          order.status === "PENDING" &&
-          canonicalMarketSymbol(order.symbol) === symbolKey,
-      )
-      .reduce((total, order) => total + Number(order.quantity || 0), 0);
-  }
-
-  const netQty = Number(totalQty.toFixed(8));
-  const netReserved = Number(
-    Math.min(Math.max(totalReserved, 0), netQty).toFixed(8),
-  );
-  const availableQuantity = Number(Math.max(0, netQty - netReserved).toFixed(8));
-  const avgBuyPrice = netQty > 0 ? totalInvested / netQty : 0;
-
-  const aggregatedHolding = {
-    ...first,
-    quantity: netQty.toString(),
-    reservedQuantity: netReserved.toString(),
-    availableQuantity: availableQuantity.toString(),
-    averageBuyPrice: avgBuyPrice.toString(),
-    totalInvested: totalInvested.toString(),
-  };
-
-  return {
-    holding: aggregatedHolding,
-    quantity: netQty,
-    reservedQuantity: netReserved,
-    availableQuantity,
-    averageBuyPrice: avgBuyPrice,
-    totalInvested,
-    hasPosition: netQty > 0,
-  };
 }
 
 describe("Frontend Regression & Contract Tests", () => {
@@ -726,21 +610,163 @@ describe("Frontend Regression & Contract Tests", () => {
       expect(posB.totalInvested).toBe(100);
     });
 
-    test("source verification: usePosition in hooks.js enforces strict asset-type isolation without fallback", () => {
+    test("Test 6: identical canonical symbols held as both STOCK and CRYPTO requested separately", () => {
+      const dualHoldings = [
+        {
+          symbol: "BTCUSDT",
+          assetType: "CRYPTO",
+          quantity: "2.5",
+          reservedQuantity: "0.5",
+          averageBuyPrice: "50000",
+          totalInvested: "125000",
+        },
+        {
+          symbol: "BTCUSDT",
+          assetType: "STOCK",
+          quantity: "100",
+          reservedQuantity: "10",
+          averageBuyPrice: "40",
+          totalInvested: "4000",
+        },
+      ];
+
+      // Request CRYPTO: returns only the crypto position, completely ignoring the stock position
+      const cryptoPos = calculatePosition({
+        holdings: dualHoldings,
+        targetSymbol: "BTCUSDT",
+        assetType: "CRYPTO",
+      });
+      expect(cryptoPos.hasPosition).toBe(true);
+      expect(cryptoPos.quantity).toBe(2.5);
+      expect(cryptoPos.reservedQuantity).toBe(0.5);
+      expect(cryptoPos.availableQuantity).toBe(2.0);
+      expect(cryptoPos.averageBuyPrice).toBe(50000);
+      expect(cryptoPos.totalInvested).toBe(125000);
+
+      // Request STOCK: returns only the stock position, completely ignoring the crypto position
+      const stockPos = calculatePosition({
+        holdings: dualHoldings,
+        targetSymbol: "BTCUSDT",
+        assetType: "STOCK",
+      });
+      expect(stockPos.hasPosition).toBe(true);
+      expect(stockPos.quantity).toBe(100);
+      expect(stockPos.reservedQuantity).toBe(10);
+      expect(stockPos.availableQuantity).toBe(90);
+      expect(stockPos.averageBuyPrice).toBe(40);
+      expect(stockPos.totalInvested).toBe(4000);
+
+      // Request an asset class that is not held (e.g. FOREX): strictly returns zero / null, never falls back
+      const forexPos = calculatePosition({
+        holdings: dualHoldings,
+        targetSymbol: "BTCUSDT",
+        assetType: "FOREX",
+      });
+      expect(forexPos.hasPosition).toBe(false);
+      expect(forexPos.quantity).toBe(0);
+      expect(forexPos.availableQuantity).toBe(0);
+      expect(forexPos.holding).toBeNull();
+    });
+
+    test("Test 7: markets table position grouping isolates by (assetType, canonicalSymbol) and aggregates legacy formats", () => {
+      const rawHoldings = [
+        // Crypto positions in multiple legacy symbol formats
+        {
+          symbol: "BINANCE:BTCUSDT",
+          assetType: "CRYPTO",
+          quantity: "1.25",
+          reservedQuantity: "0.25",
+          averageBuyPrice: "40000",
+          totalInvested: "50000",
+        },
+        {
+          symbol: "BTC/USDT",
+          assetType: "CRYPTO",
+          quantity: "0.75",
+          reservedQuantity: "0.15",
+          averageBuyPrice: "60000",
+          totalInvested: "45000",
+        },
+        // Stock position with the same canonical symbol
+        {
+          symbol: "BTCUSDT",
+          assetType: "STOCK",
+          quantity: "50",
+          reservedQuantity: "0",
+          averageBuyPrice: "100",
+          totalInvested: "5000",
+        },
+      ];
+
+      // Simulate the exact grouping performed in markets/page.js
+      const grouped = new Map();
+      for (const holding of rawHoldings) {
+        if (Number(holding?.quantity) === 0) continue;
+        const canonical = canonicalMarketSymbol(holding?.symbol);
+        if (!canonical) continue;
+        const type = holding?.assetType || (isCrypto(holding?.symbol) ? "CRYPTO" : "STOCK");
+        const key = `${type}:${canonical}`;
+        if (!grouped.has(key)) grouped.set(key, []);
+        grouped.get(key).push(holding);
+      }
+      const holdingsByKey = new Map();
+      for (const [key, list] of grouped.entries()) {
+        holdingsByKey.set(key, aggregateHoldings(list));
+      }
+
+      // 1. Crypto row matches the aggregated crypto holdings and ignores the stock holding
+      const cryptoHolding = holdingsByKey.get("CRYPTO:BTCUSDT");
+      expect(cryptoHolding).toBeDefined();
+      expect(Number(cryptoHolding.quantity)).toBe(2.0);
+      expect(Number(cryptoHolding.reservedQuantity)).toBe(0.4);
+      expect(Number(cryptoHolding.availableQuantity)).toBe(1.6);
+      expect(Number(cryptoHolding.averageBuyPrice)).toBe(47500); // (50000 + 45000) / 2
+      expect(Number(cryptoHolding.totalInvested)).toBe(95000);
+
+      // 2. Stock row matches only the stock holding and ignores the crypto holding
+      const stockHolding = holdingsByKey.get("STOCK:BTCUSDT");
+      expect(stockHolding).toBeDefined();
+      expect(Number(stockHolding.quantity)).toBe(50);
+      expect(Number(stockHolding.reservedQuantity)).toBe(0);
+      expect(Number(stockHolding.averageBuyPrice)).toBe(100);
+
+      // 3. Unheld asset class returns undefined
+      expect(holdingsByKey.get("FOREX:BTCUSDT")).toBeUndefined();
+    });
+
+    test("source verification: usePosition in hooks.js delegates to position.js helper", () => {
       const hooksSrc = fs.readFileSync(path.join(frontendDir, "lib/hooks.js"), "utf8");
 
-      expect(hooksSrc).toContain("canonicalMarketSymbol(item.symbol) === symbolKey");
-      expect(hooksSrc).toContain("matchingHoldings");
-      expect(hooksSrc).toContain("aggregatedHolding");
-      expect(hooksSrc).toContain("totalReserved");
-      expect(hooksSrc).toContain("availableQuantity: availableQty.toString()");
-      // Strict asset-type filtering without fallback
-      expect(hooksSrc).toContain("return matches.filter(");
-      expect(hooksSrc).toContain("item.assetType === explicitAssetType");
-      expect(hooksSrc).not.toContain("if (typeMatches.length > 0) return typeMatches");
+      expect(hooksSrc).toContain('import { calculatePosition } from "./position"');
+      expect(hooksSrc).toContain("calculatePosition({");
+      expect(hooksSrc).toContain("holdings: holdings.data?.holdings ?? []");
+      expect(hooksSrc).toContain("targetSymbol: symbol");
+      expect(hooksSrc).toContain("assetType: explicitAssetType");
       // Authoritative backend reservations eliminate the redundant client-side pending-sells query with limit: 100
       expect(hooksSrc).not.toContain("side: \"SELL\"");
       expect(hooksSrc).not.toContain("limit: 100");
+    });
+
+    test("source verification: position.js provides shared filtering, aggregation, and calculation helpers", () => {
+      const posSrc = fs.readFileSync(path.join(frontendDir, "lib/position.js"), "utf8");
+
+      expect(posSrc).toContain("function filterHoldingsForPosition(");
+      expect(posSrc).toContain("function aggregateHoldings(");
+      expect(posSrc).toContain("function calculatePosition(");
+      expect(posSrc).toContain("module.exports = {");
+      expect(posSrc).toContain("item.assetType === explicitAssetType");
+      expect(posSrc).not.toContain("if (typeMatches.length > 0) return typeMatches");
+    });
+
+    test("source verification: markets/page.js isolates holdings by assetType and canonical symbol", () => {
+      const marketsSrc = fs.readFileSync(path.join(frontendDir, "app/(app)/markets/page.js"), "utf8");
+
+      expect(marketsSrc).toContain('import { aggregateHoldings } from "@/lib/position"');
+      expect(marketsSrc).toContain("holdingsByKey");
+      expect(marketsSrc).toContain("const key = `${type}:${canonical}`");
+      expect(marketsSrc).toContain("holdingsByKey.get(`${assetType}:${canonical}`)");
+      expect(marketsSrc).toContain("holdingsByKey.get(`CRYPTO:${canonical}`)");
+      expect(marketsSrc).not.toContain("holdingsBySymbol");
     });
   });
 

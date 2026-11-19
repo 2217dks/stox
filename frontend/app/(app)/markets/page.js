@@ -43,9 +43,11 @@ import {
   formatPercent,
   formatPrice,
   formatQuantity,
+  isCrypto,
   tickerOf,
 } from "@/lib/format";
 import { canonicalMarketSymbol, cn } from "@/lib/utils";
+import { aggregateHoldings } from "@/lib/position";
 
 const allCurated = [
   ...CURATED_SYMBOLS.STOCK,
@@ -104,40 +106,62 @@ function MarketsContent() {
     error: holdingsError,
   } = useHoldings(portfolioId);
 
-  const holdingsBySymbol = useMemo(() => {
-    const map = new Map();
+  const holdingsByKey = useMemo(() => {
+    const grouped = new Map();
     for (const holding of holdingsData?.holdings ?? []) {
-      if (Number(holding.quantity) === 0) continue;
-      map.set(canonicalMarketSymbol(holding.symbol), holding);
+      if (Number(holding?.quantity) === 0) continue;
+      const canonical = canonicalMarketSymbol(holding?.symbol);
+      if (!canonical) continue;
+      const type =
+        holding?.assetType || (isCrypto(holding?.symbol) ? "CRYPTO" : "STOCK");
+      const key = `${type}:${canonical}`;
+      if (!grouped.has(key)) {
+        grouped.set(key, []);
+      }
+      grouped.get(key).push(holding);
+    }
+    const map = new Map();
+    for (const [key, list] of grouped.entries()) {
+      map.set(key, aggregateHoldings(list));
     }
     return map;
   }, [holdingsData]);
 
   const rows = useMemo(() => {
-    const curatedRows = allCurated.map((symbol) => ({
-      symbol,
-      name: CURATED_MARKET_META[symbol]?.name || symbol,
-      assetType: CURATED_MARKET_META[symbol]?.assetType || assetTypes[symbol],
-      exchange: CURATED_MARKET_META[symbol]?.exchange || "—",
-      quote: quotes[symbol],
-      holding: holdingsBySymbol.get(canonicalMarketSymbol(symbol)) || null,
-    }));
+    const curatedRows = allCurated.map((symbol) => {
+      const assetType =
+        CURATED_MARKET_META[symbol]?.assetType ||
+        assetTypes[symbol] ||
+        (isCrypto(symbol) ? "CRYPTO" : "STOCK");
+      const canonical = canonicalMarketSymbol(symbol);
+      return {
+        symbol,
+        name: CURATED_MARKET_META[symbol]?.name || symbol,
+        assetType,
+        exchange: CURATED_MARKET_META[symbol]?.exchange || "—",
+        quote: quotes[symbol],
+        holding: holdingsByKey.get(`${assetType}:${canonical}`) || null,
+      };
+    });
 
     const existing = new Set(curatedRows.map((row) => row.symbol));
     const moverRows = (movers || [])
       .filter((mover) => !existing.has(mover.symbol))
-      .map((mover) => ({
-        symbol: mover.symbol,
-        name: tickerOf(mover.symbol),
-        assetType: "CRYPTO",
-        exchange: "Binance",
-        quote: {
-          price: mover.price,
-          changePercent: mover.changePercent,
-          volume: mover.quoteVolume,
-        },
-        holding: holdingsBySymbol.get(canonicalMarketSymbol(mover.symbol)) || null,
-      }));
+      .map((mover) => {
+        const canonical = canonicalMarketSymbol(mover.symbol);
+        return {
+          symbol: mover.symbol,
+          name: tickerOf(mover.symbol),
+          assetType: "CRYPTO",
+          exchange: "Binance",
+          quote: {
+            price: mover.price,
+            changePercent: mover.changePercent,
+            volume: mover.quoteVolume,
+          },
+          holding: holdingsByKey.get(`CRYPTO:${canonical}`) || null,
+        };
+      });
 
     const merged = [...curatedRows, ...moverRows].filter(
       (row) => filter === "ALL" || row.assetType === filter,
@@ -150,7 +174,7 @@ function MarketsContent() {
         Math.abs(Number(a.quote?.changePercent || 0))
       );
     });
-  }, [quotes, movers, filter, sort, holdingsBySymbol]);
+  }, [quotes, movers, filter, sort, holdingsByKey]);
 
   const alerts = alertsData?.alerts ?? [];
 

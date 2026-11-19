@@ -21,6 +21,7 @@ import {
 import { useSession } from "@/store/use-session";
 import { useUI } from "@/store/use-ui";
 import { canonicalMarketSymbol, toQueryString } from "./utils";
+import { calculatePosition } from "./position";
 
 export function useDebouncedValue(value, delay = 250) {
   const [debounced, setDebounced] = useState(value);
@@ -338,96 +339,18 @@ export function useHoldings(portfolioId) {
  * server does not reserve shares the way it reserves cash for BUY orders.
  */
 export function usePosition(portfolioId, symbol, explicitAssetType = null) {
-  const symbolKey = canonicalMarketSymbol(symbol);
   const holdings = useHoldings(portfolioId);
 
-  const matchingHoldings = useMemo(() => {
-    if (!symbolKey) return [];
-    const list = holdings.data?.holdings ?? [];
-    const matches = list.filter(
-      (item) => canonicalMarketSymbol(item.symbol) === symbolKey,
-    );
-    if (!matches.length) return [];
-    if (explicitAssetType) {
-      return matches.filter(
-        (item) => item.assetType === explicitAssetType,
-      );
-    }
-
-    // When explicitAssetType is omitted, ensure we never aggregate across different
-    // asset classes. If all matches share the same asset type, aggregate them.
-    // If mixed asset types exist for this canonical symbol, isolate by the
-    // symbol's natural asset class heuristic (isCrypto) so unrelated classes
-    // (e.g. STOCK vs CRYPTO) are never aggregated into one position.
-    const firstType = matches[0]?.assetType;
-    const hasMixedTypes = matches.some(
-      (item) => item.assetType && firstType && item.assetType !== firstType,
-    );
-    if (hasMixedTypes) {
-      const preferredType = isCrypto(symbol) ? "CRYPTO" : "STOCK";
-      const preferredMatches = matches.filter(
-        (item) => item.assetType === preferredType,
-      );
-      return preferredMatches.length > 0
-        ? preferredMatches
-        : matches.filter((item) => item.assetType === firstType);
-    }
-
-    return matches;
-  }, [holdings.data, symbolKey, explicitAssetType, symbol]);
-
-  const aggregatedHolding = useMemo(() => {
-    if (!matchingHoldings.length) return null;
-    const first = matchingHoldings[0];
-    let totalQty = 0;
-    let totalReserved = 0;
-    let totalInvested = 0;
-
-    for (const h of matchingHoldings) {
-      totalQty += Number(h.quantity || 0);
-      totalReserved += Number(h.reservedQuantity || 0);
-      totalInvested += Number(h.totalInvested || 0);
-    }
-
-    const netQty = Number(totalQty.toFixed(8));
-    const netReserved = Number(
-      Math.min(Math.max(totalReserved, 0), netQty).toFixed(8),
-    );
-    const availableQty = Number(Math.max(0, netQty - netReserved).toFixed(8));
-    const avgBuyPrice = netQty > 0 ? totalInvested / netQty : 0;
-
-    return {
-      ...first,
-      quantity: netQty.toString(),
-      reservedQuantity: netReserved.toString(),
-      availableQuantity: availableQty.toString(),
-      averageBuyPrice: avgBuyPrice.toString(),
-      totalInvested: totalInvested.toString(),
-    };
-  }, [matchingHoldings]);
-
-  const quantity = aggregatedHolding ? Number(aggregatedHolding.quantity) : 0;
-  const reservedQuantity = aggregatedHolding
-    ? Number(aggregatedHolding.reservedQuantity)
-    : 0;
-  const availableQuantity = aggregatedHolding
-    ? Number(aggregatedHolding.availableQuantity)
-    : 0;
-  const averageBuyPrice = aggregatedHolding
-    ? Number(aggregatedHolding.averageBuyPrice)
-    : 0;
-  const totalInvested = aggregatedHolding
-    ? Number(aggregatedHolding.totalInvested)
-    : 0;
+  const position = useMemo(() => {
+    return calculatePosition({
+      holdings: holdings.data?.holdings ?? [],
+      targetSymbol: symbol,
+      assetType: explicitAssetType,
+    });
+  }, [holdings.data, symbol, explicitAssetType]);
 
   return {
-    holding: aggregatedHolding,
-    quantity,
-    reservedQuantity,
-    availableQuantity,
-    averageBuyPrice,
-    totalInvested,
-    hasPosition: quantity > 0,
+    ...position,
     loading: holdings.loading,
     error: holdings.error,
     reservedError: null,
