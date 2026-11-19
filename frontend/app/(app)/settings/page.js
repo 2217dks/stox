@@ -27,7 +27,7 @@ import {
   CardHeading,
   CardTitle,
 } from "@/components/ui/card";
-import { ErrorState } from "@/components/ui/misc";
+import { ErrorState } from "@/components/ui/empty-state";
 import { Field, Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
