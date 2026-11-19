@@ -14,6 +14,7 @@
 - [Binance Integration](#-binance-integration)
 - [Yahoo Finance Integration](#-yahoo-finance-integration)
 - [Provider Registry & Fallback Strategy](#-provider-registry--fallback-strategy)
+- [Batch Quotes Endpoint](#-batch-quotes-endpoint)
 - [Rate Limit Handling](#-rate-limit-handling)
 
 ---
@@ -237,6 +238,14 @@ const depthSocket = new WebSocket(
 
 **Rate Limit:** 1200 requests/min (very generous). WebSocket has no practical limit.
 
+### Quote & Ticker Fallback Logic
+
+When querying Binance for crypto symbols:
+- **Bare base assets** (e.g., `BTC`, `ETH`, `SOL`): The provider attempts to append the default quote currency (`USDT`) if a bare symbol lookup returns a 404 (e.g., query `BTC` -> fallback to `BTCUSDT`).
+- **Explicit crypto pairs** (e.g., `ETHBTC`, `SOLFDUSD`, `BTCEUR`): The provider detects explicit quote asset suffixes (`BTC`, `ETH`, `BNB`, `USDT`, `USDC`, `BUSD`, `FDUSD`, `EUR`, `TRY`, `GBP`, `DAI`, `PAX`, `TUSD`). If an explicit pair is queried and returns 404 from Binance, it **does NOT** append `USDT` (e.g. `ETHBTC` is not mutated into `ETHBTCUSDT`), preventing bogus fallback lookups and immediately returning a 404 domain error (`MARKET_DATA_NOT_FOUND`).
+- **Symbol search query sanitization**: `searchSymbols(query)` guards against non-string and empty inputs, trimming whitespace and returning an empty result set `[]` when queries are blank or invalid.
+
+
 ---
 
 ## 🟠 Yahoo Finance Integration
@@ -264,6 +273,19 @@ GET {YAHOO_FINANCE_API_URL}/v8/finance/chart/{symbol}
   `MARKET_DATA_PROVIDER_UNAVAILABLE`.
 - Yahoo is unofficial, has no SLA, and rate-limits aggressively. A 429 is not
   retried against the same provider.
+- Arbitrary-precision candle bucketing: Aggregations for synthetic intervals (e.g., 4h buckets computed from 1h candles) use `Prisma.Decimal` arithmetic to eliminate floating-point precision drift in volume, open, high, low, and close values.
+- Delisted & unknown ticker handling: When Yahoo returns an empty result set or error payload indicating delisted or nonexistent symbols, it maps to HTTP 404 `MARKET_DATA_NOT_FOUND`.
+
+### 🌍 International Stock Quote Capabilities and Limitations
+
+Because stox maintains strict provider capability declarations:
+1. **Finnhub**: Declares `markets: ["US"]` and operations `["quote", "history", "search", "market-status"]`.
+2. **Yahoo Finance**: Declares `markets: ["*"]` and operations `["history"]` only.
+
+**Implications for International Instruments** (e.g. `RELIANCE.NS`, `7203.T`, `VOD.L`):
+- **Historical Candlestick Charts (`GET /api/v1/market/history`)**: Fully supported via Yahoo Finance fallback. Requests for non-US symbols skip Finnhub and route directly to Yahoo Finance.
+- **Live Real-Time Quotes (`GET /api/v1/market/quote`)**: Currently **unsupported** for non-US equity tickers. Finnhub cannot serve non-US markets, and Yahoo Finance does not provide a reliable real-time quote contract (`operations: ["history"]`). When a live quote is requested for an international ticker, the router exhausts the provider chain and returns `503 MARKET_DATA_PROVIDER_UNAVAILABLE`. Real-time international quotes will require registering a dedicated international quote provider (e.g. Twelve Data or Alpha Vantage) in the provider registry.
+
 
 ---
 
@@ -333,6 +355,27 @@ service filters by declared capability and region, and calls the provider's own
 In-call retries amplify throttling and can return stale data. The implemented
 strategy is failover to a different provider, not retry. Queue-level retries
 remain the right place for transient background work.
+
+## 📦 Batch Quotes Endpoint
+
+`GET /api/v1/market/quotes`
+
+The batch quote endpoint allows fetching quotes for multiple symbols (stocks and crypto) in a single HTTP round-trip:
+
+```http
+GET /api/v1/market/quotes?symbols=AAPL,MSFT,BTCUSDT
+GET /api/v1/market/quotes?symbols=AAPL&symbols=BTCUSDT
+```
+
+### Query Semantics and Validation
+- **Input Formats**: Accepts both comma-separated strings (`?symbols=AAPL,MSFT`) and repeated query parameters (`?symbols=AAPL&symbols=MSFT`).
+- **Deduplication**: Symbols are trimmed, uppercased, and deduplicated case-insensitively before dispatching requests.
+- **Symbol Boundary**: Enforces between **1 and 20** symbols per batch. Empty requests fail with `400 BAD_REQUEST`; exceeding 20 symbols fails with `400 BAD_REQUEST`.
+- **Parallel Dispatch**: Symbols are fetched concurrently using `Promise.allSettled`.
+- **Partial Failure Semantics**:
+  - The response returns `200 OK` with an array of quote objects for all successfully resolved symbols.
+  - If a particular symbol fails (e.g., nonexistent ticker, provider rate limit, or unsupported international equity quote), that symbol is omitted or reported without failing the entire batch request.
+  - Frontend consumers (such as portfolio tables or market tickers) receive available quotes immediately without being blocked by an individual ticker failure.
 
 ## ⏱️ Rate Limit Handling
 
