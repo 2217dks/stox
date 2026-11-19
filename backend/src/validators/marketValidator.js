@@ -5,6 +5,11 @@ const {
   isValidHistoricalRange,
 } = require("../utils/historicalRange");
 
+// Shape-only check. The quote asset is intentionally not whitelisted: Binance
+// is the authority for which pairs exist and are trading. This keeps new
+// quote assets working without a code change.
+const CRYPTO_PAIR_PATTERN = /^(?:BINANCE:)?[A-Z0-9]{2,20}\/?[A-Z0-9]{3,10}$/;
+
 const historicalSymbolSchema = z
   .string()
   .trim()
@@ -26,7 +31,7 @@ const cryptoQuoteParamsSchema = z.object({
     .min(1)
     .max(30)
     .regex(
-      /^(?:BINANCE:)?[A-Z0-9]{2,20}\/?(?:USDT|BTC|ETH)$/,
+      CRYPTO_PAIR_PATTERN,
       "A valid Binance crypto pair is required.",
     ),
 });
@@ -93,6 +98,77 @@ const marketSearchQuerySchema = z
   })
   .strict();
 
+const batchQuotesQuerySchema = z
+  .object({
+    symbols: z
+      .preprocess(
+        (val) => {
+          if (Array.isArray(val)) {
+            return val.join(",");
+          }
+          return typeof val === "string" ? val : "";
+        },
+        z
+          .string()
+          .trim()
+          .min(1, "symbols is required.")
+          .transform((value) => {
+            const raw = value
+              .split(",")
+              .map((symbol) => symbol.trim())
+              .filter(Boolean);
+            return [...new Set(raw)];
+          }),
+      )
+      .pipe(
+        z
+          .array(
+            z
+              .string()
+              .min(1)
+              .max(30)
+              .regex(/^[A-Za-z0-9][A-Za-z0-9._:/-]*$/, "Invalid symbol."),
+          )
+          .min(1, "At least one symbol is required.")
+          .max(20, "At most 20 symbols may be requested at once."),
+      ),
+    assetTypes: z
+      .preprocess((val) => {
+        if (!val) return undefined;
+        if (typeof val === "object" && !Array.isArray(val)) return val;
+        if (typeof val === "string") {
+          const trimmed = val.trim();
+          if (!trimmed) return undefined;
+          if (trimmed.startsWith("{")) {
+            try {
+              return JSON.parse(trimmed);
+            } catch {
+              return {};
+            }
+          }
+          const entries = trimmed
+            .split(",")
+            .map((item) => item.trim())
+            .filter(Boolean)
+            .map((item) => {
+              const colonIndex = item.indexOf(":");
+              if (colonIndex === -1) return null;
+              const sym = item.slice(0, colonIndex).trim();
+              const type = item.slice(colonIndex + 1).trim().toUpperCase();
+              return [sym, type];
+            })
+            .filter(
+              (entry) =>
+                entry && (entry[1] === "STOCK" || entry[1] === "CRYPTO"),
+            );
+          return Object.fromEntries(entries);
+        }
+        return undefined;
+      }, z.record(z.string(), z.enum(["STOCK", "CRYPTO"])).optional())
+      .optional(),
+  })
+  .strict();
+
 function queryBoolean(val) {
   if (typeof val === "string") {
     const lower = val.trim().toLowerCase();
@@ -116,6 +192,7 @@ const quoteQuerySchema = z
   .strict();
 
 module.exports = {
+  batchQuotesQuerySchema,
   cryptoQuoteParamsSchema,
   stockQuoteParamsSchema,
   quoteQuerySchema,

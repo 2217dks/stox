@@ -95,3 +95,38 @@ describe("benchmarkService unit tests", () => {
   });
 });
 
+
+describe("benchmarkService ALL period", () => {
+  test("requests a window the market-data validator accepts for a three-year-old portfolio", async () => {
+    const marketDataProvider = {
+      getHistoricalPrices: jest.fn().mockResolvedValue({
+        assetClass: "STOCK",
+        interval: "1d",
+        prices: [],
+      }),
+    };
+
+    const client = {
+      performanceSnapshot: {
+        findMany: jest.fn().mockResolvedValue([
+          { snapshotDate: new Date("2023-01-01T00:00:00.000Z") },
+        ]),
+      },
+    };
+
+    await getBenchmarkPriceSeries("SPY", {
+      period: "ALL",
+      asOf: new Date("2026-11-19T12:00:00.000Z"),
+      portfolioId: "portfolio-1",
+      marketDataProvider,
+      client,
+    });
+
+    const [, options] = marketDataProvider.getHistoricalPrices.mock.calls[0];
+    const DAY_MS = 24 * 60 * 60 * 1000;
+
+    expect(options.to - options.from).toBeLessThanOrEqual(
+      DAY_MS * options.limit,
+    );
+  });
+});

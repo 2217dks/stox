@@ -63,7 +63,7 @@ Analytics must adhere strictly to these principles:
   $$\sigma_{\text{daily}} = \sqrt{\frac{1}{N - 1} \sum_{t=1}^N (R_t - \bar{R})^2}$$
 - **Annualized Volatility ($\sigma_{\text{ann}}$):**
   $$\sigma_{\text{ann}} = \sigma_{\text{daily}} \times \sqrt{F}$$
-  where $F = 252$ (standard trading days annualization factor).
+  where $F = 365$ (calendar days: a snapshot exists for every UTC day).
   - Requires $N \ge 2$ observations. For $N < 2$, volatility returns `null`.
   - For zero-variance series (all returns identical), $\sigma = 0$.
 
@@ -113,7 +113,7 @@ For mutually aligned daily return pairs $\{(R_{p,t}, R_{b,t})\}_{t=1}^M$:
 
 1. **UTC Calendar:** All date buckets, timestamps, and queries use strictly UTC (`Z`).
    - Daily snapshots represent the portfolio valuation as of `23:59:59.999Z` on date `YYYY-MM-DD`.
-2. **Annualization Factor ($F$):** $F = 252$ (trading days per year).
+2. **Annualization Factor ($F$):** $F = 365$ (calendar days per year; weekend snapshots carry the previous close).
 3. **Risk-Free Rate ($R_f$):** Default is $0.02$ ($2.0\%$ annual). Supported as query override: `?riskFreeRate=0.025`.
 4. **Periods Supported:**
    - `1W` (7 calendar days)

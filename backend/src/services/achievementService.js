@@ -35,19 +35,38 @@ const CATALOG = [
   },
 ];
 
-async function ensureCatalog() {
-  for (const item of CATALOG) {
-    await prisma.achievement.upsert({
-      where: { code: item.code },
-      create: item,
-      update: {
-        name: item.name,
-        description: item.description,
-        category: item.category,
-        criteria: item.criteria,
-      },
+let catalogPromise = null;
+
+/**
+ * Seed the achievement catalog once per process.
+ *
+ * This runs from the hourly reconciler, from every grant, and from the two
+ * list endpoints. Without memoisation a 5,000-user reconcile did 5,000 x
+ * CATALOG upserts every hour, in every worker replica.
+ */
+function ensureCatalog() {
+  if (!catalogPromise) {
+    catalogPromise = (async () => {
+      for (const item of CATALOG) {
+        await prisma.achievement.upsert({
+          where: { code: item.code },
+          create: item,
+          update: {
+            name: item.name,
+            description: item.description,
+            category: item.category,
+            criteria: item.criteria,
+          },
+        });
+      }
+    })().catch((error) => {
+      // Do not cache a failed seed; the next caller retries it.
+      catalogPromise = null;
+      throw error;
     });
   }
+
+  return catalogPromise;
 }
 
 async function listAchievements() {

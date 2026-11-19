@@ -376,14 +376,21 @@ async function getLeagueLeaderboard({
   const endDate = new Date(league.endDate);
   const effectiveStatus = getEffectiveLeagueStatus(league, currentDate);
 
-  // If already completed and members have finalReturn & rank, return stored results
+  // If already completed and every eligible member has a stored rank, return
+  // stored results. completeLeague only ranks non-suspended members, so a
+  // suspended member keeps rank = null forever; including them in `.every`
+  // forced a fresh market-data evaluation on every read of a "permanent"
+  // leaderboard.
+  const eligibleMembers = league.members.filter(
+    (m) => !m.user?.isSuspended,
+  );
+
   if (
     league.status === "COMPLETED" &&
-    league.members.length > 0 &&
-    league.members.every((m) => m.rank != null && m.finalReturn != null)
+    eligibleMembers.length > 0 &&
+    eligibleMembers.every((m) => m.rank != null && m.finalReturn != null)
   ) {
-    const activeMembers = league.members
-      .filter((m) => !m.user?.isSuspended)
+    const activeMembers = eligibleMembers
       .sort((a, b) => (a.rank || 0) - (b.rank || 0));
 
     return {
@@ -475,6 +482,26 @@ async function evaluateLeagueMembers(
     (m) => !m.user?.isSuspended,
   );
 
+  // Every member is evaluated concurrently, so cache the in-flight price
+  // promise per symbol: without this a 500-member league holding 10 symbols
+  // makes ~5,000 provider calls for 10 distinct prices.
+  const pricePromises = new Map();
+
+  const priceFor = (holding) => {
+    const key = `${holding.symbol}:${holding.assetType}`;
+
+    if (!pricePromises.has(key)) {
+      pricePromises.set(
+        key,
+        priceProvider
+          ? resolveHoldingPrice(holding, vDate, priceProvider, isHistorical)
+          : Promise.resolve(null),
+      );
+    }
+
+    return pricePromises.get(key);
+  };
+
   const evaluatedMembers = await Promise.all(
     candidateMembers.map(async (member) => {
       const allTrades = member.portfolio?.trades || [];
@@ -524,9 +551,7 @@ async function evaluateLeagueMembers(
         if (!h.quantity.isZero()) {
           let priceDecimal;
           try {
-            const quote = priceProvider
-              ? await resolveHoldingPrice(h, vDate, priceProvider, isHistorical)
-              : null;
+            const quote = await priceFor(h);
 
             if (!quote || quote.price === undefined || quote.price === null) {
               throw new Error(`Quote price is missing for ${h.symbol}`);
@@ -1087,6 +1112,7 @@ module.exports = {
   getEffectiveLeagueStatus,
   syncLeagueStatuses,
   completeLeague,
+  evaluateLeagueMembers,
   processCompletedLeagues,
   validateMembershipConsistency,
 };

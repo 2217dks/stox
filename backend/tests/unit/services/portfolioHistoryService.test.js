@@ -288,3 +288,29 @@ describe("Portfolio Historical State Service (Task 37.3)", () => {
     ]);
   });
 });
+
+describe("Portfolio Historical State range limit", () => {
+  const userId = "usr-hist-range";
+  const portfolioId = "port-hist-range";
+
+  test("accepts a full 365-day inclusive range", async () => {
+    const mockClient = {
+      portfolio: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: portfolioId,
+          name: "Range Portfolio",
+        }),
+      },
+      performanceSnapshot: { findMany: jest.fn().mockResolvedValue([]) },
+      trade: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+
+    const result = await getPortfolioHistoricalState(userId, portfolioId, {
+      from: "2025-11-20",
+      to: "2026-11-19",
+      client: mockClient,
+    });
+
+    expect(result).toBeDefined();
+  });
+});

@@ -4,6 +4,7 @@ const authMiddleware = require("../middleware/auth");
 const validate = require("../middleware/validation");
 const {
   portfolioIdParamsSchema,
+  createPortfolioSchema,
   updatePortfolioSchema,
   pnlHeatmapQuerySchema,
   riskMetricsQuerySchema,
@@ -24,7 +25,12 @@ const router = express.Router();
 
 router.get("/", authMiddleware, portfolioController.listPortfolios);
 
-router.post("/", authMiddleware, portfolioController.createPortfolio);
+router.post(
+  "/",
+  authMiddleware,
+  validate(createPortfolioSchema),
+  portfolioController.createPortfolio,
+);
 
 router.get(
   "/:portfolioId",

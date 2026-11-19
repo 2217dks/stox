@@ -20,7 +20,8 @@ import {
 } from "./socket";
 import { useSession } from "@/store/use-session";
 import { useUI } from "@/store/use-ui";
-import { toQueryString } from "./utils";
+import { canonicalMarketSymbol, toQueryString } from "./utils";
+import { calculatePosition } from "./position";
 
 export function useDebouncedValue(value, delay = 250) {
   const [debounced, setDebounced] = useState(value);
@@ -113,26 +114,40 @@ export function useQuote(symbol, assetClass, options = {}) {
 
 export function useQuotes(symbols = [], assetTypes = {}, options = {}) {
   const symbolKey = symbols.slice().sort().join(",");
-  const key = symbolKey ? `quotes:${symbolKey}` : null;
+  const assetTypesKey = Object.entries(assetTypes || {})
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([k, v]) => `${k}:${v}`)
+    .join(",");
+  const stableAssetTypes = useMemo(() => {
+    if (!assetTypesKey) return {};
+    return Object.fromEntries(
+      assetTypesKey.split(",").map((entry) => entry.split(":")),
+    );
+  }, [assetTypesKey]);
+  const key = symbolKey
+    ? assetTypesKey
+      ? `quotes:${symbolKey}:${assetTypesKey}`
+      : `quotes:${symbolKey}`
+    : null;
   const [live, setLive] = useState({});
   const pendingTicksRef = useRef({});
 
   const { data, error, isLoading, mutate } = useSWR(
     key,
     async () => {
-      const results = await Promise.all(
-        symbols.map(async (symbol) => {
-          const assetClass =
-            assetTypes[symbol] || (isCrypto(symbol) ? "CRYPTO" : "STOCK");
-          try {
-            const quote = await marketApi.quote(symbol, assetClass);
-            return [symbol, quote];
-          } catch {
-            return [symbol, null];
-          }
-        }),
+      // One request for the whole set: a per-symbol fan-out costs the global
+      // rate-limit budget N times for what is one screen.
+      const quotes = await marketApi.quotes(symbols, stableAssetTypes);
+      const byCanonical = new Map(
+        quotes.map((quote) => [canonicalMarketSymbol(quote.symbol), quote]),
       );
-      return Object.fromEntries(results);
+
+      return Object.fromEntries(
+        symbols.map((symbol) => [
+          symbol,
+          byCanonical.get(canonicalMarketSymbol(symbol)) ?? null,
+        ]),
+      );
     },
     {
       // Live prices arrive over the market socket. HTTP is only the initial
@@ -148,13 +163,32 @@ export function useQuotes(symbols = [], assetTypes = {}, options = {}) {
     if (!symbolKey || typeof window === "undefined") return undefined;
 
     const list = symbolKey.split(",");
+    const canonicalList = list.map(canonicalMarketSymbol);
     const socket = getSocket("/market");
 
     const onPrice = (payload) => {
-      if (!payload?.symbol || !list.includes(payload.symbol)) return;
-      // Buffer ticks and flush at most twice a second so a busy market does
-      // not re-render a whole table on every trade.
-      pendingTicksRef.current[payload.symbol] = {
+      if (!payload?.symbol) return;
+
+      // Legacy holdings can be stored as "BINANCE:BTCUSDT" while the backend
+      // emits "BTCUSDT". Match on the canonical form and key the tick by the
+      // symbol this hook was asked for, so the merge below finds it.
+      const index = canonicalList.indexOf(
+        canonicalMarketSymbol(payload.symbol),
+      );
+
+      if (index === -1) return;
+
+      const targetSymbol = list[index];
+      const expectedAsset =
+        stableAssetTypes[targetSymbol] ||
+        (isCrypto(targetSymbol) ? "CRYPTO" : "STOCK");
+
+      // When the tick carries an asset class, ensure it matches the requested one
+      if (payload.assetClass && payload.assetClass !== expectedAsset) {
+        return;
+      }
+
+      pendingTicksRef.current[targetSymbol] = {
         price: payload.price,
         volume: payload.volume,
         timestamp: payload.timestamp,
@@ -162,15 +196,17 @@ export function useQuotes(symbols = [], assetTypes = {}, options = {}) {
     };
 
     socket.on("price-update", onPrice);
-    list.forEach((symbol) =>
-      retainMarketSymbol(symbol, isCrypto(symbol) ? "CRYPTO" : "STOCK"),
-    );
+    list.forEach((symbol) => {
+      const assetClass =
+        stableAssetTypes[symbol] || (isCrypto(symbol) ? "CRYPTO" : "STOCK");
+      retainMarketSymbol(symbol, assetClass);
+    });
 
     return () => {
       socket.off("price-update", onPrice);
       list.forEach((symbol) => releaseMarketSymbol(symbol));
     };
-  }, [symbolKey]);
+  }, [symbolKey, stableAssetTypes]);
 
   useEffect(() => {
     if (!symbolKey) return undefined;
@@ -290,6 +326,37 @@ export function useHoldings(portfolioId) {
   return useApi(portfolioId ? `/portfolios/${portfolioId}/holdings` : null, {
     refreshInterval: 120000,
   });
+}
+
+/**
+ * Quantity-first position model for one symbol.
+ *
+ * The API stores holdings and orders with the symbol the client submitted, so
+ * legacy rows can contain `BINANCE:BTCUSDT` while market routes use
+ * `BTCUSDT`. Everything is matched through `canonicalMarketSymbol`.
+ *
+ * Pending SELL orders are netted out of the sellable quantity because the
+ * server does not reserve shares the way it reserves cash for BUY orders.
+ */
+export function usePosition(portfolioId, symbol, explicitAssetType = null) {
+  const holdings = useHoldings(portfolioId);
+
+  const position = useMemo(() => {
+    return calculatePosition({
+      holdings: holdings.data?.holdings ?? [],
+      targetSymbol: symbol,
+      assetType: explicitAssetType,
+    });
+  }, [holdings.data, symbol, explicitAssetType]);
+
+  return {
+    ...position,
+    loading: holdings.loading,
+    error: holdings.error,
+    reservedError: null,
+    mutateHoldings: holdings.mutate,
+    mutatePendingSells: holdings.mutate,
+  };
 }
 
 export function useUnreadNotifications() {

@@ -21,6 +21,14 @@ const BCRYPT_SALT_ROUNDS = Number.parseInt(
 
 const googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
+// A real bcrypt hash of a value nobody can log in with. Unknown emails and
+// Google-only accounts compare against it so every login attempt pays the same
+// bcrypt cost; otherwise response timing reveals which emails exist.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync(
+  "stox-dummy-password-not-a-real-account",
+  BCRYPT_SALT_ROUNDS,
+);
+
 function requireEnv(name, value) {
   if (!value) {
     throw new Error(`Missing required environment variable: ${name}`);
@@ -29,6 +37,9 @@ function requireEnv(name, value) {
 
 requireEnv("JWT_ACCESS_SECRET", ACCESS_TOKEN_SECRET);
 requireEnv("JWT_REFRESH_SECRET", REFRESH_TOKEN_SECRET);
+// google-auth-library only verifies the token audience when one is passed, so a
+// missing client id would silently accept tokens minted for any OAuth client.
+requireEnv("GOOGLE_CLIENT_ID", process.env.GOOGLE_CLIENT_ID);
 
 /**
  * Normalize email addresses before storing or querying them.
@@ -115,6 +126,12 @@ function validatePasswordStrength(password) {
 
   if (!hasSymbol) {
     errors.push("Password must contain at least one symbol.");
+  }
+
+  // bcrypt only reads the first 72 bytes, so a longer password silently
+  // behaves as its prefix. Reject it instead of accepting a weaker secret.
+  if (bcrypt.truncates(password)) {
+    errors.push("Password must not exceed 72 bytes.");
   }
 
   return {
@@ -292,13 +309,29 @@ async function registerUser({ name, email, password, userAgent, ipAddress }) {
   const passwordHash = await hashPassword(password);
 
   const result = await prisma.$transaction(async (tx) => {
-    const user = await tx.user.create({
-      data: {
-        name: name.trim(),
-        email: normalizedEmail,
-        passwordHash,
-      },
-    });
+    let user;
+
+    try {
+      user = await tx.user.create({
+        data: {
+          name: name.trim(),
+          email: normalizedEmail,
+          passwordHash,
+        },
+      });
+    } catch (error) {
+      // The findUnique check above runs before the transaction, so a
+      // simultaneous registration for the same email reaches the unique index.
+      // Translate it instead of letting Prisma's P2002 become a 500.
+      if (error.code === "P2002") {
+        throw AppError.conflict(
+          "An account with this email already exists.",
+          "EMAIL_ALREADY_EXISTS",
+        );
+      }
+
+      throw error;
+    }
 
     await tx.portfolio.create({
       data: {
@@ -339,22 +372,20 @@ async function loginUser({ email, password, userAgent, ipAddress }) {
     },
   });
 
-  if (!user) {
+  // Always pay the bcrypt cost, even when the email is unknown or the account
+  // has no password. Skipping it here is both a timing oracle and the reason
+  // the suspended branch below used to answer before the password was checked.
+  const passwordMatches = await verifyPassword(
+    password,
+    user?.passwordHash ?? DUMMY_PASSWORD_HASH,
+  );
+
+  if (!user || !user.passwordHash || !passwordMatches) {
     throw AppError.unauthorized("Invalid email or password.", "INVALID_CREDENTIALS");
   }
 
   if (user.isSuspended) {
     throw AppError.forbidden("This account has been suspended.", "ACCOUNT_SUSPENDED");
-  }
-
-  if (!user || !user.passwordHash) {
-    throw AppError.unauthorized("Invalid email or password.", "INVALID_CREDENTIALS");
-  }
-
-  const passwordMatches = await verifyPassword(password, user.passwordHash);
-
-  if (!passwordMatches) {
-    throw AppError.unauthorized("Invalid email or password.", "INVALID_CREDENTIALS");
   }
 
   const result = await prisma.$transaction(async (tx) => {
@@ -432,14 +463,25 @@ async function refreshAccessToken({ refreshToken, userAgent, ipAddress }) {
   }
 
   const result = await prisma.$transaction(async (tx) => {
-    await tx.refreshToken.update({
+    // Claim the token atomically. The revokedAt check above runs outside the
+    // transaction, so two concurrent refreshes can both reach this point with
+    // one single-use token. The conditional update lets exactly one win.
+    const claimed = await tx.refreshToken.updateMany({
       where: {
         id: storedToken.id,
+        revokedAt: null,
       },
       data: {
         revokedAt: new Date(),
       },
     });
+
+    if (claimed.count !== 1) {
+      throw AppError.unauthorized(
+        "Refresh token has been revoked.",
+        "REFRESH_TOKEN_REVOKED",
+      );
+    }
 
     const tokens = await issueTokenPair(tx, storedToken.user, {
       userAgent,
@@ -569,16 +611,29 @@ async function loginWithGoogle(credential) {
 
   // New Google account
   const result = await prisma.$transaction(async (tx) => {
-    const newUser = await tx.user.create({
-      data: {
-        email: normalizedEmail,
-        name: name?.trim() || "Stox User",
-        googleId,
-        passwordHash: null,
-        avatarUrl: picture || null,
-        isVerified: Boolean(emailVerified),
-      },
-    });
+    let newUser;
+
+    try {
+      newUser = await tx.user.create({
+        data: {
+          email: normalizedEmail,
+          name: name?.trim() || "Stox User",
+          googleId,
+          passwordHash: null,
+          avatarUrl: picture || null,
+          isVerified: Boolean(emailVerified),
+        },
+      });
+    } catch (error) {
+      if (error.code === "P2002") {
+        throw AppError.conflict(
+          "An account already exists with this email. Sign in with your password before linking Google.",
+          "GOOGLE_ACCOUNT_LINK_REQUIRED",
+        );
+      }
+
+      throw error;
+    }
 
     await tx.portfolio.create({
       data: {

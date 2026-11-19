@@ -11,6 +11,8 @@ const DEFAULT_MAX_ATTEMPTS = 3;
 // Followers are processed in id-ordered pages so a very large following does
 // not load every relationship into memory at once.
 const FAN_OUT_PAGE_SIZE = 200;
+// Bounded concurrency: one slow follower must not serialize the whole page.
+const FAN_OUT_CONCURRENCY = 10;
 
 const TERMINAL_STATUSES = new Set(["PLACED", "FAILED", "SKIPPED"]);
 
@@ -353,6 +355,23 @@ async function attemptFollower({
 
     return { status: "placed", execution: placed, order };
   } catch (error) {
+    // A concurrent pass may have committed the order after the lookup above.
+    // Never pair a live order with a FAILED execution: the terminal check would
+    // then stop every later replay from repairing it.
+    const racedOrder = await prisma.order.findUnique({
+      where: { copyTradeExecutionId: execution.id },
+    });
+
+    if (racedOrder) {
+      const placed = await updateExecution(execution.id, {
+        status: "PLACED",
+        failureCode: null,
+        failureMessage: null,
+      });
+
+      return { status: "placed", execution: placed, order: racedOrder };
+    }
+
     if (isPermanentCopyError(error) || attempt >= maxAttempts) {
       const failed = await updateExecution(execution.id, {
         status: "FAILED",
@@ -441,26 +460,33 @@ async function fanOutCopyTrades({
 
     summary.eligible += copyTraders.length;
 
-    for (const copyTrader of copyTraders) {
-      try {
-        const result = await attemptFollower({
-          trade,
-          copyTrader,
-          orderService,
-          maxAttempts: attempts,
-        });
+    for (let index = 0; index < copyTraders.length; index += FAN_OUT_CONCURRENCY) {
+      const chunk = copyTraders.slice(index, index + FAN_OUT_CONCURRENCY);
+
+      const results = await Promise.all(
+        chunk.map(async (copyTrader) => {
+          try {
+            return await attemptFollower({
+              trade,
+              copyTrader,
+              orderService,
+              maxAttempts: attempts,
+            });
+          } catch (error) {
+            // One follower's infrastructure failure must not stop the others.
+            return { status: "error", error };
+          }
+        }),
+      );
+
+      for (const result of results) {
+        if (result.status === "error" || result.status === "retryable") {
+          summary.retryable += 1;
+          retryableErrors.push(result.error);
+          continue;
+        }
 
         summary[result.status] += 1;
-
-        if (result.status === "retryable") {
-          retryableErrors.push(result.error);
-        }
-      } catch (error) {
-        // An unexpected infrastructure failure on one follower must not
-        // prevent the remaining followers from being processed. Retry the
-        // whole job.
-        summary.retryable += 1;
-        retryableErrors.push(error);
       }
     }
 
@@ -471,6 +497,21 @@ async function fanOutCopyTrades({
   } while (cursor);
 
   if (summary.retryable > 0) {
+    // Every execution may have reached a terminal state even though one
+    // follower's bookkeeping failed. Re-running the whole trade then only
+    // replays already-terminal rows, so finish instead.
+    const pending = await prisma.copyTradeExecution.count({
+      where: {
+        sourceTradeId: trade.id,
+        status: { notIn: [...TERMINAL_STATUSES] },
+      },
+    });
+
+    if (pending === 0) {
+      await markFanOutComplete(trade.id);
+      return summary;
+    }
+
     const error = new Error(
       `Copy-trade fan-out has ${summary.retryable} retryable follower(s).`,
     );

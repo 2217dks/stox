@@ -68,6 +68,31 @@ module.exports = {
     });
   },
 
+  /**
+   * Fetch many quotes for one request.
+   *
+   * Each symbol goes through the normal cached getQuote path, so repeated
+   * symbols across clients still hit the 5-second price cache. Failed symbols
+   * are omitted instead of failing the whole batch; the caller renders them
+   * as unavailable.
+   */
+  async getQuotes(symbols = [], options = {}) {
+    const assetTypes = options.assetTypes || {};
+    const results = await Promise.allSettled(
+      symbols.map((symbol) => {
+        const assetClass =
+          assetTypes[symbol] ||
+          assetTypes[symbol.toUpperCase()] ||
+          options.assetClass;
+        return this.getQuote(symbol, { ...options, assetClass });
+      }),
+    );
+
+    return results
+      .filter((result) => result.status === "fulfilled")
+      .map((result) => result.value);
+  },
+
   async searchSymbols(query, options = {}) {
     if (typeof query !== "string" || !query.trim()) {
       return marketDataService.searchSymbols(query, options);
@@ -86,17 +111,25 @@ module.exports = {
     const toMs = Math.min(asOf.getTime(), Date.now());
     const fromMs = Math.max(0, toMs - 7 * 24 * 60 * 60 * 1000);
 
-    const history = await marketDataService.getHistoricalPrices(
+    // Nightly snapshots ask for the same symbol-day once per portfolio. Without
+    // this cache a 200-portfolio run fetches the same close 200 times.
+    const history = await cacheService.getOrSetHistoricalPrices(
+      resolved.assetClass,
       resolved.canonicalSymbol,
-      {
-        interval: "1d",
-        from: fromMs,
-        to: toMs,
-        limit: 10,
-        assetClass: resolved.assetClass,
-        ...options,
-        _resolved: resolved,
-      },
+      "1d",
+      fromMs,
+      toMs,
+      10,
+      () =>
+        marketDataService.getHistoricalPrices(resolved.canonicalSymbol, {
+          interval: "1d",
+          from: fromMs,
+          to: toMs,
+          limit: 10,
+          assetClass: resolved.assetClass,
+          ...options,
+          _resolved: resolved,
+        }),
     );
 
     if (!history || !Array.isArray(history.prices) || history.prices.length === 0) {

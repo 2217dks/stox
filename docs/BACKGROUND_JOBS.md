@@ -14,6 +14,8 @@
 - [Recurring Jobs](#-recurring-jobs)
 - [Error Handling & Retries](#-error-handling--retries)
 - [Monitoring](#-monitoring)
+- [In-Process Scheduled Workers & Batch Scripts](#-in-process-scheduled-workers--batch-scripts)
+- [Test Suite Lifecycle & Resource Cleanup](#-test-suite-lifecycle--resource-cleanup)
 
 ---
 
@@ -682,4 +684,30 @@ For environments running without full BullMQ / Redis worker clusters, or for dai
 - **Portfolio Snapshots:** `npm run portfolio:snapshot` (`scripts/generate-portfolio-snapshots.js`)
   - Supports `--date=YYYY-MM-DD` to target a specific date's EOD valuation.
   - Supports `--force` to bypass settlement window checks during operational backfills.
+
+---
+
+## 🧪 Test Suite Lifecycle & Resource Cleanup
+
+To ensure that backend test suites (both unit and integration) complete cleanly and exit naturally without hanging Jest or requiring unhygienic flags (`--forceExit`, `process.exit()`), the test harness enforces strict asynchronous resource cleanup:
+
+### 1. Queues and Redis Teardown
+- BullMQ queue instances (`orderQueue`, `tradeQueue`, `notificationQueue`, `copyTradeFanOutQueue`, `leaderboardQueue`, `snapshotQueue`) maintain persistent Redis connections and event listeners.
+- In `backend/tests/setupAfterEnv.js`, the global `afterAll` hook invokes `closeQueues()` and `disconnectRedis()`.
+- Tests using isolated Express app modules (e.g. `rateLimit.integration.test.js`) build their own sandboxed queue and Redis instances. These must be tracked and closed inside `afterAll` using `app.locals` or suite-scoped references.
+
+### 2. Prisma Connection Pool Drain
+- `@prisma/adapter-pg` wraps `pg.Pool`, which maintains idle TCP sockets across client requests.
+- Leaving Prisma connections open prevents Node.js event loop termination.
+- `setupAfterEnv.js` explicitly invokes `await prisma.$disconnect()` in `afterAll` across test suites to drain and terminate active database connections cleanly.
+
+### 3. Awaiting Background Queue Operations
+- Calling `void enqueue...` without `await` in services (e.g., `tradeService.executeOrder`, `orderService.createOrder`, `notificationEventService.recordNotificationEvent`) allows promises to settle *after* an HTTP test or transaction finishes.
+- If Redis is closed while these floating promises are pending, BullMQ logs unhandled `Connection is closed` errors or attempts to reconnect during teardown.
+- In all service paths, background enqueue operations must be awaited or tracked to ensure full completion before the test lifecycle initiates shutdown.
+
+### 4. HTTP Agent Sockets
+- Long-running keep-alive connections on HTTP/HTTPS global agents can keep the Node process alive.
+- In `setupAfterEnv.js`, `http.globalAgent.destroy()` and `https.globalAgent.destroy()` are invoked in `afterAll` to close lingering connection pools.
+
 

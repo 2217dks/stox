@@ -4,6 +4,7 @@ const { withTimeout } = require("../utils/withTimeout");
 const logger = require("../utils/logger");
 const { getQueue } = require("./index");
 const { jobOptionsFor } = require("./definitions");
+const { retryFailedJob } = require("./failedJobs");
 
 // BullMQ requires `maxRetriesPerRequest: null`, so a disconnected Redis makes
 // `queue.add` wait indefinitely. The API enqueues best-effort, so it must not
@@ -95,9 +96,69 @@ async function enqueue(queueName, jobName, data, options = {}) {
   }
 }
 
+/**
+ * Add a job, but never let a retained job with the same id block it forever.
+ *
+ * BullMQ returns the existing job when `jobId` is already known — including a
+ * failed one kept by `removeOnFail`. Without this guard, a job that exhausted
+ * its attempts would answer every later `add` with the same dead job, so the
+ * row it belongs to could never be retried. Retry a failed job in place, drop
+ * a completed one, and leave a waiting/active job alone.
+ */
+async function enqueueOrRetry(queueName, jobName, data, options = {}) {
+  const jobId = options.jobId;
+
+  if (!jobId) {
+    return enqueue(queueName, jobName, data, options);
+  }
+
+  const queue = getQueue(queueName);
+
+  if (!queue) {
+    return { enqueued: false, reason: "QUEUES_DISABLED" };
+  }
+
+  let existing = null;
+
+  try {
+    existing = await queue.getJob(jobId);
+  } catch (error) {
+    logger.warn("Queue job lookup failed; falling back to add", {
+      queue: queueName,
+      jobId,
+      message: error.message,
+    });
+  }
+
+  if (existing) {
+    const state = await existing.getState();
+
+    if (state === "failed") {
+      const result = await retryFailedJob(queueName, jobId);
+
+      return result.retried
+        ? { enqueued: true, jobId, retried: true }
+        : { enqueued: false, reason: result.reason, state: result.state };
+    }
+
+    if (state === "completed") {
+      try {
+        await existing.remove();
+      } catch {
+        return { enqueued: false, reason: "ALREADY_QUEUED", state };
+      }
+    } else {
+      return { enqueued: false, reason: "ALREADY_QUEUED", state };
+    }
+  }
+
+  return enqueue(queueName, jobName, data, options);
+}
+
 module.exports = {
   DEFAULT_ENQUEUE_TIMEOUT_MS,
   enqueue,
+  enqueueOrRetry,
   enqueueTimeoutMs,
   parsePayload,
   withTimeoutForEnqueue,

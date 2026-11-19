@@ -217,6 +217,28 @@ describe("marketDataService provider-independent interface", () => {
     expect(result[1].symbol).toBe("BINANCE:BTCUSDT");
   });
 
+  test("keeps crypto results visible when a combined search is limited", async () => {
+    const stockProvider = createProvider({
+      searchSymbols: jest.fn(async () =>
+        Array.from({ length: 8 }, (_, index) => ({
+          symbol: `STOCK${index}`,
+          name: `Stock ${index}`,
+          assetClass: "STOCK",
+          exchange: "NASDAQ",
+          currency: "USD",
+          type: "Common Stock",
+          source: "mock",
+        })),
+      ),
+    });
+    const service = createService({ stockProvider });
+
+    const result = await service.searchSymbols("btc", { limit: 8 });
+
+    expect(result).toHaveLength(8);
+    expect(result.map((item) => item.assetClass)).toContain("CRYPTO");
+  });
+
   test("normalizes search metadata and returns only the documented fields", async () => {
     const stockProvider = createProvider({
       searchSymbols: jest.fn(async () => [
@@ -454,5 +476,38 @@ describe("marketDataService provider-independent interface", () => {
         volume: "10",
       },
     ]);
+  });
+});
+
+describe("historical price truncation", () => {
+  test("keeps the newest candles when the provider returns more than limit", async () => {
+    const candle = (day, close) => ({
+      timestamp: `2026-11-0${day}T00:00:00.000Z`,
+      open: close,
+      high: close,
+      low: close,
+      close,
+      volume: "10",
+    });
+
+    const stockProvider = createProvider({
+      getHistoricalPrices: jest.fn(async (symbol, options) => ({
+        symbol,
+        assetClass: "STOCK",
+        interval: options.interval,
+        prices: [candle(1, "1"), candle(2, "2"), candle(3, "3")],
+      })),
+    });
+
+    const service = createService({ stockProvider });
+
+    const result = await service.getHistoricalPrices("AAPL", {
+      interval: "1d",
+      from: Date.parse("2026-11-01T00:00:00.000Z"),
+      to: Date.parse("2026-11-03T00:00:00.000Z"),
+      limit: 2,
+    });
+
+    expect(result.prices.map((price) => price.close)).toEqual(["2", "3"]);
   });
 });

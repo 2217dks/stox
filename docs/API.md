@@ -367,7 +367,7 @@ Freshness & Stale Handling:
 | Parameter       | Type    | Default | Description |
 |-----------------|---------|---------|-------------|
 | `rejectStale`   | boolean | `false` | When true, rejects quotes exceeding configured freshness thresholds with `503 MARKET_DATA_STALE_QUOTE` |
-| `allowStale`    | boolean | `false` | When true, permits stale quotes to be included while explicitly marking them `isStale: true` |
+| `allowStale`    | boolean | `false` | When true, stale quotes are included even if `rejectStale` is set; they are still marked `isStale: true` |
 | `maxAgeSeconds` | int     | -       | Optional client-requested maximum quote age limit in seconds (1 to 86400) |
 
 ### Response
@@ -430,7 +430,7 @@ Reconciles:
 | `to`            | string  | -       | ISO datetime upper bound |
 | `symbol`        | string  | -       | Optional symbol filter |
 | `rejectStale`   | boolean | `false` | When true, rejects quotes exceeding freshness thresholds with `503 MARKET_DATA_STALE_QUOTE` |
-| `allowStale`    | boolean | `false` | When true, permits stale quotes to be included while marking `isStale: true` |
+| `allowStale`    | boolean | `false` | When true, stale quotes are included even if `rejectStale` is set; they are still marked `isStale: true` |
 | `maxAgeSeconds` | int     | -       | Optional client-requested maximum quote age limit in seconds |
 
 ### Response
@@ -1256,7 +1256,7 @@ Each item contains only `symbol`, `name`, `assetClass`, `exchange`, `currency`, 
 
 Symbol and exchange are uppercase; currency is uppercase when known. Optional metadata is `null` when unavailable. A query with no matches returns HTTP 200 with `data: []`.
 
-When both asset classes are requested, the service combines both provider results. If either provider fails, the entire request returns the standard market-data error envelope rather than a partial result.
+When both asset classes are requested, the service combines both provider results. Each asset class uses its configured ordered provider chain; a provider-side failure falls through to the next provider, but if every provider for either asset class fails, the entire request returns the standard market-data error envelope rather than a partial result.
 
 Pass `assetClass` to search only one provider. Provider timeouts, throttling, and unavailability use the standard market-data domain error codes.
 
@@ -1295,7 +1295,7 @@ Get a normalized Binance crypto quote with explicit freshness metadata.
 
 This public, read-only endpoint does not require authentication and uses the global API rate limit.
 
-Supported symbol forms include `BTCUSDT`, `BINANCE:BTCUSDT`, and `BTC/USDT`. Quote assets follow the market-data service conventions (`USDT`, `BTC`, or `ETH`).
+Supported symbol forms include `BTCUSDT`, `BINANCE:BTCUSDT`, and `BTC/USDT`. Quote assets are not whitelisted: the provider decides whether the pair exists and is trading, so new stablecoin or fiat-quoted pairs work without a client change.
 
 ### Query parameters
 
@@ -1346,7 +1346,7 @@ Provider timeouts, rate limits, and unavailable provider errors use the document
 
 ## `GET /market/quote/stock/:symbol`
 
-Get a normalized Finnhub stock quote with explicit freshness metadata.
+Get a normalized stock quote from the configured stock provider chain (Finnhub by default) with explicit freshness metadata.
 
 This public, read-only endpoint does not require authentication and uses the global API rate limit.
 
@@ -1484,7 +1484,7 @@ The range cannot exceed `limit` intervals (for `1M`, each interval is bounded as
 
 Symbols may contain letters, digits, `.`, `_`, `:`, `/`, or `-`.
 
-Both Finnhub stocks and Binance crypto support the listed intervals.
+Binance crypto supports the listed intervals. Stock history uses the configured stock chain: Finnhub first, with Yahoo Finance as the free fallback when Finnhub rejects candle access. Yahoo also serves international exchange suffixes such as `VOD.L` and `7203.T`.
 
 The provider adapter normalizes timestamps to ISO 8601 UTC and OHLCV values to canonical decimal strings; returned points are in ascending timestamp order.
 

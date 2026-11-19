@@ -6,7 +6,7 @@ const {
   COPY_TRADE_JOB_NAMES,
   jobOptionsFor,
 } = require("./definitions");
-const { enqueue, parsePayload } = require("./enqueue");
+const { enqueue, enqueueOrRetry, parsePayload } = require("./enqueue");
 const logger = require("../utils/logger");
 
 const fanOutPayloadSchema = z.object({
@@ -28,7 +28,7 @@ const scanPendingPayloadSchema = z.object({
 async function enqueueCopyTradeFanOut(payload) {
   const data = parsePayload(fanOutPayloadSchema, payload);
 
-  return enqueue(
+  return enqueueOrRetry(
     QUEUE_NAMES.COPY_TRADES,
     COPY_TRADE_JOB_NAMES.FAN_OUT,
     data,

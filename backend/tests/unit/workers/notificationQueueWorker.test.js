@@ -170,6 +170,25 @@ describe("notification queue job handler", () => {
     });
   });
 
+  test("keeps the delivered channels when the status write fails", async () => {
+    prisma.notification.findUnique.mockResolvedValue(makeNotification());
+    deliverNotification.mockResolvedValue({
+      outcome: "delivered",
+      channels: { inApp: "delivered", email: "delivered" },
+    });
+    prisma.notification.update.mockRejectedValueOnce(new Error("db reset"));
+
+    await expect(handleNotificationJob(makeJob())).rejects.toThrow("db reset");
+
+    expect(prisma.notification.updateMany).toHaveBeenLastCalledWith({
+      where: { id: NOTIFICATION_ID, deliveryStatus: "SENDING" },
+      data: expect.objectContaining({
+        deliveryStatus: "PENDING",
+        deliveryChannels: { inApp: "delivered", email: "delivered" },
+      }),
+    });
+  });
+
   test("returns the row to PENDING after a transient failure", async () => {
     prisma.notification.findUnique.mockResolvedValue(makeNotification());
     const transient = Object.assign(new Error("email down"), {

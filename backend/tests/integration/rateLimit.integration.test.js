@@ -22,6 +22,7 @@ const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 // env-driven limits and therefore its own limiter stores.
 
 const ORIGINAL_ENV = { ...process.env };
+const isolatedCleanups = [];
 
 function buildApp(env) {
   for (const [key, value] of Object.entries(env)) {
@@ -31,6 +32,16 @@ function buildApp(env) {
   let app;
   jest.isolateModules(() => {
     app = require("../../src/app");
+    const { disconnectRedis } = require("../../src/config/redis");
+    const { closeQueues } = require("../../src/queues");
+    isolatedCleanups.push(async () => {
+      try {
+        await closeQueues();
+      } catch (_) {}
+      try {
+        await disconnectRedis();
+      } catch (_) {}
+    });
   });
   return app;
 }
@@ -91,6 +102,9 @@ function expectRateLimited(res, limit) {
 
 afterAll(async () => {
   process.env = { ...ORIGINAL_ENV };
+  for (const cleanup of isolatedCleanups) {
+    await cleanup();
+  }
   await prisma.$disconnect();
 });
 

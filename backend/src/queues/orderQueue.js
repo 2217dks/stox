@@ -9,6 +9,7 @@ const {
 const {
   DEFAULT_ENQUEUE_TIMEOUT_MS,
   enqueue,
+  enqueueOrRetry,
   parsePayload,
 } = require("./enqueue");
 const { listFailedJobs, retryFailedJob } = require("./failedJobs");
@@ -37,7 +38,7 @@ const scanPendingPayloadSchema = z.object({
 async function enqueueOrderExecution(payload) {
   const data = parsePayload(executeOrderPayloadSchema, payload);
 
-  return enqueue(
+  return enqueueOrRetry(
     QUEUE_NAMES.ORDERS,
     ORDER_JOB_NAMES.EXECUTE_ORDER,
     data,

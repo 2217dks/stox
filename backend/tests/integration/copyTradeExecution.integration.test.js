@@ -79,6 +79,12 @@ async function resetData() {
     where: { id: { in: portfolioIds } },
     data: { cashBalance: "10000", reservedCash: "0", isActive: true },
   });
+
+  // Clear un-fanned trade backlog from other suites so scan tests are deterministic.
+  await prisma.trade.updateMany({
+    where: { copyFanOutAt: null },
+    data: { copyFanOutAt: new Date() },
+  });
 }
 
 async function createSourceTrade({
@@ -306,6 +312,17 @@ describe("fanOutCopyTrades sizing and destination", () => {
   });
 
   test("mirrors a SELL as a market order", async () => {
+    await prisma.holding.create({
+      data: {
+        portfolioId: copierAPortfolioId,
+        symbol: "AAPL",
+        assetType: "STOCK",
+        quantity: 10,
+        averageBuyPrice: 100,
+        totalInvested: 1000,
+      },
+    });
+
     const trade = await createSourceTrade({
       side: "SELL",
       quantity: "4",

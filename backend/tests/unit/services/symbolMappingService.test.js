@@ -1,5 +1,6 @@
 const {
   toCanonicalSymbol,
+  getCanonicalInstrumentSymbol,
   toProviderSymbol,
   toDisplaySymbol,
   parseSymbol,
@@ -128,6 +129,13 @@ describe("symbolMappingService", () => {
       expect(inferAssetClass("SOLUSDT")).toBe("CRYPTO");
       expect(inferAssetClass("BTC/USDT")).toBe("CRYPTO");
       expect(inferAssetClass("ETH/BTC")).toBe("CRYPTO");
+      expect(inferAssetClass("HYPERUSDC")).toBe("CRYPTO");
+      expect(inferAssetClass("HYPERFDUSD")).toBe("CRYPTO");
+      expect(inferAssetClass("HYPERTUSD")).toBe("CRYPTO");
+      expect(inferAssetClass("HYPERBUSD")).toBe("CRYPTO");
+      expect(inferAssetClass("HYPERTRY")).toBe("CRYPTO");
+      expect(inferAssetClass("HYPEREUR")).toBe("CRYPTO");
+      expect(inferAssetClass("1000SATSUSDT")).toBe("CRYPTO");
     });
 
     test("infers STOCK for FINNHUB prefix", () => {
@@ -215,6 +223,31 @@ describe("symbolMappingService", () => {
     });
   });
 
+  describe("getCanonicalInstrumentSymbol", () => {
+    test("canonicalizes crypto symbols regardless of prefix or slash formatting", () => {
+      expect(getCanonicalInstrumentSymbol("BINANCE:BTCUSDT", "CRYPTO")).toBe("BTCUSDT");
+      expect(getCanonicalInstrumentSymbol("BTC/USDT", "CRYPTO")).toBe("BTCUSDT");
+      expect(getCanonicalInstrumentSymbol("BINANCE:BTC/USDT", "CRYPTO")).toBe("BTCUSDT");
+      expect(getCanonicalInstrumentSymbol("BTCUSDT", "CRYPTO")).toBe("BTCUSDT");
+      expect(getCanonicalInstrumentSymbol("BINANCE:HYPER/TRY", "CRYPTO")).toBe("HYPERTRY");
+      expect(getCanonicalInstrumentSymbol("HYPER/TRY", "CRYPTO")).toBe("HYPERTRY");
+      expect(getCanonicalInstrumentSymbol("HYPERTRY", "CRYPTO")).toBe("HYPERTRY");
+    });
+
+    test("canonicalizes stock tickers and preserves dot/hyphen separators", () => {
+      expect(getCanonicalInstrumentSymbol("AAPL", "STOCK")).toBe("AAPL");
+      expect(getCanonicalInstrumentSymbol("FINNHUB:AAPL", "STOCK")).toBe("AAPL");
+      expect(getCanonicalInstrumentSymbol("BRK.B", "STOCK")).toBe("BRK.B");
+      expect(getCanonicalInstrumentSymbol("BRK-B", "STOCK")).toBe("BRK-B");
+    });
+
+    test("handles missing or empty inputs gracefully", () => {
+      expect(getCanonicalInstrumentSymbol("", "STOCK")).toBe("");
+      expect(getCanonicalInstrumentSymbol(null, "CRYPTO")).toBe("");
+      expect(getCanonicalInstrumentSymbol(undefined)).toBe("");
+    });
+  });
+
   describe("toProviderSymbol", () => {
     describe("binance provider", () => {
       test("formats canonical crypto pairs for Binance REST/WebSocket", () => {
@@ -222,18 +255,38 @@ describe("symbolMappingService", () => {
         expect(toProviderSymbol("BINANCE:BTCUSDT", "binance")).toBe("BTCUSDT");
         expect(toProviderSymbol("BTC/USDT", "binance")).toBe("BTCUSDT");
         expect(toProviderSymbol("ETHBTC", "binance")).toBe("ETHBTC");
+        expect(toProviderSymbol("HYPER/USDC", "binance")).toBe("HYPERUSDC");
+        expect(toProviderSymbol("HYPERFDUSD", "binance")).toBe("HYPERFDUSD");
+        expect(toProviderSymbol("BINANCE:HYPERTRY", "binance")).toBe("HYPERTRY");
+        expect(toProviderSymbol("BINANCE:HYPER/TRY", "binance")).toBe("HYPERTRY");
+        expect(toProviderSymbol("BINANCE:HYPERUSDC", "binance")).toBe("HYPERUSDC");
+        expect(toProviderSymbol("BINANCE:HYPERFDUSD", "binance")).toBe("HYPERFDUSD");
+        expect(toProviderSymbol("HYPERTRY", "binance", { assetClass: "CRYPTO" })).toBe("HYPERTRY");
+        expect(toProviderSymbol("BINANCE:BTC/XYZ", "binance")).toBe("BTCXYZ");
+        expect(toProviderSymbol("BINANCE:SOLUNKNOWN", "binance")).toBe("SOLUNKNOWN");
       });
 
-      test("rejects stock symbols for Binance with 400", () => {
+      test("rejects stock symbols and ambiguous stocks for Binance with 400", () => {
         expect(() => toProviderSymbol("AAPL", "binance")).toThrow(
           "The cryptocurrency symbol format is invalid.",
         );
-      });
-
-      test("rejects unsupported quote assets for Binance with 400", () => {
-        expect(() => toProviderSymbol("BTCUSD", "binance")).toThrow(
+        expect(() => toProviderSymbol("GBTC", "binance")).toThrow(
           "The cryptocurrency symbol format is invalid.",
         );
+        expect(() => toProviderSymbol("METH", "binance")).toThrow(
+          "The cryptocurrency symbol format is invalid.",
+        );
+        expect(() => toProviderSymbol("BRK.B", "binance")).toThrow(
+          "The cryptocurrency symbol format is invalid.",
+        );
+      });
+
+      test("normalizes explicit Binance pairs without quote asset whitelist gate", () => {
+        expect(toProviderSymbol("BINANCE:HYPERTRY", "binance")).toBe("HYPERTRY");
+        expect(toProviderSymbol("BINANCE:HYPER/TRY", "binance")).toBe("HYPERTRY");
+        expect(toProviderSymbol("HYPER/TRY", "binance")).toBe("HYPERTRY");
+        expect(toProviderSymbol("BINANCE:ETHBTC", "binance")).toBe("ETHBTC");
+        expect(toProviderSymbol("BINANCE:BTCUNKNOWN", "binance")).toBe("BTCUNKNOWN");
       });
 
       test("rejects non-crypto explicit asset class with 422", () => {
@@ -270,6 +323,8 @@ describe("symbolMappingService", () => {
       expect(toDisplaySymbol("BTCUSDT")).toBe("BTC/USDT");
       expect(toDisplaySymbol("ETHBTC")).toBe("ETH/BTC");
       expect(toDisplaySymbol("SOLUSDT")).toBe("SOL/USDT");
+      expect(toDisplaySymbol("HYPERUSDC")).toBe("HYPER/USDC");
+      expect(toDisplaySymbol("HYPERFDUSD")).toBe("HYPER/FDUSD");
     });
 
     test("preserves stock tickers for display", () => {

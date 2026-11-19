@@ -27,6 +27,7 @@ import {
   CardHeading,
   CardTitle,
 } from "@/components/ui/card";
+import { ErrorState } from "@/components/ui/empty-state";
 import { Field, Input } from "@/components/ui/input";
 import { PageHeader } from "@/components/ui/page-header";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -294,11 +295,27 @@ function PreferencesForm({ preferences, mutate }) {
 }
 
 function PreferencesTab() {
-  const { data, loading, mutate } = useApi("/preferences");
+  const { data, error, loading, mutate } = useApi("/preferences");
   const preferences = data?.preferences;
 
   if (loading && !preferences) {
     return <Skeleton className="h-[300px]" />;
+  }
+
+  // Never render the form from defaults after a failed read: saving it would
+  // write those defaults over the user's stored preferences.
+  if (error && !preferences) {
+    return (
+      <ErrorState
+        title="Could not load your preferences"
+        description="Nothing has been changed. Retry to edit your notification channels."
+        action={
+          <Button variant="secondary" size="sm" onClick={() => mutate()}>
+            Retry
+          </Button>
+        }
+      />
+    );
   }
 
   return (

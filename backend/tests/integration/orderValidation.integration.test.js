@@ -52,11 +52,64 @@ beforeAll(async () => {
     (portfolio) => portfolio.isDefault,
   );
   mainPortfolioId = mainPortfolio.id;
+
+  await prisma.holding.createMany({
+    data: [
+      {
+        portfolioId: mainPortfolioId,
+        symbol: `H${timestamp}2`,
+        assetType: "STOCK",
+        quantity: 10,
+        averageBuyPrice: 100,
+        totalInvested: 1000,
+      },
+      {
+        portfolioId: mainPortfolioId,
+        symbol: `C${timestamp}1`,
+        assetType: "STOCK",
+        quantity: 10,
+        averageBuyPrice: 100,
+        totalInvested: 1000,
+      },
+      {
+        portfolioId: mainPortfolioId,
+        symbol: `C${timestamp}3`,
+        assetType: "STOCK",
+        quantity: 10,
+        averageBuyPrice: 100,
+        totalInvested: 1000,
+      },
+      {
+        portfolioId: mainPortfolioId,
+        symbol: `C${timestamp}RACE`,
+        assetType: "STOCK",
+        quantity: 10,
+        averageBuyPrice: 100,
+        totalInvested: 1000,
+      },
+    ],
+  });
 });
 
 afterAll(async () => {
   for (const orderId of createdOrderIds) {
     await prisma.order.delete({ where: { id: orderId } }).catch(() => {});
+  }
+
+  if (mainPortfolioId) {
+    await prisma.holding.deleteMany({
+      where: {
+        portfolioId: mainPortfolioId,
+        symbol: {
+          in: [
+            `H${timestamp}2`,
+            `C${timestamp}1`,
+            `C${timestamp}3`,
+            `C${timestamp}RACE`,
+          ],
+        },
+      },
+    }).catch(() => {});
   }
 
   if (userBOrderId) {
@@ -1562,6 +1615,418 @@ describe("cancel order endpoint (black-box via DELETE /orders/:id)", () => {
         select: { status: true },
       });
       expect(stored.status).toBe("EXECUTED");
+    });
+  });
+
+  describe("backend SELL order position validation", () => {
+    test("rejects SELL order for an unowned symbol with 400 INSUFFICIENT_POSITION", async () => {
+      const response = await postOrder({
+        portfolioId: mainPortfolioId,
+        symbol: `NO${timestamp % 1000000}`,
+        assetType: "STOCK",
+        side: "SELL",
+        quantity: "5",
+      });
+
+      expect(response.status).toBe(400);
+      expectErrorEnvelope(response.body);
+      expect(response.body.error.code).toBe("INSUFFICIENT_POSITION");
+      expect(response.body.error.details).toEqual({
+        required: "5",
+        available: "0",
+      });
+    });
+
+    test("accounts for pending SELL orders against available holding", async () => {
+      const testSymbol = `SL${timestamp % 1000000}`;
+      await prisma.holding.create({
+        data: {
+          portfolioId: mainPortfolioId,
+          symbol: testSymbol,
+          assetType: "STOCK",
+          quantity: 5,
+          averageBuyPrice: 100,
+          totalInvested: 500,
+        },
+      });
+
+      // First order: SELL 4 shares (succeeds, 1 available)
+      const first = await postOrder({
+        portfolioId: mainPortfolioId,
+        symbol: testSymbol,
+        assetType: "STOCK",
+        side: "SELL",
+        quantity: "4",
+      });
+      expect(first.status).toBe(201);
+      createdOrderIds.push(first.body.data.order.id);
+
+      // Second order: attempt to SELL 2 shares (fails, only 1 available)
+      const second = await postOrder({
+        portfolioId: mainPortfolioId,
+        symbol: testSymbol,
+        assetType: "STOCK",
+        side: "SELL",
+        quantity: "2",
+      });
+      expect(second.status).toBe(400);
+      expectErrorEnvelope(second.body);
+      expect(second.body.error.code).toBe("INSUFFICIENT_POSITION");
+      expect(second.body.error.details).toEqual({
+        required: "2",
+        available: "1",
+      });
+
+      // Cleanup test holding
+      await prisma.holding.deleteMany({
+        where: { portfolioId: mainPortfolioId, symbol: testSymbol },
+      });
+    });
+
+    test("validates SELL orders matching canonical symbols across prefixed, slash, and unprefixed crypto notations", async () => {
+      const cryptoHoldingSymbol = "BINANCE:BTCUSDT";
+      await prisma.holding.deleteMany({
+        where: {
+          portfolioId: mainPortfolioId,
+          symbol: { in: ["BINANCE:BTCUSDT", "BTCUSDT", "BTC/USDT"] },
+        },
+      });
+
+      await prisma.holding.create({
+        data: {
+          portfolioId: mainPortfolioId,
+          symbol: cryptoHoldingSymbol,
+          assetType: "CRYPTO",
+          quantity: 2.5,
+          averageBuyPrice: 50000,
+          totalInvested: 125000,
+        },
+      });
+
+      // 1. Order with unprefixed BTCUSDT succeeds
+      const first = await postOrder({
+        portfolioId: mainPortfolioId,
+        symbol: "BTCUSDT",
+        assetType: "CRYPTO",
+        side: "SELL",
+        quantity: "1.0",
+      });
+      expect(first.status).toBe(201);
+      createdOrderIds.push(first.body.data.order.id);
+
+      // 2. Order with slash-separated BTC/USDT of 1.0 succeeds (leaving 0.5 available)
+      const second = await postOrder({
+        portfolioId: mainPortfolioId,
+        symbol: "BTC/USDT",
+        assetType: "CRYPTO",
+        side: "SELL",
+        quantity: "1.0",
+      });
+      expect(second.status).toBe(201);
+      createdOrderIds.push(second.body.data.order.id);
+
+      // 3. Order with 1.0 exceeds remaining 0.5 available -> 400 INSUFFICIENT_POSITION
+      const third = await postOrder({
+        portfolioId: mainPortfolioId,
+        symbol: "BTCUSDT",
+        assetType: "CRYPTO",
+        side: "SELL",
+        quantity: "1.0",
+      });
+      expect(third.status).toBe(400);
+      expectErrorEnvelope(third.body);
+      expect(third.body.error.code).toBe("INSUFFICIENT_POSITION");
+      expect(third.body.error.details).toEqual({
+        required: "1",
+        available: "0.5",
+      });
+
+      // Cleanup
+      await prisma.order.deleteMany({
+        where: { id: { in: [first.body.data.order.id, second.body.data.order.id] } },
+      });
+      await prisma.holding.deleteMany({
+        where: { portfolioId: mainPortfolioId, symbol: cryptoHoldingSymbol },
+      });
+    });
+
+    test("validates holding stored as unprefixed BTCUSDT with SELL request using BINANCE:BTCUSDT and isolates unrelated symbols", async () => {
+      const unprefixedSymbol = "BTCUSDT";
+      await prisma.holding.deleteMany({
+        where: {
+          portfolioId: mainPortfolioId,
+          symbol: { in: ["BINANCE:BTCUSDT", "BTCUSDT", "ETHUSDT"] },
+        },
+      });
+
+      await prisma.holding.create({
+        data: {
+          portfolioId: mainPortfolioId,
+          symbol: unprefixedSymbol,
+          assetType: "CRYPTO",
+          quantity: 2.0,
+          averageBuyPrice: 50000,
+          totalInvested: 100000,
+        },
+      });
+
+      // 1. Unrelated crypto symbol ETHUSDT cannot be sold using BTCUSDT holding -> 400 INSUFFICIENT_POSITION
+      const unrelatedRes = await postOrder({
+        portfolioId: mainPortfolioId,
+        symbol: "ETHUSDT",
+        assetType: "CRYPTO",
+        side: "SELL",
+        quantity: "1.0",
+      });
+      expect(unrelatedRes.status).toBe(400);
+      expectErrorEnvelope(unrelatedRes.body);
+      expect(unrelatedRes.body.error.code).toBe("INSUFFICIENT_POSITION");
+      expect(unrelatedRes.body.error.details).toEqual({
+        required: "1",
+        available: "0",
+      });
+
+      // 2. SELL using BINANCE:BTCUSDT succeeds against unprefixed BTCUSDT holding
+      const prefixedOrder = await postOrder({
+        portfolioId: mainPortfolioId,
+        symbol: "BINANCE:BTCUSDT",
+        assetType: "CRYPTO",
+        side: "SELL",
+        quantity: "1.5",
+      });
+      expect(prefixedOrder.status).toBe(201);
+      createdOrderIds.push(prefixedOrder.body.data.order.id);
+
+      // 3. Excess SELL fails because remaining available is 0.5
+      const excessOrder = await postOrder({
+        portfolioId: mainPortfolioId,
+        symbol: "BTCUSDT",
+        assetType: "CRYPTO",
+        side: "SELL",
+        quantity: "1.0",
+      });
+      expect(excessOrder.status).toBe(400);
+      expect(excessOrder.body.error.code).toBe("INSUFFICIENT_POSITION");
+      expect(excessOrder.body.error.details).toEqual({
+        required: "1",
+        available: "0.5",
+      });
+
+      // Cleanup
+      await prisma.order.deleteMany({
+        where: { id: prefixedOrder.body.data.order.id },
+      });
+      await prisma.holding.deleteMany({
+        where: { portfolioId: mainPortfolioId, symbol: unprefixedSymbol },
+      });
+    });
+
+    test("aggregates multiple holdings and pending orders for the same canonical instrument", async () => {
+      await prisma.holding.deleteMany({
+        where: {
+          portfolioId: mainPortfolioId,
+          symbol: { in: ["BINANCE:ETHUSDT", "ETHUSDT"] },
+        },
+      });
+
+      await prisma.holding.createMany({
+        data: [
+          {
+            portfolioId: mainPortfolioId,
+            symbol: "BINANCE:ETHUSDT",
+            assetType: "CRYPTO",
+            quantity: 3.0,
+            averageBuyPrice: 3000,
+            totalInvested: 9000,
+          },
+          {
+            portfolioId: mainPortfolioId,
+            symbol: "ETHUSDT",
+            assetType: "CRYPTO",
+            quantity: 2.0,
+            averageBuyPrice: 3000,
+            totalInvested: 6000,
+          },
+        ],
+      });
+
+      // Total held is 5.0. Sell 4.5 using ETH/USDT -> succeeds
+      const order = await postOrder({
+        portfolioId: mainPortfolioId,
+        symbol: "ETH/USDT",
+        assetType: "CRYPTO",
+        side: "SELL",
+        quantity: "4.5",
+      });
+      expect(order.status).toBe(201);
+      createdOrderIds.push(order.body.data.order.id);
+
+      // Attempt to sell another 1.0 (available is 0.5) -> fails
+      const excess = await postOrder({
+        portfolioId: mainPortfolioId,
+        symbol: "ETHUSDT",
+        assetType: "CRYPTO",
+        side: "SELL",
+        quantity: "1.0",
+      });
+      expect(excess.status).toBe(400);
+      expect(excess.body.error.code).toBe("INSUFFICIENT_POSITION");
+      expect(excess.body.error.details).toEqual({
+        required: "1",
+        available: "0.5",
+      });
+
+      // Cleanup
+      await prisma.order.deleteMany({
+        where: { id: order.body.data.order.id },
+      });
+      await prisma.holding.deleteMany({
+        where: {
+          portfolioId: mainPortfolioId,
+          symbol: { in: ["BINANCE:ETHUSDT", "ETHUSDT"] },
+        },
+      });
+    });
+
+    test("serializes concurrent SELL orders and rejects orders that exceed available position (stocks)", async () => {
+      const stockSymbol = `CR${timestamp % 1000000}`;
+      await prisma.holding.create({
+        data: {
+          portfolioId: mainPortfolioId,
+          symbol: stockSymbol,
+          assetType: "STOCK",
+          quantity: 5,
+          averageBuyPrice: 100,
+          totalInvested: 500,
+        },
+      });
+
+      // Two concurrent requests for 4 shares each. Total held is 5.
+      // Exactly one must succeed (201) and one must fail (400 INSUFFICIENT_POSITION).
+      const [res1, res2] = await Promise.all([
+        postOrder({
+          portfolioId: mainPortfolioId,
+          symbol: stockSymbol,
+          assetType: "STOCK",
+          side: "SELL",
+          quantity: "4",
+        }),
+        postOrder({
+          portfolioId: mainPortfolioId,
+          symbol: stockSymbol,
+          assetType: "STOCK",
+          side: "SELL",
+          quantity: "4",
+        }),
+      ]);
+
+      const statuses = [res1.status, res2.status].sort();
+      expect(statuses).toEqual([201, 400]);
+
+      const successRes = res1.status === 201 ? res1 : res2;
+      const failedRes = res1.status === 400 ? res1 : res2;
+
+      createdOrderIds.push(successRes.body.data.order.id);
+
+      expectErrorEnvelope(failedRes.body);
+      expect(failedRes.body.error.code).toBe("INSUFFICIENT_POSITION");
+      expect(failedRes.body.error.details).toEqual({
+        required: "4",
+        available: "1",
+      });
+
+      const pendingOrders = await prisma.order.findMany({
+        where: {
+          portfolioId: mainPortfolioId,
+          symbol: stockSymbol,
+          side: "SELL",
+          status: "PENDING",
+        },
+      });
+      expect(pendingOrders).toHaveLength(1);
+      expect(pendingOrders[0].quantity.toString()).toBe("4");
+
+      // Cleanup
+      await prisma.order.deleteMany({
+        where: { id: successRes.body.data.order.id },
+      });
+      await prisma.holding.deleteMany({
+        where: { portfolioId: mainPortfolioId, symbol: stockSymbol },
+      });
+    });
+
+    test("serializes concurrent SELL orders with equivalent crypto notations and fractional quantities", async () => {
+      await prisma.holding.deleteMany({
+        where: {
+          portfolioId: mainPortfolioId,
+          symbol: { in: ["BINANCE:SOLUSDT", "SOLUSDT", "SOL/USDT"] },
+        },
+      });
+
+      await prisma.holding.create({
+        data: {
+          portfolioId: mainPortfolioId,
+          symbol: "BINANCE:SOLUSDT",
+          assetType: "CRYPTO",
+          quantity: 5.5,
+          averageBuyPrice: 150,
+          totalInvested: 825,
+        },
+      });
+
+      const [res1, res2] = await Promise.all([
+        postOrder({
+          portfolioId: mainPortfolioId,
+          symbol: "SOLUSDT",
+          assetType: "CRYPTO",
+          side: "SELL",
+          quantity: "3.5",
+        }),
+        postOrder({
+          portfolioId: mainPortfolioId,
+          symbol: "SOL/USDT",
+          assetType: "CRYPTO",
+          side: "SELL",
+          quantity: "3.5",
+        }),
+      ]);
+
+      const statuses = [res1.status, res2.status].sort();
+      expect(statuses).toEqual([201, 400]);
+
+      const successRes = res1.status === 201 ? res1 : res2;
+      const failedRes = res1.status === 400 ? res1 : res2;
+
+      createdOrderIds.push(successRes.body.data.order.id);
+
+      expectErrorEnvelope(failedRes.body);
+      expect(failedRes.body.error.code).toBe("INSUFFICIENT_POSITION");
+      expect(failedRes.body.error.details).toEqual({
+        required: "3.5",
+        available: "2",
+      });
+
+      const pendingOrders = await prisma.order.findMany({
+        where: {
+          portfolioId: mainPortfolioId,
+          symbol: { in: ["SOLUSDT", "SOL/USDT"] },
+          side: "SELL",
+          status: "PENDING",
+        },
+      });
+      expect(pendingOrders).toHaveLength(1);
+      expect(pendingOrders[0].quantity.toString()).toBe("3.5");
+
+      // Cleanup
+      await prisma.order.deleteMany({
+        where: { id: successRes.body.data.order.id },
+      });
+      await prisma.holding.deleteMany({
+        where: {
+          portfolioId: mainPortfolioId,
+          symbol: { in: ["BINANCE:SOLUSDT", "SOLUSDT", "SOL/USDT"] },
+        },
+      });
     });
   });
 });

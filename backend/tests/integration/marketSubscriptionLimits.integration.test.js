@@ -207,6 +207,33 @@ describe("Market subscription limits", () => {
     ).resolves.toMatchObject({ ok: true, symbol: "GOOG" });
   });
 
+  it("does not reset the subscribe budget when the last symbol is unsubscribed", async () => {
+    await startServer({
+      marketMaxSubscriptionsPerSocket: 10,
+      marketSubscriptionRateLimit: 2,
+      marketSubscriptionRateWindowMs: 10000,
+    });
+    const client = await connect();
+
+    await expect(
+      emitWithAck(client, "subscribe", { symbol: "AAPL" }),
+    ).resolves.toMatchObject({ ok: true });
+
+    await expect(
+      emitWithAck(client, "unsubscribe", { symbol: "AAPL" }),
+    ).resolves.toMatchObject({ ok: true });
+
+    await expect(
+      emitWithAck(client, "subscribe", { symbol: "MSFT" }),
+    ).resolves.toMatchObject({ ok: true });
+
+    // Without the fix, unsubscribing the last symbol deleted the socket's
+    // sliding window, so this third subscribe started a fresh budget.
+    await expect(
+      emitWithAck(client, "subscribe", { symbol: "GOOG" }),
+    ).resolves.toMatchObject({ ok: false, code: "RATE_LIMITED" });
+  });
+
   it("accepts an explicit asset class for ambiguous symbols", async () => {
     await startServer();
     const client = await connect();

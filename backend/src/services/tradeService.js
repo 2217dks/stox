@@ -694,7 +694,7 @@ async function executeOrder(
   // Copy-trade fan-out is also post-commit and best-effort. A Redis outage
   // must never roll back or delay the source trade; the durable
   // CopyTradeExecution rows make a replayed job safe once Redis returns.
-  void enqueueCopyTradeFanOut({ tradeId: trade.id }).catch((error) => {
+  await enqueueCopyTradeFanOut({ tradeId: trade.id }).catch((error) => {
     logger.warn("Copy-trade fan-out enqueue failed", {
       tradeId: trade.id,
       message: error.message,

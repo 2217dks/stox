@@ -32,7 +32,7 @@ async function createNotificationEvent(
   });
 
   if (enqueue) {
-    enqueueNotificationEvent(notification.id);
+    await enqueueNotificationEvent(notification.id);
   }
 
   return notification;
@@ -41,7 +41,7 @@ async function createNotificationEvent(
 function enqueueNotificationEvent(notificationId) {
   // The database row is the source of truth. Queue errors are logged and
   // recovered by the periodic scan of PENDING notifications.
-  void enqueueNotificationDelivery({ notificationId }).catch((error) => {
+  return enqueueNotificationDelivery({ notificationId }).catch((error) => {
     logger.warn("Notification delivery enqueue failed", {
       notificationId,
       message: error.message,

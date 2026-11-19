@@ -8,3 +8,9 @@ process.env.RATE_LIMIT_ENABLED = "false";
 // for every order they create. Queue-specific suites set QUEUES_ENABLED=true
 // explicitly and use a unique QUEUE_PREFIX.
 process.env.QUEUES_ENABLED = "false";
+
+// authService refuses to start without this. Google ID tokens are only audience
+// checked when a client id is configured, so a missing value is a fail-open bug.
+// Test-only value; never a real credential.
+process.env.GOOGLE_CLIENT_ID =
+  process.env.GOOGLE_CLIENT_ID || "test-client-id.apps.googleusercontent.com";

@@ -1,7 +1,8 @@
 jest.mock("../../../src/config/database", () => ({
   user: { findUnique: jest.fn() },
   portfolio: { findFirst: jest.fn(), update: jest.fn() },
-  holding: { aggregate: jest.fn() },
+  holding: { aggregate: jest.fn(), findMany: jest.fn() },
+  order: { findMany: jest.fn() },
 }));
 
 jest.mock("../../../src/services/cacheService", () => ({
@@ -248,5 +249,229 @@ describe("reactivatePortfolio", () => {
     });
 
     expect(prisma.portfolio.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("listPortfolioHoldings", () => {
+  test("calculates authoritative reservedQuantity and availableQuantity across pending sell orders", async () => {
+    prisma.portfolio.findFirst.mockResolvedValue({
+      id: PORTFOLIO_ID,
+    });
+    prisma.holding.findMany.mockResolvedValue([
+      {
+        id: "holding-1",
+        portfolioId: PORTFOLIO_ID,
+        symbol: "AAPL",
+        assetType: "STOCK",
+        quantity: new Prisma.Decimal("10"),
+        averageBuyPrice: new Prisma.Decimal("150"),
+        totalInvested: new Prisma.Decimal("1500"),
+        isShort: false,
+        createdAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      },
+      {
+        id: "holding-2",
+        portfolioId: PORTFOLIO_ID,
+        symbol: "BINANCE:BTCUSDT",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("5.5"),
+        averageBuyPrice: new Prisma.Decimal("60000"),
+        totalInvested: new Prisma.Decimal("330000"),
+        isShort: false,
+        createdAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      },
+    ]);
+    prisma.order.findMany.mockResolvedValue([
+      {
+        symbol: "AAPL",
+        assetType: "STOCK",
+        quantity: new Prisma.Decimal("4"),
+      },
+      {
+        symbol: "BTC/USDT",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("2.0"),
+      },
+    ]);
+
+    const holdings = await portfolioService.listPortfolioHoldings(
+      USER_ID,
+      PORTFOLIO_ID,
+    );
+
+    expect(holdings).toHaveLength(2);
+    const aapl = holdings.find((h) => h.symbol === "AAPL");
+    expect(aapl.quantity).toBe("10");
+    expect(aapl.reservedQuantity).toBe("4");
+    expect(aapl.availableQuantity).toBe("6");
+
+    const btc = holdings.find((h) => h.symbol === "BINANCE:BTCUSDT");
+    expect(btc.quantity).toBe("5.5");
+    expect(btc.reservedQuantity).toBe("2");
+    expect(btc.availableQuantity).toBe("3.5");
+  });
+
+  test("aggregates authoritative reserved quantity when pending SELL orders exceed 100 records", async () => {
+    prisma.portfolio.findFirst.mockResolvedValue({
+      id: PORTFOLIO_ID,
+    });
+    prisma.holding.findMany.mockResolvedValue([
+      {
+        id: "holding-large",
+        portfolioId: PORTFOLIO_ID,
+        symbol: "TSLA",
+        assetType: "STOCK",
+        quantity: new Prisma.Decimal("50"),
+        averageBuyPrice: new Prisma.Decimal("200"),
+        totalInvested: new Prisma.Decimal("10000"),
+        isShort: false,
+        createdAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      },
+    ]);
+
+    // Create 150 pending SELL orders of 0.2 shares each (total 30 shares reserved)
+    const largePendingOrders = Array.from({ length: 150 }, () => ({
+      symbol: "TSLA",
+      assetType: "STOCK",
+      quantity: new Prisma.Decimal("0.2"),
+    }));
+    prisma.order.findMany.mockResolvedValue(largePendingOrders);
+
+    const holdings = await portfolioService.listPortfolioHoldings(
+      USER_ID,
+      PORTFOLIO_ID,
+    );
+
+    expect(holdings).toHaveLength(1);
+    const tsla = holdings[0];
+    expect(tsla.quantity).toBe("50");
+    expect(tsla.reservedQuantity).toBe("30");
+    expect(tsla.availableQuantity).toBe("20");
+  });
+
+  test("allocates reservations across multiple holding rows representing the same instrument without duplicating", async () => {
+    prisma.portfolio.findFirst.mockResolvedValue({ id: PORTFOLIO_ID });
+    prisma.holding.findMany.mockResolvedValue([
+      {
+        id: "holding-btc-1",
+        portfolioId: PORTFOLIO_ID,
+        symbol: "BINANCE:BTCUSDT",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("2.0"),
+        averageBuyPrice: new Prisma.Decimal("50000"),
+        totalInvested: new Prisma.Decimal("100000"),
+        isShort: false,
+        createdAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      },
+      {
+        id: "holding-btc-2",
+        portfolioId: PORTFOLIO_ID,
+        symbol: "BTC/USDT",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("3.0"),
+        averageBuyPrice: new Prisma.Decimal("60000"),
+        totalInvested: new Prisma.Decimal("180000"),
+        isShort: false,
+        createdAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      },
+    ]);
+
+    // Total reserved = 1.5 BTC across pending sell orders
+    prisma.order.findMany.mockResolvedValue([
+      {
+        symbol: "BTCUSDT",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("1.5"),
+      },
+    ]);
+
+    const holdings = await portfolioService.listPortfolioHoldings(
+      USER_ID,
+      PORTFOLIO_ID,
+    );
+
+    expect(holdings).toHaveLength(2);
+    // Row 1 held 2.0 -> takes 1.5 reserved, has 0.5 available
+    const row1 = holdings.find((h) => h.id === "holding-btc-1");
+    expect(row1.quantity).toBe("2");
+    expect(row1.reservedQuantity).toBe("1.5");
+    expect(row1.availableQuantity).toBe("0.5");
+
+    // Row 2 held 3.0 -> takes remaining 0.0 reserved, has 3.0 available
+    const row2 = holdings.find((h) => h.id === "holding-btc-2");
+    expect(row2.quantity).toBe("3");
+    expect(row2.reservedQuantity).toBe("0");
+    expect(row2.availableQuantity).toBe("3");
+
+    // Total reservation across both rows equals exactly 1.5 (counted exactly once)
+    const sumReserved = Number(row1.reservedQuantity) + Number(row2.reservedQuantity);
+    expect(sumReserved).toBe(1.5);
+    const sumAvailable = Number(row1.availableQuantity) + Number(row2.availableQuantity);
+    expect(sumAvailable).toBe(3.5);
+  });
+
+  test("handles pending sell reservations exceeding total holding quantity across multiple rows", async () => {
+    prisma.portfolio.findFirst.mockResolvedValue({ id: PORTFOLIO_ID });
+    prisma.holding.findMany.mockResolvedValue([
+      {
+        id: "holding-eth-1",
+        portfolioId: PORTFOLIO_ID,
+        symbol: "BINANCE:ETHUSDT",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("1.0"),
+        averageBuyPrice: new Prisma.Decimal("3000"),
+        totalInvested: new Prisma.Decimal("3000"),
+        isShort: false,
+        createdAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      },
+      {
+        id: "holding-eth-2",
+        portfolioId: PORTFOLIO_ID,
+        symbol: "ETH/USDT",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("2.0"),
+        averageBuyPrice: new Prisma.Decimal("3500"),
+        totalInvested: new Prisma.Decimal("7000"),
+        isShort: false,
+        createdAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      },
+    ]);
+
+    // Total pending sells = 5.0 ETH (exceeds total 3.0 ETH held)
+    prisma.order.findMany.mockResolvedValue([
+      {
+        symbol: "ETHUSDT",
+        assetType: "CRYPTO",
+        quantity: new Prisma.Decimal("5.0"),
+      },
+    ]);
+
+    const holdings = await portfolioService.listPortfolioHoldings(
+      USER_ID,
+      PORTFOLIO_ID,
+    );
+
+    expect(holdings).toHaveLength(2);
+    const row1 = holdings.find((h) => h.id === "holding-eth-1");
+    expect(row1.quantity).toBe("1");
+    expect(row1.reservedQuantity).toBe("1");
+    expect(row1.availableQuantity).toBe("0");
+
+    const row2 = holdings.find((h) => h.id === "holding-eth-2");
+    expect(row2.quantity).toBe("2");
+    expect(row2.reservedQuantity).toBe("2");
+    expect(row2.availableQuantity).toBe("0");
+
+    const sumReserved = Number(row1.reservedQuantity) + Number(row2.reservedQuantity);
+    expect(sumReserved).toBe(3);
+    const sumAvailable = Number(row1.availableQuantity) + Number(row2.availableQuantity);
+    expect(sumAvailable).toBe(0);
   });
 });

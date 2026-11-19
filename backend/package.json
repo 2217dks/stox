@@ -23,7 +23,8 @@
     ],
     "setupFilesAfterEnv": [
       "<rootDir>/tests/setupAfterEnv.js"
-    ]
+    ],
+    "globalTeardown": "<rootDir>/tests/globalTeardown.js"
   },
   "keywords": [],
   "author": "",

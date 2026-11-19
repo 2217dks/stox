@@ -444,6 +444,13 @@ async function runOrder(order, { quoteProvider, now, retryLimit }) {
   }
 
   if (!quote || !evaluateOrder(order, quote.price)) {
+    // Stamp the rotation cursor even though nothing happened: otherwise this
+    // resting order keeps its place at the head of every scan.
+    await prisma.order.updateMany({
+      where: { id: order.id, status: "PENDING" },
+      data: { lastExecutionAttemptAt: now },
+    });
+
     return "skipped";
   }
 
@@ -586,7 +593,19 @@ async function discoverPendingOrders({
       id: true,
       portfolioId: true,
     },
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    orderBy: [
+      // Rotate: the least recently evaluated order goes first. Without this a
+      // batch of resting orders keeps the same oldest 100 rows at the head and
+      // every order after them is never re-evaluated.
+      // Transient failures keep their retry budget and are retried first;
+      // they leave the set once maxAttempts is reached.
+      { executionAttempts: "desc" },
+      // Resting orders rotate: the least recently checked goes next, so a
+      // batch of untriggered orders cannot pin the oldest rows to the head.
+      { lastExecutionAttemptAt: { sort: "asc", nulls: "first" } },
+      { createdAt: "asc" },
+      { id: "asc" },
+    ],
     take: limit,
   });
 }
@@ -628,7 +647,16 @@ async function processPendingOrders({
         },
       },
     },
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    orderBy: [
+      // Transient failures keep their retry budget and are retried first;
+      // they leave the set once maxAttempts is reached.
+      { executionAttempts: "desc" },
+      // Resting orders rotate: the least recently checked goes next, so a
+      // batch of untriggered orders cannot pin the oldest rows to the head.
+      { lastExecutionAttemptAt: { sort: "asc", nulls: "first" } },
+      { createdAt: "asc" },
+      { id: "asc" },
+    ],
     take: limit,
   });
 

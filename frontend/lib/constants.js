@@ -1,6 +1,44 @@
 export const APP_NAME = "Stox";
 export const APP_TAGLINE = "Paper trading, real markets.";
 
+/**
+ * Quote-asset hints used only for display (ticker and pair labels).
+ *
+ * Requests are never gated by this list: Binance is the authority for which
+ * pairs exist. Longer ids must come first so suffix matching stays
+ * unambiguous. The one-letter `U` quote asset is intentionally omitted
+ * because it would mislabel short stock tickers.
+ */
+export const CRYPTO_QUOTE_ASSETS = [
+  "FDUSD",
+  "RLUSD",
+  "USDT",
+  "USDC",
+  "TUSD",
+  "BUSD",
+  "USDS",
+  "USD1",
+  "EURI",
+  "USDP",
+  "BTC",
+  "ETH",
+  "BNB",
+  "XRP",
+  "TRY",
+  "EUR",
+  "ZAR",
+  "BRL",
+  "ARS",
+  "JPY",
+  "MXN",
+  "COP",
+  "IDR",
+  "KZT",
+  "AED",
+  "THB",
+  "USD",
+];
+
 export const ORDER_SIDES = [
   { value: "BUY", label: "Buy", tone: "up" },
   { value: "SELL", label: "Sell", tone: "down" },
@@ -84,14 +122,35 @@ export const LEADERBOARD_PERIODS = [
   { value: "ALL_TIME", label: "All" },
 ];
 
-export const CHART_INTERVALS = [
-  { value: "5m", label: "5m", duration: 1000 * 60 * 60 * 12 },
-  { value: "15m", label: "15m", duration: 1000 * 60 * 60 * 24 * 3 },
-  { value: "1h", label: "1h", duration: 1000 * 60 * 60 * 24 * 14 },
-  { value: "4h", label: "4h", duration: 1000 * 60 * 60 * 24 * 60 },
-  { value: "1d", label: "1D", duration: 1000 * 60 * 60 * 24 * 365 },
-  { value: "1w", label: "1W", duration: 1000 * 60 * 60 * 24 * 365 * 3 },
+const MINUTE_MS = 60 * 1000;
+const HOUR_MS = 60 * MINUTE_MS;
+const DAY_MS = 24 * HOUR_MS;
+
+/**
+ * One control, one meaning: each entry is the visible window. The candle
+ * resolution is an implementation detail chosen to keep the window readable
+ * and within the backend's 1,000-candle limit.
+ */
+export const CHART_TIMEFRAMES = [
+  { value: "1D", label: "1D", interval: "5m", milliseconds: DAY_MS, candles: 288 },
+  { value: "1W", label: "1W", interval: "1h", milliseconds: 7 * DAY_MS, candles: 168 },
+  { value: "1M", label: "1M", interval: "4h", milliseconds: 30 * DAY_MS, candles: 180 },
+  { value: "3M", label: "3M", interval: "4h", milliseconds: 90 * DAY_MS, candles: 540 },
+  { value: "1Y", label: "1Y", interval: "1d", milliseconds: 365 * DAY_MS, candles: 365 },
+  { value: "3Y", label: "3Y", interval: "1w", milliseconds: 3 * 365 * DAY_MS, candles: 157 },
 ];
+
+export const MAX_CHART_CANDLES = 1000;
+
+export function chartRequestWindow(timeframeValue, now = Date.now()) {
+  const timeframe = CHART_TIMEFRAMES.find((item) => item.value === timeframeValue);
+  const selected = timeframe ?? CHART_TIMEFRAMES[0];
+  return {
+    from: now - selected.milliseconds,
+    to: now,
+    limit: Math.min(MAX_CHART_CANDLES, selected.candles),
+  };
+}
 
 export const CURATED_SYMBOLS = {
   STOCK: ["AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "AMD"],

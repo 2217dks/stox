@@ -372,6 +372,9 @@ async function generateLeaderboardSnapshots({ date = new Date(), signal = null }
         userId: true,
         startingBalance: true,
         cashBalance: true,
+        // League competition portfolios start from an arbitrary balance and
+        // must never influence the global board.
+        leagueMember: { select: { id: true } },
         holdings: {
           select: {
             totalInvested: true,
@@ -382,10 +385,14 @@ async function generateLeaderboardSnapshots({ date = new Date(), signal = null }
 
     assertNotAborted(signal);
 
+    const eligiblePortfolios = portfolios.filter(
+      (portfolio) => !portfolio.leagueMember,
+    );
+
     const totalsByUser = new Map();
     const userIdByPortfolioId = new Map();
 
-    for (const portfolio of portfolios) {
+    for (const portfolio of eligiblePortfolios) {
       addPortfolioToTotals(totalsByUser, portfolio);
       userIdByPortfolioId.set(portfolio.id, portfolio.userId);
     }
@@ -398,12 +405,12 @@ async function generateLeaderboardSnapshots({ date = new Date(), signal = null }
       const periodStart = getPeriodStart(period, snapshotDate);
       const periodPnlByUser = new Map();
 
-      if (periodStart && portfolios.length > 0) {
+      if (periodStart && eligiblePortfolios.length > 0) {
         const portfolioPnl = await transaction.trade.groupBy({
           by: ["portfolioId"],
           where: {
             portfolioId: {
-              in: portfolios.map((portfolio) => portfolio.id),
+              in: eligiblePortfolios.map((portfolio) => portfolio.id),
             },
             executedAt: {
               gte: periodStart,

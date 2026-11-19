@@ -3,6 +3,29 @@ const DEFAULT_TIMEOUT_MS = 5000;
 const MIN_TIMEOUT_MS = 100;
 const MAX_TIMEOUT_MS = 30000;
 
+const SUPPORTED_MARKET_DATA_PROVIDERS = Object.freeze([
+  "finnhub",
+  "binance",
+  "yahoo",
+]);
+
+const DEFAULT_PROVIDER_CHAINS = Object.freeze({
+  // Finnhub serves US stocks; Yahoo is the free stock-history fallback used
+  // when Finnhub's plan rejects /stock/candle. The chain order is priority.
+  STOCK: Object.freeze(["finnhub", "yahoo"]),
+  CRYPTO: Object.freeze(["binance"]),
+});
+
+const PROVIDER_CHAIN_ENV_NAMES = Object.freeze({
+  STOCK: "MARKET_DATA_STOCK_PROVIDERS",
+  CRYPTO: "MARKET_DATA_CRYPTO_PROVIDERS",
+});
+
+const PRIMARY_PROVIDER_ENV_NAMES = Object.freeze({
+  STOCK: "MARKET_DATA_STOCK_PROVIDER",
+  CRYPTO: "MARKET_DATA_CRYPTO_PROVIDER",
+});
+
 const DEFAULT_MAX_RETRIES = 2;
 const DEFAULT_RETRY_BASE_DELAY_MS = 200;
 const DEFAULT_RETRY_MAX_DELAY_MS = 2000;
@@ -65,29 +88,82 @@ function readFreshnessThreshold(value, fallback, envName) {
   return num;
 }
 
-function readProvider(value, fallback, envName) {
-  const provider = (value || fallback).trim().toLowerCase();
+function normalizeProviderId(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase();
+}
 
-  if (!provider) {
-    throw new Error(`${envName} must name a market-data provider.`);
+/**
+ * Read an ordered provider chain.
+ *
+ * `MARKET_DATA_<ASSET>_PROVIDERS` is the full chain and takes precedence. The
+ * older `MARKET_DATA_<ASSET>_PROVIDER` variable still selects the primary
+ * provider; the documented fallbacks remain after it so existing `.env` files
+ * keep the free Yahoo history fallback.
+ */
+function readProviderChain(assetClass, env) {
+  const chainEnvName = PROVIDER_CHAIN_ENV_NAMES[assetClass];
+  const primaryEnvName = PRIMARY_PROVIDER_ENV_NAMES[assetClass];
+  const defaults = DEFAULT_PROVIDER_CHAINS[assetClass];
+  const chainValue = env[chainEnvName];
+
+  if (chainValue !== undefined) {
+    const ids = String(chainValue)
+      .split(",")
+      .map(normalizeProviderId)
+      .filter(Boolean);
+    const unique = [...new Set(ids)];
+    if (unique.length === 0) {
+      throw new Error(
+        `${chainEnvName} must list at least one market-data provider.`,
+      );
+    }
+    for (const id of unique) {
+      if (!SUPPORTED_MARKET_DATA_PROVIDERS.includes(id)) {
+        throw new Error(
+          `Unknown market data provider '${id}' configured in ${chainEnvName}. Supported providers: ${SUPPORTED_MARKET_DATA_PROVIDERS.join(", ")}.`,
+        );
+      }
+    }
+    return unique;
   }
 
-  return provider;
+  const primaryValue = env[primaryEnvName];
+  if (primaryValue !== undefined && String(primaryValue).trim() === "") {
+    throw new Error(`${primaryEnvName} must name a market-data provider.`);
+  }
+
+  const primary =
+    normalizeProviderId(primaryValue) || defaults[0] || null;
+  if (!primary) {
+    throw new Error(`${primaryEnvName} must name a market-data provider.`);
+  }
+
+  if (!SUPPORTED_MARKET_DATA_PROVIDERS.includes(primary)) {
+    throw new Error(
+      `Unknown market data provider '${primary}' configured in ${primaryEnvName}. Supported providers: ${SUPPORTED_MARKET_DATA_PROVIDERS.join(", ")}.`,
+    );
+  }
+
+  return [...new Set([primary, ...defaults])];
 }
 
 function loadMarketDataConfig(env = process.env) {
+  const stockChain = readProviderChain("STOCK", env);
+  const cryptoChain = readProviderChain("CRYPTO", env);
+
   return Object.freeze({
+    // Ordered chains are the routing source of truth.
+    providerChains: Object.freeze({
+      STOCK: Object.freeze(stockChain),
+      CRYPTO: Object.freeze(cryptoChain),
+    }),
+    // Backwards-compatible single primary selection for callers that only need
+    // one provider id. New code should read `providerChains`.
     providerByAssetClass: Object.freeze({
-      STOCK: readProvider(
-        env.MARKET_DATA_STOCK_PROVIDER,
-        "finnhub",
-        "MARKET_DATA_STOCK_PROVIDER",
-      ),
-      CRYPTO: readProvider(
-        env.MARKET_DATA_CRYPTO_PROVIDER,
-        "binance",
-        "MARKET_DATA_CRYPTO_PROVIDER",
-      ),
+      STOCK: stockChain[0],
+      CRYPTO: cryptoChain[0],
     }),
 
     timeoutMs: readTimeout(env.MARKET_DATA_REQUEST_TIMEOUT_MS),
@@ -148,11 +224,18 @@ function loadMarketDataConfig(env = process.env) {
       binance: Object.freeze({
         baseUrl: env.BINANCE_API_URL?.trim() || "https://api.binance.com",
       }),
+      yahoo: Object.freeze({
+        baseUrl:
+          env.YAHOO_FINANCE_API_URL?.trim() ||
+          "https://query1.finance.yahoo.com",
+      }),
     }),
   });
 }
 
 module.exports = {
+  SUPPORTED_MARKET_DATA_PROVIDERS,
+  DEFAULT_PROVIDER_CHAINS,
   DEFAULT_TIMEOUT_MS,
   MIN_TIMEOUT_MS,
   MAX_TIMEOUT_MS,

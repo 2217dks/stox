@@ -1,5 +1,9 @@
 const { AppError } = require("../utils/errors");
 const { createMarketDataError } = require("../providers/marketDataErrors");
+const {
+  CRYPTO_QUOTE_ASSETS,
+  BINANCE_QUOTE_ASSETS,
+} = require("../utils/cryptoQuoteAssets");
 
 const ASSET_CLASSES = Object.freeze(["STOCK", "CRYPTO"]);
 const ASSET_CLASS_SET = new Set(ASSET_CLASSES);
@@ -17,7 +21,6 @@ const DEFAULT_ASSET_CLASS_BY_PROVIDER = Object.freeze({
   finnhub: "STOCK",
 });
 
-const CRYPTO_QUOTE_ASSETS = Object.freeze(["USDT", "BTC", "ETH"]);
 const CRYPTO_QUOTE_ASSET_SET = new Set(CRYPTO_QUOTE_ASSETS);
 
 const MAJOR_CRYPTO_BASE_ASSETS = Object.freeze([
@@ -46,9 +49,9 @@ const CRYPTO_PAIR_PATTERN = new RegExp(
   `^([A-Z0-9]{2,20})(?:${CRYPTO_QUOTE_ASSETS.join("|")})$`,
 );
 
-const CRYPTO_SLASH_PATTERN = new RegExp(
-  `^([A-Z0-9]{2,20})\\/(${CRYPTO_QUOTE_ASSETS.join("|")})$`,
-);
+const GENERAL_CRYPTO_SLASH_PATTERN = /^([A-Z0-9]{2,20})\/([A-Z0-9]{2,10})$/;
+
+const CRYPTO_SLASH_PATTERN = GENERAL_CRYPTO_SLASH_PATTERN;
 
 const STOCK_TICKER_PATTERN = /^[A-Z0-9]+(?:[._-][A-Z0-9]+)*$/;
 
@@ -133,6 +136,14 @@ function parseProviderPrefix(symbol) {
     );
   }
 
+  if ((clean.match(/\//g) || []).length > 1) {
+    throw createMarketDataError(
+      "The symbol format is invalid.",
+      400,
+      "MARKET_DATA_INVALID_REQUEST",
+    );
+  }
+
   return { raw: value, prefix, clean };
 }
 
@@ -155,10 +166,12 @@ function normalizeSymbol(symbol, options = {}) {
     }
 
     if (prefix === "BINANCE") {
-      const isCryptoSlash = CRYPTO_SLASH_PATTERN.test(clean);
+      const isCryptoSlash = GENERAL_CRYPTO_SLASH_PATTERN.test(clean);
       const isCryptoPair =
-        CRYPTO_PAIR_PATTERN.test(clean) && !KNOWN_AMBIGUOUS_STOCKS.has(clean);
-      if (!isCryptoSlash && !isCryptoPair) {
+        /^[A-Z0-9]{5,30}$/.test(clean) && !KNOWN_AMBIGUOUS_STOCKS.has(clean);
+      const isMajorBase =
+        /^[A-Z0-9]{2,5}$/.test(clean) && MAJOR_CRYPTO_BASE_ASSET_SET.has(clean);
+      if (!isCryptoSlash && !isCryptoPair && !isMajorBase) {
         throw createMarketDataError(
           "The cryptocurrency symbol format is invalid.",
           400,
@@ -228,7 +241,14 @@ function inferAssetClass(symbol) {
     return "STOCK";
   }
 
-  return CRYPTO_PAIR_PATTERN.test(clean) ? "CRYPTO" : "STOCK";
+  if (CRYPTO_PAIR_PATTERN.test(clean)) {
+    return "CRYPTO";
+  }
+
+  // Pair conventions are not restricted to a quote whitelist. A plain symbol
+  // of at least six characters is pair-shaped (ETHBTC, HYPERTRY, 1000SATSUSDT)
+  // while common stock tickers are shorter or use a dot/hyphen.
+  return /^[A-Z0-9]{6,30}$/.test(clean) ? "CRYPTO" : "STOCK";
 }
 
 /**
@@ -320,7 +340,7 @@ function toCanonicalSymbol(symbol, options = {}) {
     assetClass === "STOCK" &&
     (isUnambiguousCryptoSymbol(normalized) ||
       unprefixed.includes("/") ||
-      CRYPTO_SLASH_PATTERN.test(unprefixed))
+      GENERAL_CRYPTO_SLASH_PATTERN.test(unprefixed))
   ) {
     throw createMarketDataError(
       "Market data is not supported for this asset class.",
@@ -329,16 +349,45 @@ function toCanonicalSymbol(symbol, options = {}) {
     );
   }
 
-  const slashMatch = CRYPTO_SLASH_PATTERN.exec(unprefixed);
+  const slashMatch = GENERAL_CRYPTO_SLASH_PATTERN.exec(unprefixed);
   if (slashMatch) {
     return `${slashMatch[1]}${slashMatch[2]}`;
   }
 
-  if (assetClass === "CRYPTO" && unprefixed.includes("/")) {
+  if (unprefixed.includes("/")) {
     return unprefixed.replace(/\//g, "");
   }
 
   return unprefixed;
+}
+
+/**
+ * Canonicalize an instrument symbol for internal position matching across
+ * holdings, orders, and requests. Strips provider prefixes and slashes
+ * so that e.g. "BINANCE:BTCUSDT", "BTC/USDT", and "BTCUSDT" all resolve to
+ * the same canonical key ("BTCUSDT").
+ */
+function getCanonicalInstrumentSymbol(symbol, assetType) {
+  if (!symbol || typeof symbol !== "string") {
+    return "";
+  }
+  const raw = symbol.trim().toUpperCase();
+  const clean = raw.replace(/^(?:BINANCE|FINNHUB|YAHOO):/, "");
+  const normalizedAssetType = assetType
+    ? String(assetType).trim().toUpperCase()
+    : null;
+
+  try {
+    return toCanonicalSymbol(
+      raw,
+      normalizedAssetType ? { assetClass: normalizedAssetType } : {},
+    );
+  } catch {
+    if (normalizedAssetType === "CRYPTO" || clean.includes("/")) {
+      return clean.replace(/\//g, "");
+    }
+    return clean;
+  }
 }
 
 /**
@@ -370,20 +419,33 @@ function toProviderSymbol(symbol, providerId, options = {}) {
       );
     }
 
-    if (CRYPTO_PAIR_PATTERN.test(canonical)) {
-      return canonical;
+    const raw = String(symbol || "").trim().toUpperCase();
+    const isExplicitBinance = raw.startsWith("BINANCE:");
+    const hasSlash = raw.includes("/");
+
+    // Explicit Binance request, slash pair, or explicit CRYPTO asset class:
+    // Trust the request without a quote-asset whitelist gate.
+    if (isExplicitBinance || hasSlash || explicitAssetClass === "CRYPTO") {
+      if (/^[A-Z0-9]{5,30}$/.test(canonical)) {
+        return canonical;
+      }
+      if (/^[A-Z0-9]{2,5}$/.test(canonical)) {
+        const quote = options.quoteAsset || "USDT";
+        return `${canonical}${quote}`;
+      }
     }
 
-    if (explicitAssetClass === "CRYPTO" && /^[A-Z0-9]{2,10}$/.test(canonical)) {
-      const quote = options.quoteAsset || "USDT";
-      return `${canonical}${quote}`;
+    // Unprefixed without explicit CRYPTO asset class:
+    // Reject ambiguous stocks and non-pair stock tickers
+    if (KNOWN_AMBIGUOUS_STOCKS.has(canonical) || !/^[A-Z0-9]{6,30}$/.test(canonical)) {
+      throw createMarketDataError(
+        "The cryptocurrency symbol format is invalid.",
+        400,
+        "MARKET_DATA_INVALID_REQUEST",
+      );
     }
 
-    throw createMarketDataError(
-      "The cryptocurrency symbol format is invalid.",
-      400,
-      "MARKET_DATA_INVALID_REQUEST",
-    );
+    return canonical;
   }
 
   if (normalizedProvider === "finnhub") {
@@ -418,7 +480,8 @@ function toDisplaySymbol(symbol, options = {}) {
   const assetClass = normalizeAssetClass(options.assetClass, symbol);
 
   if (assetClass === "CRYPTO") {
-    const quote = CRYPTO_QUOTE_ASSETS.find((q) => canonical.endsWith(q));
+    const allQuotes = [...BINANCE_QUOTE_ASSETS, ...CRYPTO_QUOTE_ASSETS];
+    const quote = allQuotes.find((q) => canonical.endsWith(q));
     if (quote && canonical.length > quote.length) {
       const base = canonical.slice(0, -quote.length);
       return `${base}/${quote}`;
@@ -443,10 +506,14 @@ function parseSymbol(symbol, options = {}) {
   let exchange = provider ? provider.toUpperCase() : null;
 
   if (assetClass === "CRYPTO") {
-    const quote = CRYPTO_QUOTE_ASSETS.find((q) => canonicalSymbol.endsWith(q));
+    const allQuotes = [...BINANCE_QUOTE_ASSETS, ...CRYPTO_QUOTE_ASSETS];
+    const quote = allQuotes.find((q) => canonicalSymbol.endsWith(q));
     if (quote && canonicalSymbol.length > quote.length) {
       quoteAsset = quote;
       baseAsset = canonicalSymbol.slice(0, -quote.length);
+    } else {
+      baseAsset = canonicalSymbol;
+      quoteAsset = null;
     }
     exchange = "BINANCE";
   } else if (assetClass === "STOCK") {
@@ -488,7 +555,7 @@ async function resolveSymbol(symbol, options = {}) {
   const { prefix, clean } = parseProviderPrefix(symbol);
 
   // Step 2: Separate provider prefix and get underlying canonical symbol
-  const slashMatch = CRYPTO_SLASH_PATTERN.exec(clean);
+  const slashMatch = GENERAL_CRYPTO_SLASH_PATTERN.exec(clean);
   const canonicalSymbol = slashMatch
     ? `${slashMatch[1]}${slashMatch[2]}`
     : clean;
@@ -687,10 +754,12 @@ async function resolveSymbol(symbol, options = {}) {
   }
 
   if (prefix === "BINANCE") {
-    const isCryptoSlash = CRYPTO_SLASH_PATTERN.test(clean);
+    const isCryptoSlash = GENERAL_CRYPTO_SLASH_PATTERN.test(clean);
     const isCryptoPair =
-      CRYPTO_PAIR_PATTERN.test(clean) && !KNOWN_AMBIGUOUS_STOCKS.has(clean);
-    if (!isCryptoSlash && !isCryptoPair) {
+      /^[A-Z0-9]{5,30}$/.test(clean) && !KNOWN_AMBIGUOUS_STOCKS.has(clean);
+    const isMajorBase =
+      /^[A-Z0-9]{2,5}$/.test(clean) && MAJOR_CRYPTO_BASE_ASSET_SET.has(clean);
+    if (!isCryptoSlash && !isCryptoPair && !isMajorBase) {
       throw createMarketDataError(
         "The cryptocurrency symbol format is invalid.",
         400,
@@ -759,6 +828,7 @@ module.exports = {
   inferAssetClass,
   normalizeAssetClass,
   toCanonicalSymbol,
+  getCanonicalInstrumentSymbol,
   toProviderSymbol,
   toDisplaySymbol,
   parseSymbol,

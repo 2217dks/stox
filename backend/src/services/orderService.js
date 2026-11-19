@@ -10,6 +10,8 @@ const { recordOrderEvent, getOrderEvents } = require("./orderEventService");
 const {
   createOrderCancelledNotification,
 } = require("./notificationEvents");
+const cacheService = require("./cacheService");
+const { getCanonicalInstrumentSymbol } = require("./symbolMappingService");
 
 const ZERO = new Prisma.Decimal(0);
 const MAX_MONEY = new Prisma.Decimal("9999999999.99999999");
@@ -456,6 +458,8 @@ async function cancelOrder({ userId, orderId }) {
     throw error;
   }
 
+  await cacheService.invalidatePortfolio(order.portfolioId);
+
   const updated = await prisma.order.findUnique({
     where: {
       id: orderId,
@@ -589,25 +593,6 @@ async function createOrder({
         })
         .catch(() => {});
     }
-
-    if (side === "SELL") {
-      const holding = prisma.holding
-        ? await prisma.holding.findFirst({
-            where: {
-              portfolioId,
-              symbol: normalizedSymbol,
-            },
-          })
-        : null;
-      const heldQty = holding ? new Prisma.Decimal(holding.quantity) : ZERO;
-
-      if (heldQty.lt(new Prisma.Decimal(quantity))) {
-        throw AppError.badRequest(
-          "Short selling is not permitted in league portfolios. Insufficient shares held.",
-          "SHORT_SELLING_DISALLOWED",
-        );
-      }
-    }
   }
 
   // Calculate the reservation before opening the database transaction.
@@ -667,6 +652,95 @@ async function createOrder({
             available: availableCash.toString(),
           },
         );
+      }
+
+      if (side === "SELL") {
+        const canonicalTarget = getCanonicalInstrumentSymbol(
+          normalizedSymbol,
+          assetType,
+        );
+
+        const holdingDelegate = tx.holding || prisma.holding;
+        let totalHeld = ZERO;
+        if (holdingDelegate) {
+          if (typeof holdingDelegate.findMany === "function") {
+            const holdings = await holdingDelegate.findMany({
+              where: { portfolioId },
+              select: {
+                symbol: true,
+                assetType: true,
+                quantity: true,
+              },
+            });
+            for (const holding of holdings) {
+              const holdingAssetType = holding.assetType || assetType;
+              if (
+                holdingAssetType === assetType &&
+                getCanonicalInstrumentSymbol(holding.symbol, holdingAssetType) === canonicalTarget
+              ) {
+                totalHeld = totalHeld.plus(new Prisma.Decimal(holding.quantity));
+              }
+            }
+          } else if (typeof holdingDelegate.findFirst === "function") {
+            const holding = await holdingDelegate.findFirst({
+              where: {
+                portfolioId,
+                symbol: normalizedSymbol,
+              },
+            });
+            if (holding && holding.quantity) {
+              totalHeld = new Prisma.Decimal(holding.quantity);
+            }
+          }
+        }
+
+        let pendingSellQty = ZERO;
+        const orderDelegate = tx.order || prisma.order;
+        if (orderDelegate && typeof orderDelegate.findMany === "function") {
+          const pendingSellOrders = await orderDelegate.findMany({
+            where: {
+              portfolioId,
+              side: "SELL",
+              status: "PENDING",
+            },
+            select: {
+              symbol: true,
+              assetType: true,
+              quantity: true,
+            },
+          });
+          for (const pending of pendingSellOrders) {
+            const pendingAssetType = pending.assetType || assetType;
+            const matchesSymbol = pending.symbol
+              ? getCanonicalInstrumentSymbol(pending.symbol, pendingAssetType) === canonicalTarget
+              : true;
+            if (pendingAssetType === assetType && matchesSymbol) {
+              pendingSellQty = pendingSellQty.plus(
+                new Prisma.Decimal(pending.quantity),
+              );
+            }
+          }
+        }
+
+        const availableQty = totalHeld.minus(pendingSellQty);
+        const requestedQty = new Prisma.Decimal(quantity);
+
+        if (availableQty.lt(requestedQty)) {
+          if (leagueMember && leagueMember.league) {
+            throw AppError.badRequest(
+              "Short selling is not permitted in league portfolios. Insufficient shares held.",
+              "SHORT_SELLING_DISALLOWED",
+            );
+          }
+          throw AppError.badRequest(
+            "Insufficient position to sell.",
+            "INSUFFICIENT_POSITION",
+            {
+              required: requestedQty.toString(),
+              available: availableQty.gt(ZERO) ? availableQty.toString() : "0",
+            },
+          );
+        }
       }
 
       // Increase the portfolio's aggregate reservation.
@@ -751,15 +825,20 @@ async function createOrder({
     return serialized;
   }
 
+  // The summary endpoint serves availableCash = cash - reserved from a 30s
+  // cache. A new reservation must not leave the dashboard showing cash that
+  // is already committed.
+  await cacheService.invalidatePortfolio(portfolioId);
+
   triggerOrderStatus(serialized);
 
   // Best-effort: ask the BullMQ worker to fill the order immediately instead
   // of waiting for the next scan. The repeatable scan and the polling worker
   // remain the fallback, so a Redis outage never blocks order placement.
   // `enqueueOrderExecution` validates its payload and catches Redis errors;
-  // the catch here covers a validation failure so this floating promise can
+  // the catch here covers a validation failure so this promise can
   // never become an unhandled rejection.
-  void enqueueOrderExecution({
+  await enqueueOrderExecution({
     orderId: order.id,
     portfolioId: order.portfolioId,
   }).catch((error) => {

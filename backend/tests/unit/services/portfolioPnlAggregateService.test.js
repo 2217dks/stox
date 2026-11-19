@@ -35,6 +35,41 @@ describe("Portfolio Aggregate P&L Service", () => {
     });
   });
 
+  test("forwards the symbol filter to the unrealized half", async () => {
+    mockClient.portfolio.findFirst.mockResolvedValue({
+      id: portfolioId,
+      name: "Main Portfolio",
+      currency: "USD",
+      startingBalance: "10000.00000000",
+      cashBalance: "10000.00000000",
+      isActive: true,
+    });
+
+    realizedPnlService.getPortfolioRealizedPnl.mockResolvedValue({
+      realizedPnl: "0.00000000",
+    });
+    unrealizedPnlService.getPortfolioUnrealizedPnl.mockResolvedValue({
+      totalInvested: "0.00000000",
+      marketValue: "0.00000000",
+      unrealizedPnl: "0.00000000",
+      unrealizedPnlPct: "0.0000",
+      positions: [],
+    });
+
+    await getPortfolioAggregatePnl(userId, portfolioId, {
+      symbol: "AAPL",
+      client: mockClient,
+    });
+
+    expect(
+      unrealizedPnlService.getPortfolioUnrealizedPnl,
+    ).toHaveBeenCalledWith(
+      userId,
+      portfolioId,
+      expect.objectContaining({ symbol: "AAPL" }),
+    );
+  });
+
   test("aggregates realized and unrealized P&L without double counting fees or positions", async () => {
     mockClient.portfolio.findFirst.mockResolvedValue({
       id: portfolioId,

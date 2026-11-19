@@ -27,7 +27,13 @@ import { SegmentedControl } from "@/components/ui/segmented";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SymbolSearch } from "@/components/market/symbol-search";
 import { AlertDialog } from "@/components/alerts/alert-dialog";
-import { useApi, useMarketOverview, useQuotes } from "@/lib/hooks";
+import {
+  useActivePortfolio,
+  useApi,
+  useHoldings,
+  useMarketOverview,
+  useQuotes,
+} from "@/lib/hooks";
 import {
   CURATED_MARKET_META,
   CURATED_SYMBOLS,
@@ -36,9 +42,12 @@ import {
   formatCurrency,
   formatPercent,
   formatPrice,
+  formatQuantity,
+  isCrypto,
   tickerOf,
 } from "@/lib/format";
-import { cn } from "@/lib/utils";
+import { canonicalMarketSymbol, cn } from "@/lib/utils";
+import { aggregateHoldings } from "@/lib/position";
 
 const allCurated = [
   ...CURATED_SYMBOLS.STOCK,
@@ -90,30 +99,69 @@ function MarketsContent() {
     query: { status: "ACTIVE", limit: 5 },
     refreshInterval: 180000,
   });
+  const { portfolioId } = useActivePortfolio();
+  const {
+    data: holdingsData,
+    loading: holdingsLoading,
+    error: holdingsError,
+  } = useHoldings(portfolioId);
+
+  const holdingsByKey = useMemo(() => {
+    const grouped = new Map();
+    for (const holding of holdingsData?.holdings ?? []) {
+      if (Number(holding?.quantity) === 0) continue;
+      const canonical = canonicalMarketSymbol(holding?.symbol);
+      if (!canonical) continue;
+      const type =
+        holding?.assetType || (isCrypto(holding?.symbol) ? "CRYPTO" : "STOCK");
+      const key = `${type}:${canonical}`;
+      if (!grouped.has(key)) {
+        grouped.set(key, []);
+      }
+      grouped.get(key).push(holding);
+    }
+    const map = new Map();
+    for (const [key, list] of grouped.entries()) {
+      map.set(key, aggregateHoldings(list));
+    }
+    return map;
+  }, [holdingsData]);
 
   const rows = useMemo(() => {
-    const curatedRows = allCurated.map((symbol) => ({
-      symbol,
-      name: CURATED_MARKET_META[symbol]?.name || symbol,
-      assetType: CURATED_MARKET_META[symbol]?.assetType || assetTypes[symbol],
-      exchange: CURATED_MARKET_META[symbol]?.exchange || "—",
-      quote: quotes[symbol],
-    }));
+    const curatedRows = allCurated.map((symbol) => {
+      const assetType =
+        CURATED_MARKET_META[symbol]?.assetType ||
+        assetTypes[symbol] ||
+        (isCrypto(symbol) ? "CRYPTO" : "STOCK");
+      const canonical = canonicalMarketSymbol(symbol);
+      return {
+        symbol,
+        name: CURATED_MARKET_META[symbol]?.name || symbol,
+        assetType,
+        exchange: CURATED_MARKET_META[symbol]?.exchange || "—",
+        quote: quotes[symbol],
+        holding: holdingsByKey.get(`${assetType}:${canonical}`) || null,
+      };
+    });
 
     const existing = new Set(curatedRows.map((row) => row.symbol));
     const moverRows = (movers || [])
       .filter((mover) => !existing.has(mover.symbol))
-      .map((mover) => ({
-        symbol: mover.symbol,
-        name: tickerOf(mover.symbol),
-        assetType: "CRYPTO",
-        exchange: "Binance",
-        quote: {
-          price: mover.price,
-          changePercent: mover.changePercent,
-          volume: mover.quoteVolume,
-        },
-      }));
+      .map((mover) => {
+        const canonical = canonicalMarketSymbol(mover.symbol);
+        return {
+          symbol: mover.symbol,
+          name: tickerOf(mover.symbol),
+          assetType: "CRYPTO",
+          exchange: "Binance",
+          quote: {
+            price: mover.price,
+            changePercent: mover.changePercent,
+            volume: mover.quoteVolume,
+          },
+          holding: holdingsByKey.get(`CRYPTO:${canonical}`) || null,
+        };
+      });
 
     const merged = [...curatedRows, ...moverRows].filter(
       (row) => filter === "ALL" || row.assetType === filter,
@@ -126,7 +174,7 @@ function MarketsContent() {
         Math.abs(Number(a.quote?.changePercent || 0))
       );
     });
-  }, [quotes, movers, filter, sort]);
+  }, [quotes, movers, filter, sort, holdingsByKey]);
 
   const alerts = alertsData?.alerts ?? [];
 
@@ -341,6 +389,32 @@ function MarketsContent() {
                 align: "right",
                 render: (row) =>
                   row.quote?.low ? formatPrice(row.quote.low) : "—",
+              },
+              {
+                key: "position",
+                header: "Position",
+                align: "right",
+                render: (row) => {
+                  if (row.holding) {
+                    return (
+                      <div>
+                        <p className="tnum text-[11.5px] text-fg">
+                          {formatQuantity(row.holding.quantity)}
+                        </p>
+                        <p className="tnum text-[9.5px] text-fg-subtle">
+                          @ {formatPrice(row.holding.averageBuyPrice)} avg
+                        </p>
+                      </div>
+                    );
+                  }
+                  if (holdingsLoading) {
+                    return <span className="text-fg-subtle">…</span>;
+                  }
+                  if (holdingsError) {
+                    return <span className="text-fg-subtle">Unavailable</span>;
+                  }
+                  return <span className="text-fg-subtle">—</span>;
+                },
               },
               {
                 key: "trade",

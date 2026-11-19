@@ -184,6 +184,9 @@ function createOrderFixture(portfolioId, spec) {
 // ------------------------------------------------------------
 
 beforeAll(async () => {
+  // Clear leftover orders from prior suites so global listing queries are deterministic.
+  await prisma.order.deleteMany({});
+
   const admin = await register(accounts.admin);
   const ownerA = await register(accounts.ownerA);
   const ownerB = await register(accounts.ownerB);

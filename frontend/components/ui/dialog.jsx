@@ -29,6 +29,7 @@ export function DialogContent({
       <DialogPrimitive.Content
         className={cn(
           "fixed left-1/2 top-1/2 z-50 w-[calc(100%-24px)] -translate-x-1/2 -translate-y-1/2 rounded-[16px] border border-line bg-surface shadow-[var(--shadow-modal)]",
+          "scale-100",
           "max-h-[calc(100dvh-32px)] overflow-y-auto",
           "data-[state=open]:animate-[dialog-in_220ms_cubic-bezier(0.23,1,0.32,1)]",
           sizes[size],

@@ -1,16 +1,12 @@
 const { Prisma } = require("@prisma/client");
 const prisma = require("../config/database");
 const { AppError } = require("../utils/errors");
+const { toDecimalString } = require("../utils/decimal");
 const { toUtcDateString, parseUtcDateBoundary } = require("../utils/dateUtils");
 
 const ZERO = new Prisma.Decimal(0);
 const MAX_RANGE_DAYS = 365;
 
-function toDecimalString(val, decimals = 8) {
-  if (val === null || val === undefined) return null;
-  const d = val instanceof Prisma.Decimal ? val : new Prisma.Decimal(val);
-  return d.toFixed(decimals);
-}
 
 /**
  * Expose historical portfolio state for a requested time range using stored snapshots
@@ -80,7 +76,11 @@ async function getPortfolioHistoricalState(
   }
 
   const msPerDay = 24 * 60 * 60 * 1000;
-  const requestedDays = Math.round((endDate.getTime() - startDate.getTime()) / msPerDay) + 1;
+  // endDate is 23:59:59.999 of the final day, so the difference is already one
+  // day short of the inclusive count. Rounding up added an extra day and made
+  // an exact 365-day request report 366.
+  const requestedDays =
+    Math.floor((endDate.getTime() - startDate.getTime()) / msPerDay) + 1;
 
   if (requestedDays > MAX_RANGE_DAYS) {
     throw AppError.badRequest(

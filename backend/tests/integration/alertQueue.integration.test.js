@@ -146,6 +146,7 @@ describe("Alert queue integration", () => {
 
     await closeQueues();
     await prisma.$disconnect();
+    process.env.QUEUES_ENABLED = "false";
   });
 
   test("evaluates one alert, triggers it, and creates one notification", async () => {

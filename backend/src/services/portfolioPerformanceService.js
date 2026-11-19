@@ -1,6 +1,7 @@
 const { Prisma } = require("@prisma/client");
 const prisma = require("../config/database");
 const { AppError } = require("../utils/errors");
+const { toDecimalString } = require("../utils/decimal");
 const { resolveDateRange } = require("./portfolioSeriesService");
 const { parseUtcDateBoundary } = require("../utils/dateUtils");
 
@@ -14,11 +15,6 @@ function toIsoDateString(date) {
   return d.toISOString().slice(0, 10);
 }
 
-function toDecimalString(val, decimals = 8) {
-  if (val === null || val === undefined) return null;
-  const d = val instanceof Prisma.Decimal ? val : new Prisma.Decimal(val);
-  return d.toFixed(decimals);
-}
 
 /**
  * Expose portfolio performance for a requested period using the approved return methodology.

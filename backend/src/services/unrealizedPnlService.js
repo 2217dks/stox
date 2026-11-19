@@ -2,6 +2,7 @@ const { Prisma } = require("@prisma/client");
 const prisma = require("../config/database");
 const defaultMarketData = require("./marketData");
 const { AppError } = require("../utils/errors");
+const { toDecimalString } = require("../utils/decimal");
 
 const ZERO = new Prisma.Decimal(0);
 const ONE_HUNDRED = new Prisma.Decimal(100);
@@ -21,11 +22,6 @@ function toDecimal(val) {
   }
 }
 
-function toDecimalString(val, decimals = 8) {
-  if (val === null || val === undefined) return null;
-  const d = toDecimal(val);
-  return d.toFixed(decimals);
-}
 
 function parseQuoteTimestamp(quote) {
   const raw = quote?.timestamp ?? quote?.asOf ?? quote?.t;
@@ -123,7 +119,9 @@ function calculatePositionUnrealizedPnl(holding, quote, options = {}) {
 
   const freshness = evaluateHoldingFreshness(quote, holding.assetType, options);
 
-  if (freshness.isStale && options.rejectStale) {
+  // allowStale is the documented override: with both flags set the caller
+  // explicitly asked for stale values to be included.
+  if (freshness.isStale && options.rejectStale && !options.allowStale) {
     throw new AppError(
       `Market data quote is stale for ${holding.symbol}.`,
       {
@@ -183,6 +181,7 @@ async function getPortfolioUnrealizedPnl(
     allowStale = false,
     maxAgeSeconds = undefined,
     asOf = new Date(),
+    symbol = null,
   } = {},
 ) {
   const portfolio = await prisma.portfolio.findFirst({
@@ -207,6 +206,7 @@ async function getPortfolioUnrealizedPnl(
     where: {
       portfolioId,
       quantity: { gt: 0 },
+      ...(symbol ? { symbol } : {}),
     },
     orderBy: { symbol: "asc" },
   });

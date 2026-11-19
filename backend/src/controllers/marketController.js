@@ -48,6 +48,22 @@ async function getStockQuote(req, res, next) {
   }
 }
 
+async function getQuotes(req, res, next) {
+  try {
+    const { symbols, assetTypes } = req.validatedQuery;
+    const quotes = assetTypes
+      ? await marketDataService.getQuotes(symbols, { assetTypes })
+      : await marketDataService.getQuotes(symbols);
+
+    return res.status(200).json({
+      success: true,
+      data: { quotes },
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function searchMarketSymbols(req, res, next) {
   try {
     const { query, ...options } = req.validatedQuery;
@@ -100,4 +116,5 @@ module.exports = {
   getMarketOverview,
   searchMarketSymbols,
   getStockQuote,
+  getQuotes,
 };

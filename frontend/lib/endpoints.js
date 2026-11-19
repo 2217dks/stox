@@ -117,6 +117,20 @@ export const marketApi = {
     assetClass === "CRYPTO"
       ? marketApi.cryptoQuote(symbol)
       : marketApi.stockQuote(symbol),
+  quotes: (symbols, assetTypes = {}) => {
+    const query = { symbols: symbols.join(",") };
+    if (
+      assetTypes &&
+      typeof assetTypes === "object" &&
+      Object.keys(assetTypes).length > 0
+    ) {
+      query.assetTypes = Object.entries(assetTypes)
+        .filter(([_, v]) => Boolean(v))
+        .map(([k, v]) => `${k}:${v}`)
+        .join(",");
+    }
+    return call("/market/quotes", { query });
+  },
   history: (symbol, query) =>
     call(`/market/history/${encodeURIComponent(symbol)}`, { query }),
   overview: (query) => call("/market/overview", { query }),
