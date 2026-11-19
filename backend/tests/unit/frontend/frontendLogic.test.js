@@ -78,6 +78,15 @@ function serializeQuotesQuery(symbols = [], assetTypes = {}) {
   return query;
 }
 
+/** isCrypto heuristic matching frontend/lib/format.js */
+function isCrypto(symbol = "", assetType) {
+  if (assetType) return assetType === "CRYPTO";
+  const upper = String(symbol).trim().toUpperCase();
+  const clean = upper.replace(/^BINANCE:/, "");
+  if (upper.startsWith("BINANCE:") || clean.includes("/")) return true;
+  return /^[A-Z0-9]{6,30}$/.test(clean);
+}
+
 /** Position calculation matching frontend/lib/hooks.js (usePosition) */
 function calculatePosition({
   holding = null,
@@ -100,13 +109,39 @@ function calculatePosition({
   }
 
   const rawList = holdings.length > 0 ? holdings : holding ? [holding] : [];
-  const matchedHoldings = rawList.filter((item) => {
-    if (canonicalMarketSymbol(item.symbol) !== symbolKey) return false;
-    if (assetType && item.assetType && item.assetType !== assetType) {
-      return false;
+  const matches = rawList.filter(
+    (item) => canonicalMarketSymbol(item.symbol) === symbolKey,
+  );
+  if (!matches.length) {
+    return {
+      holding: null,
+      quantity: 0,
+      reservedQuantity: 0,
+      availableQuantity: 0,
+      averageBuyPrice: 0,
+      totalInvested: 0,
+      hasPosition: false,
+    };
+  }
+
+  let matchedHoldings = matches;
+  if (assetType) {
+    matchedHoldings = matches.filter((item) => item.assetType === assetType);
+  } else {
+    const firstType = matches[0]?.assetType;
+    const hasMixedTypes = matches.some(
+      (item) => item.assetType && firstType && item.assetType !== firstType,
+    );
+    if (hasMixedTypes) {
+      const preferredType = isCrypto(targetSymbol) ? "CRYPTO" : "STOCK";
+      const preferredMatches = matches.filter(
+        (item) => item.assetType === preferredType,
+      );
+      matchedHoldings = preferredMatches.length > 0
+        ? preferredMatches
+        : matches.filter((item) => item.assetType === firstType);
     }
-    return true;
-  });
+  }
 
   if (!matchedHoldings.length) {
     return {
@@ -540,7 +575,158 @@ describe("Frontend Regression & Contract Tests", () => {
       expect(pos.hasPosition).toBe(true);
     });
 
-    test("source verification: usePosition in hooks.js aggregates holdings and uses authoritative reservations", () => {
+    test("Test 1: same canonical symbol with different asset types isolates strictly by asset type", () => {
+      const holdings = [
+        {
+          symbol: "BTCUSDT",
+          assetType: "CRYPTO",
+          quantity: "2",
+          reservedQuantity: "0.5",
+          totalInvested: "100",
+        },
+        {
+          symbol: "BTCUSDT",
+          assetType: "STOCK",
+          quantity: "10",
+          reservedQuantity: "2",
+          totalInvested: "500",
+        },
+      ];
+
+      // Requesting STOCK
+      const stockPos = calculatePosition({
+        holdings,
+        targetSymbol: "BTCUSDT",
+        assetType: "STOCK",
+      });
+      expect(stockPos.quantity).toBe(10);
+      expect(stockPos.reservedQuantity).toBe(2);
+      expect(stockPos.availableQuantity).toBe(8);
+      expect(stockPos.totalInvested).toBe(500);
+      expect(stockPos.hasPosition).toBe(true);
+
+      // Requesting CRYPTO
+      const cryptoPos = calculatePosition({
+        holdings,
+        targetSymbol: "BTCUSDT",
+        assetType: "CRYPTO",
+      });
+      expect(cryptoPos.quantity).toBe(2);
+      expect(cryptoPos.reservedQuantity).toBe(0.5);
+      expect(cryptoPos.availableQuantity).toBe(1.5);
+      expect(cryptoPos.totalInvested).toBe(100);
+      expect(cryptoPos.hasPosition).toBe(true);
+    });
+
+    test("Test 2: returns empty position when requested asset type does not exist, never falling back", () => {
+      const holdings = [
+        {
+          symbol: "BTCUSDT",
+          assetType: "CRYPTO",
+          quantity: "2",
+          reservedQuantity: "0.5",
+          totalInvested: "100",
+        },
+      ];
+
+      const pos = calculatePosition({
+        holdings,
+        targetSymbol: "BTCUSDT",
+        assetType: "STOCK",
+      });
+      expect(pos.holding).toBeNull();
+      expect(pos.quantity).toBe(0);
+      expect(pos.reservedQuantity).toBe(0);
+      expect(pos.availableQuantity).toBe(0);
+      expect(pos.hasPosition).toBe(false);
+    });
+
+    test("Test 3: aggregates multiple holdings of the same asset type correctly", () => {
+      const holdings = [
+        {
+          symbol: "BINANCE:BTCUSDT",
+          assetType: "CRYPTO",
+          quantity: "2.5",
+          reservedQuantity: "0.5",
+          totalInvested: "150000",
+        },
+        {
+          symbol: "BTC/USDT",
+          assetType: "CRYPTO",
+          quantity: "1.5",
+          reservedQuantity: "0.0",
+          totalInvested: "90000",
+        },
+      ];
+
+      const pos = calculatePosition({
+        holdings,
+        targetSymbol: "BTCUSDT",
+        assetType: "CRYPTO",
+      });
+      expect(pos.quantity).toBe(4.0);
+      expect(pos.reservedQuantity).toBe(0.5);
+      expect(pos.availableQuantity).toBe(3.5);
+      expect(pos.totalInvested).toBe(240000);
+      expect(pos.averageBuyPrice).toBe(60000);
+      expect(pos.hasPosition).toBe(true);
+    });
+
+    test("Test 4: canonical symbol variations (BTCUSDT, BINANCE:BTCUSDT, BTC/USDT) match seamlessly", () => {
+      const holdings = [
+        {
+          symbol: "BINANCE:BTCUSDT",
+          assetType: "CRYPTO",
+          quantity: "1.0",
+          reservedQuantity: "0.2",
+          totalInvested: "60000",
+        },
+        {
+          symbol: "BTC/USDT",
+          assetType: "CRYPTO",
+          quantity: "2.0",
+          reservedQuantity: "0.3",
+          totalInvested: "120000",
+        },
+      ];
+
+      const pos1 = calculatePosition({ holdings, targetSymbol: "BTCUSDT", assetType: "CRYPTO" });
+      const pos2 = calculatePosition({ holdings, targetSymbol: "BINANCE:BTCUSDT", assetType: "CRYPTO" });
+      const pos3 = calculatePosition({ holdings, targetSymbol: "BTC/USDT", assetType: "CRYPTO" });
+
+      expect(pos1.quantity).toBe(3.0);
+      expect(pos2.quantity).toBe(3.0);
+      expect(pos3.quantity).toBe(3.0);
+      expect(pos1.availableQuantity).toBe(2.5);
+      expect(pos2.availableQuantity).toBe(2.5);
+      expect(pos3.availableQuantity).toBe(2.5);
+    });
+
+    test("Test 5: handles omitted explicitAssetType safely without cross-asset-class contamination", () => {
+      // 5a. Single asset type present: aggregates naturally
+      const singleClassHoldings = [
+        { symbol: "BINANCE:BTCUSDT", assetType: "CRYPTO", quantity: "2.0", reservedQuantity: "0.5", totalInvested: "120000" },
+        { symbol: "BTC/USDT", assetType: "CRYPTO", quantity: "1.0", reservedQuantity: "0.0", totalInvested: "60000" },
+      ];
+      const posA = calculatePosition({ holdings: singleClassHoldings, targetSymbol: "BTCUSDT" });
+      expect(posA.quantity).toBe(3.0);
+      expect(posA.reservedQuantity).toBe(0.5);
+      expect(posA.availableQuantity).toBe(2.5);
+
+      // 5b. Mixed asset types present: does not aggregate stock and crypto together; isolates by natural asset class
+      const mixedHoldings = [
+        { symbol: "BTCUSDT", assetType: "CRYPTO", quantity: "2", reservedQuantity: "0.5", totalInvested: "100" },
+        { symbol: "BTCUSDT", assetType: "STOCK", quantity: "10", reservedQuantity: "2", totalInvested: "500" },
+      ];
+      const posB = calculatePosition({ holdings: mixedHoldings, targetSymbol: "BTCUSDT" });
+      // BTCUSDT is naturally a CRYPTO pair, so it isolates to CRYPTO and does NOT include the 10 shares of STOCK
+      expect(posB.quantity).toBe(2);
+      expect(posB.reservedQuantity).toBe(0.5);
+      expect(posB.availableQuantity).toBe(1.5);
+      expect(posB.totalInvested).toBe(100);
+    });
+
+    test("source verification: usePosition in hooks.js enforces strict asset-type isolation without fallback", () => {
       const hooksSrc = fs.readFileSync(path.join(frontendDir, "lib/hooks.js"), "utf8");
 
       expect(hooksSrc).toContain("canonicalMarketSymbol(item.symbol) === symbolKey");
@@ -548,6 +734,10 @@ describe("Frontend Regression & Contract Tests", () => {
       expect(hooksSrc).toContain("aggregatedHolding");
       expect(hooksSrc).toContain("totalReserved");
       expect(hooksSrc).toContain("availableQuantity: availableQty.toString()");
+      // Strict asset-type filtering without fallback
+      expect(hooksSrc).toContain("return matches.filter(");
+      expect(hooksSrc).toContain("item.assetType === explicitAssetType");
+      expect(hooksSrc).not.toContain("if (typeMatches.length > 0) return typeMatches");
       // Authoritative backend reservations eliminate the redundant client-side pending-sells query with limit: 100
       expect(hooksSrc).not.toContain("side: \"SELL\"");
       expect(hooksSrc).not.toContain("limit: 100");
