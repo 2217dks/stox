@@ -87,14 +87,18 @@ function calculatePosition({ holding, pendingOrders = [], targetSymbol }) {
       ? holding
       : null;
 
-  const reservedQuantity = pendingOrders
-    .filter(
-      (order) =>
-        order.side === "SELL" &&
-        order.status === "PENDING" &&
-        canonicalMarketSymbol(order.symbol) === symbolKey,
-    )
-    .reduce((total, order) => total + Number(order.quantity || 0), 0);
+  const reservedQuantity =
+    matchedHolding?.reservedQuantity !== undefined &&
+    matchedHolding?.reservedQuantity !== null
+      ? Number(matchedHolding.reservedQuantity)
+      : pendingOrders
+          .filter(
+            (order) =>
+              order.side === "SELL" &&
+              order.status === "PENDING" &&
+              canonicalMarketSymbol(order.symbol) === symbolKey,
+          )
+          .reduce((total, order) => total + Number(order.quantity || 0), 0);
 
   const quantity = Number(matchedHolding?.quantity ?? 0);
   const netReserved = Math.min(Math.max(reservedQuantity, 0), quantity);
@@ -306,6 +310,32 @@ describe("Frontend Regression & Contract Tests", () => {
       expect(pos.availableQuantity).toBe(0);
       expect(pos.hasPosition).toBe(false);
       expect(pos.holding).toBeNull();
+    });
+
+    test("accurately reflects reserved and available position when holding.reservedQuantity covers > 100 pending SELL orders", () => {
+      // User holds 50 shares of TSLA
+      // Backend aggregated 150 pending sell orders of 0.2 shares each into reservedQuantity: "30"
+      // Frontend client-side /orders query only returned first page (100 orders = 20 shares)
+      const pos = calculatePosition({
+        holding: {
+          symbol: "TSLA",
+          quantity: "50",
+          reservedQuantity: "30",
+          availableQuantity: "20",
+        },
+        pendingOrders: Array.from({ length: 100 }, () => ({
+          symbol: "TSLA",
+          side: "SELL",
+          status: "PENDING",
+          quantity: "0.2",
+        })),
+        targetSymbol: "TSLA",
+      });
+
+      expect(pos.quantity).toBe(50);
+      expect(pos.reservedQuantity).toBe(30);
+      expect(pos.availableQuantity).toBe(20);
+      expect(pos.hasPosition).toBe(true);
     });
 
     test("source verification: usePosition in hooks.js implements sell netting", () => {

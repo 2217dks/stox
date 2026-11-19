@@ -842,6 +842,77 @@ describe("createOrder cash reservations", () => {
       });
     });
 
+    test("matches holding stored as unprefixed BTCUSDT when SELL request uses BINANCE:BTCUSDT", async () => {
+      const tx = createTransactionMock({
+        holdingQuantity: null,
+      });
+      // Holding stored as unprefixed BTCUSDT
+      tx.holding.findMany = jest.fn().mockResolvedValue([
+        {
+          id: "holding-unprefixed",
+          portfolioId: PORTFOLIO_ID,
+          symbol: "BTCUSDT",
+          assetType: "CRYPTO",
+          quantity: "5.0",
+        },
+      ]);
+      tx.order.findMany = jest.fn().mockResolvedValue([]);
+
+      // Sell using BINANCE:BTCUSDT
+      const order = await orderService.createOrder({
+        userId: USER_ID,
+        portfolioId: PORTFOLIO_ID,
+        symbol: "BINANCE:BTCUSDT",
+        assetType: "CRYPTO",
+        side: "SELL",
+        type: "MARKET",
+        quantity: "3.0",
+      });
+
+      expect(order).toMatchObject({
+        symbol: "BINANCE:BTCUSDT",
+        side: "SELL",
+        quantity: "3.0",
+      });
+    });
+
+    test("proves unrelated symbols are not treated as equivalent", async () => {
+      const tx = createTransactionMock({
+        holdingQuantity: null,
+      });
+      // Holding is BTCUSDT
+      tx.holding.findMany = jest.fn().mockResolvedValue([
+        {
+          id: "holding-btc",
+          portfolioId: PORTFOLIO_ID,
+          symbol: "BTCUSDT",
+          assetType: "CRYPTO",
+          quantity: "10.0",
+        },
+      ]);
+      tx.order.findMany = jest.fn().mockResolvedValue([]);
+
+      // Attempting to sell ETHUSDT must fail with INSUFFICIENT_POSITION
+      await expect(
+        orderService.createOrder({
+          userId: USER_ID,
+          portfolioId: PORTFOLIO_ID,
+          symbol: "ETHUSDT",
+          assetType: "CRYPTO",
+          side: "SELL",
+          type: "MARKET",
+          quantity: "1.0",
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: "INSUFFICIENT_POSITION",
+        details: {
+          available: "0",
+          required: "1",
+        },
+      });
+    });
+
     test("aggregates multiple holdings for the same canonical instrument", async () => {
       const tx = createTransactionMock({
         holdingQuantity: null,

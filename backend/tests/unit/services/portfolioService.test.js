@@ -312,4 +312,43 @@ describe("listPortfolioHoldings", () => {
     expect(btc.reservedQuantity).toBe("2");
     expect(btc.availableQuantity).toBe("3.5");
   });
+
+  test("aggregates authoritative reserved quantity when pending SELL orders exceed 100 records", async () => {
+    prisma.portfolio.findFirst.mockResolvedValue({
+      id: PORTFOLIO_ID,
+    });
+    prisma.holding.findMany.mockResolvedValue([
+      {
+        id: "holding-large",
+        portfolioId: PORTFOLIO_ID,
+        symbol: "TSLA",
+        assetType: "STOCK",
+        quantity: new Prisma.Decimal("50"),
+        averageBuyPrice: new Prisma.Decimal("200"),
+        totalInvested: new Prisma.Decimal("10000"),
+        isShort: false,
+        createdAt: CREATED_AT,
+        updatedAt: CREATED_AT,
+      },
+    ]);
+
+    // Create 150 pending SELL orders of 0.2 shares each (total 30 shares reserved)
+    const largePendingOrders = Array.from({ length: 150 }, () => ({
+      symbol: "TSLA",
+      assetType: "STOCK",
+      quantity: new Prisma.Decimal("0.2"),
+    }));
+    prisma.order.findMany.mockResolvedValue(largePendingOrders);
+
+    const holdings = await portfolioService.listPortfolioHoldings(
+      USER_ID,
+      PORTFOLIO_ID,
+    );
+
+    expect(holdings).toHaveLength(1);
+    const tsla = holdings[0];
+    expect(tsla.quantity).toBe("50");
+    expect(tsla.reservedQuantity).toBe("30");
+    expect(tsla.availableQuantity).toBe("20");
+  });
 });
