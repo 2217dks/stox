@@ -143,3 +143,24 @@ describe("order scan scheduler", () => {
     );
   });
 });
+
+describe("explicit cron schedules", () => {
+  test("passes a cron schedule through instead of a fixed interval", async () => {
+    const log = makeLog();
+    const ensureScheduler = jest.fn(async () => ({ scheduled: true }));
+
+    startScanScheduler({
+      ensureScheduler,
+      intervalMs: 60000,
+      schedule: { cron: "0 1 * * *", tz: "UTC" },
+      log,
+    });
+
+    await flush();
+
+    expect(ensureScheduler).toHaveBeenCalledWith({
+      cron: "0 1 * * *",
+      tz: "UTC",
+    });
+  });
+});

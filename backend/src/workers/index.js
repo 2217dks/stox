@@ -17,6 +17,9 @@ const {
 const { ensureAlertScanScheduler } = require("../queues/alertQueue");
 const { ensureCopyTradeScanScheduler } = require("../queues/copyTradeQueue");
 const {
+  DEFAULT_SNAPSHOT_CRON,
+  DEFAULT_SNAPSHOT_TZ,
+  DEFAULT_RETENTION_CRON,
   ensurePortfolioSnapshotScheduler,
   ensureSnapshotRetentionScheduler,
 } = require("../queues/portfolioSnapshotQueue");
@@ -82,12 +85,6 @@ const COPY_TRADE_SCAN_INTERVAL_MS =
   Number.parseInt(process.env.COPY_TRADE_SCAN_INTERVAL_MS, 10) ||
   DEFAULT_COPY_TRADE_SCAN_INTERVAL_MS;
 
-const SNAPSHOT_SCAN_INTERVAL_MS =
-  Number.parseInt(process.env.SNAPSHOT_SCAN_INTERVAL_MS, 10) || 60000;
-
-const SNAPSHOT_RETENTION_INTERVAL_MS =
-  Number.parseInt(process.env.SNAPSHOT_RETENTION_INTERVAL_MS, 10) || 86400000;
-
 const scanScheduler = queuesEnabled
   ? startScanScheduler({
       ensureScheduler: ensureOrderScanScheduler,
@@ -127,7 +124,9 @@ const copyTradeScanScheduler = queuesEnabled
 const snapshotScheduler = queuesEnabled
   ? startScanScheduler({
       ensureScheduler: ensurePortfolioSnapshotScheduler,
-      intervalMs: SNAPSHOT_SCAN_INTERVAL_MS,
+      // Daily at 01:00 UTC, not every SNAPSHOT_SCAN_INTERVAL_MS. The worker
+      // still rejects runs outside the settlement window as a guard.
+      schedule: { cron: DEFAULT_SNAPSHOT_CRON, tz: DEFAULT_SNAPSHOT_TZ },
       log: logger,
       label: "Portfolio snapshot",
     })
@@ -136,7 +135,7 @@ const snapshotScheduler = queuesEnabled
 const snapshotRetentionScheduler = queuesEnabled
   ? startScanScheduler({
       ensureScheduler: ensureSnapshotRetentionScheduler,
-      intervalMs: SNAPSHOT_RETENTION_INTERVAL_MS,
+      schedule: { cron: DEFAULT_RETENTION_CRON, tz: DEFAULT_SNAPSHOT_TZ },
       log: logger,
       label: "Snapshot retention",
     })

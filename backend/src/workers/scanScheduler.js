@@ -17,6 +17,7 @@ const DEFAULT_MAX_RETRY_DELAY_MS = 30_000;
 function startScanScheduler({
   ensureScheduler,
   intervalMs,
+  schedule,
   log = logger,
   label = "Order",
   maxRetryDelayMs = DEFAULT_MAX_RETRY_DELAY_MS,
@@ -45,7 +46,7 @@ function startScanScheduler({
     let result;
 
     try {
-      result = await ensureScheduler({ every: intervalMs });
+      result = await ensureScheduler(schedule ?? { every: intervalMs });
     } catch (error) {
       result = { scheduled: false, reason: error.message };
     } finally {
