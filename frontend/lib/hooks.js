@@ -148,13 +148,22 @@ export function useQuotes(symbols = [], assetTypes = {}, options = {}) {
     if (!symbolKey || typeof window === "undefined") return undefined;
 
     const list = symbolKey.split(",");
+    const canonicalList = list.map(canonicalMarketSymbol);
     const socket = getSocket("/market");
 
     const onPrice = (payload) => {
-      if (!payload?.symbol || !list.includes(payload.symbol)) return;
-      // Buffer ticks and flush at most twice a second so a busy market does
-      // not re-render a whole table on every trade.
-      pendingTicksRef.current[payload.symbol] = {
+      if (!payload?.symbol) return;
+
+      // Legacy holdings can be stored as "BINANCE:BTCUSDT" while the backend
+      // emits "BTCUSDT". Match on the canonical form and key the tick by the
+      // symbol this hook was asked for, so the merge below finds it.
+      const index = canonicalList.indexOf(
+        canonicalMarketSymbol(payload.symbol),
+      );
+
+      if (index === -1) return;
+
+      pendingTicksRef.current[list[index]] = {
         price: payload.price,
         volume: payload.volume,
         timestamp: payload.timestamp,
