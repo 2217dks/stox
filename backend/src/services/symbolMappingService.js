@@ -362,6 +362,35 @@ function toCanonicalSymbol(symbol, options = {}) {
 }
 
 /**
+ * Canonicalize an instrument symbol for internal position matching across
+ * holdings, orders, and requests. Strips provider prefixes and slashes
+ * so that e.g. "BINANCE:BTCUSDT", "BTC/USDT", and "BTCUSDT" all resolve to
+ * the same canonical key ("BTCUSDT").
+ */
+function getCanonicalInstrumentSymbol(symbol, assetType) {
+  if (!symbol || typeof symbol !== "string") {
+    return "";
+  }
+  const raw = symbol.trim().toUpperCase();
+  const clean = raw.replace(/^(?:BINANCE|FINNHUB|YAHOO):/, "");
+  const normalizedAssetType = assetType
+    ? String(assetType).trim().toUpperCase()
+    : null;
+
+  try {
+    return toCanonicalSymbol(
+      raw,
+      normalizedAssetType ? { assetClass: normalizedAssetType } : {},
+    );
+  } catch {
+    if (normalizedAssetType === "CRYPTO" || clean.includes("/")) {
+      return clean.replace(/\//g, "");
+    }
+    return clean;
+  }
+}
+
+/**
  * Convert a canonical (or raw) symbol to the exact identifier expected by
  * that provider's REST API or websocket stream.
  */
@@ -799,6 +828,7 @@ module.exports = {
   inferAssetClass,
   normalizeAssetClass,
   toCanonicalSymbol,
+  getCanonicalInstrumentSymbol,
   toProviderSymbol,
   toDisplaySymbol,
   parseSymbol,

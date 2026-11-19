@@ -11,6 +11,7 @@ const {
   createOrderCancelledNotification,
 } = require("./notificationEvents");
 const cacheService = require("./cacheService");
+const { getCanonicalInstrumentSymbol } = require("./symbolMappingService");
 
 const ZERO = new Prisma.Decimal(0);
 const MAX_MONEY = new Prisma.Decimal("9999999999.99999999");
@@ -654,23 +655,44 @@ async function createOrder({
       }
 
       if (side === "SELL") {
-        const holding = tx.holding
-          ? await tx.holding.findFirst({
+        const canonicalTarget = getCanonicalInstrumentSymbol(
+          normalizedSymbol,
+          assetType,
+        );
+
+        const holdingDelegate = tx.holding || prisma.holding;
+        let totalHeld = ZERO;
+        if (holdingDelegate) {
+          if (typeof holdingDelegate.findMany === "function") {
+            const holdings = await holdingDelegate.findMany({
+              where: { portfolioId },
+              select: {
+                symbol: true,
+                assetType: true,
+                quantity: true,
+              },
+            });
+            for (const holding of holdings) {
+              const holdingAssetType = holding.assetType || assetType;
+              if (
+                holdingAssetType === assetType &&
+                getCanonicalInstrumentSymbol(holding.symbol, holdingAssetType) === canonicalTarget
+              ) {
+                totalHeld = totalHeld.plus(new Prisma.Decimal(holding.quantity));
+              }
+            }
+          } else if (typeof holdingDelegate.findFirst === "function") {
+            const holding = await holdingDelegate.findFirst({
               where: {
                 portfolioId,
                 symbol: normalizedSymbol,
               },
-            })
-          : prisma.holding
-            ? await prisma.holding.findFirst({
-                where: {
-                  portfolioId,
-                  symbol: normalizedSymbol,
-                },
-              })
-            : null;
-
-        const heldQty = holding ? new Prisma.Decimal(holding.quantity) : ZERO;
+            });
+            if (holding && holding.quantity) {
+              totalHeld = new Prisma.Decimal(holding.quantity);
+            }
+          }
+        }
 
         let pendingSellQty = ZERO;
         const orderDelegate = tx.order || prisma.order;
@@ -678,22 +700,29 @@ async function createOrder({
           const pendingSellOrders = await orderDelegate.findMany({
             where: {
               portfolioId,
-              symbol: normalizedSymbol,
               side: "SELL",
               status: "PENDING",
             },
             select: {
+              symbol: true,
+              assetType: true,
               quantity: true,
             },
           });
           for (const pending of pendingSellOrders) {
-            pendingSellQty = pendingSellQty.plus(
-              new Prisma.Decimal(pending.quantity),
-            );
+            const pendingAssetType = pending.assetType || assetType;
+            const matchesSymbol = pending.symbol
+              ? getCanonicalInstrumentSymbol(pending.symbol, pendingAssetType) === canonicalTarget
+              : true;
+            if (pendingAssetType === assetType && matchesSymbol) {
+              pendingSellQty = pendingSellQty.plus(
+                new Prisma.Decimal(pending.quantity),
+              );
+            }
           }
         }
 
-        const availableQty = heldQty.minus(pendingSellQty);
+        const availableQty = totalHeld.minus(pendingSellQty);
         const requestedQty = new Prisma.Decimal(quantity);
 
         if (availableQty.lt(requestedQty)) {

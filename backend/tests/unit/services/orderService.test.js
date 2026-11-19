@@ -99,8 +99,21 @@ function createTransactionMock({
           id: "holding-1",
           portfolioId: "33333333-3333-4333-8333-333333333333",
           symbol: "AAPL",
+          assetType: "STOCK",
           quantity: holdingQuantity,
         };
+      }),
+      findMany: jest.fn().mockImplementation(async () => {
+        if (holdingQuantity === null) return [];
+        return [
+          {
+            id: "holding-1",
+            portfolioId: "33333333-3333-4333-8333-333333333333",
+            symbol: "AAPL",
+            assetType: "STOCK",
+            quantity: holdingQuantity,
+          },
+        ];
       }),
     },
     portfolio: {
@@ -766,6 +779,141 @@ describe("createOrder cash reservations", () => {
         status: "PENDING",
       });
       expect(tx.order.create).toHaveBeenCalledTimes(1);
+    });
+
+    test("matches holdings and pending orders across prefixed and unprefixed crypto symbols", async () => {
+      const tx = createTransactionMock({
+        holdingQuantity: null,
+      });
+      // Holding stored as BINANCE:BTCUSDT
+      tx.holding.findMany = jest.fn().mockResolvedValue([
+        {
+          id: "holding-crypto-1",
+          portfolioId: PORTFOLIO_ID,
+          symbol: "BINANCE:BTCUSDT",
+          assetType: "CRYPTO",
+          quantity: "5.5",
+        },
+      ]);
+      // Pending order stored as BTC/USDT
+      tx.order.findMany = jest.fn().mockResolvedValue([
+        {
+          symbol: "BTC/USDT",
+          assetType: "CRYPTO",
+          quantity: new Prisma.Decimal("2.0"),
+        },
+      ]);
+
+      // Attempt to sell 4.0 using unprefixed BTCUSDT -> available is 3.5, required 4.0 -> reject
+      await expect(
+        orderService.createOrder({
+          userId: USER_ID,
+          portfolioId: PORTFOLIO_ID,
+          symbol: "BTCUSDT",
+          assetType: "CRYPTO",
+          side: "SELL",
+          type: "MARKET",
+          quantity: "4.0",
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: "INSUFFICIENT_POSITION",
+        details: {
+          required: "4",
+          available: "3.5",
+        },
+      });
+
+      // Sell 3.5 -> succeeds
+      const order = await orderService.createOrder({
+        userId: USER_ID,
+        portfolioId: PORTFOLIO_ID,
+        symbol: "BTCUSDT",
+        assetType: "CRYPTO",
+        side: "SELL",
+        type: "MARKET",
+        quantity: "3.5",
+      });
+
+      expect(order).toMatchObject({
+        symbol: "BTCUSDT",
+        side: "SELL",
+        quantity: "3.5",
+      });
+    });
+
+    test("aggregates multiple holdings for the same canonical instrument", async () => {
+      const tx = createTransactionMock({
+        holdingQuantity: null,
+      });
+      tx.holding.findMany = jest.fn().mockResolvedValue([
+        {
+          id: "h1",
+          portfolioId: PORTFOLIO_ID,
+          symbol: "BINANCE:BTCUSDT",
+          assetType: "CRYPTO",
+          quantity: "2.0",
+        },
+        {
+          id: "h2",
+          portfolioId: PORTFOLIO_ID,
+          symbol: "BTC/USDT",
+          assetType: "CRYPTO",
+          quantity: "3.0",
+        },
+      ]);
+      tx.order.findMany = jest.fn().mockResolvedValue([]);
+
+      const order = await orderService.createOrder({
+        userId: USER_ID,
+        portfolioId: PORTFOLIO_ID,
+        symbol: "BTCUSDT",
+        assetType: "CRYPTO",
+        side: "SELL",
+        type: "MARKET",
+        quantity: "4.5",
+      });
+
+      expect(order).toMatchObject({
+        symbol: "BTCUSDT",
+        quantity: "4.5",
+      });
+    });
+
+    test("does not combine holdings across different asset classes", async () => {
+      const tx = createTransactionMock({
+        holdingQuantity: null,
+      });
+      tx.holding.findMany = jest.fn().mockResolvedValue([
+        {
+          id: "h1",
+          portfolioId: PORTFOLIO_ID,
+          symbol: "METH",
+          assetType: "STOCK",
+          quantity: "10",
+        },
+      ]);
+      tx.order.findMany = jest.fn().mockResolvedValue([]);
+
+      // Selling CRYPTO METH should fail because the holding is STOCK
+      await expect(
+        orderService.createOrder({
+          userId: USER_ID,
+          portfolioId: PORTFOLIO_ID,
+          symbol: "METH",
+          assetType: "CRYPTO",
+          side: "SELL",
+          type: "MARKET",
+          quantity: "1",
+        }),
+      ).rejects.toMatchObject({
+        statusCode: 400,
+        code: "INSUFFICIENT_POSITION",
+        details: {
+          available: "0",
+          required: "1",
+        },
+      });
     });
   });
 });

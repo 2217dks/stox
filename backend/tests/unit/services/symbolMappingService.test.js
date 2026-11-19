@@ -1,5 +1,6 @@
 const {
   toCanonicalSymbol,
+  getCanonicalInstrumentSymbol,
   toProviderSymbol,
   toDisplaySymbol,
   parseSymbol,
@@ -219,6 +220,31 @@ describe("symbolMappingService", () => {
       expect(() =>
         toCanonicalSymbol("ETHBTC", { assetClass: "STOCK" }),
       ).toThrow("Market data is not supported for this asset class.");
+    });
+  });
+
+  describe("getCanonicalInstrumentSymbol", () => {
+    test("canonicalizes crypto symbols regardless of prefix or slash formatting", () => {
+      expect(getCanonicalInstrumentSymbol("BINANCE:BTCUSDT", "CRYPTO")).toBe("BTCUSDT");
+      expect(getCanonicalInstrumentSymbol("BTC/USDT", "CRYPTO")).toBe("BTCUSDT");
+      expect(getCanonicalInstrumentSymbol("BINANCE:BTC/USDT", "CRYPTO")).toBe("BTCUSDT");
+      expect(getCanonicalInstrumentSymbol("BTCUSDT", "CRYPTO")).toBe("BTCUSDT");
+      expect(getCanonicalInstrumentSymbol("BINANCE:HYPER/TRY", "CRYPTO")).toBe("HYPERTRY");
+      expect(getCanonicalInstrumentSymbol("HYPER/TRY", "CRYPTO")).toBe("HYPERTRY");
+      expect(getCanonicalInstrumentSymbol("HYPERTRY", "CRYPTO")).toBe("HYPERTRY");
+    });
+
+    test("canonicalizes stock tickers and preserves dot/hyphen separators", () => {
+      expect(getCanonicalInstrumentSymbol("AAPL", "STOCK")).toBe("AAPL");
+      expect(getCanonicalInstrumentSymbol("FINNHUB:AAPL", "STOCK")).toBe("AAPL");
+      expect(getCanonicalInstrumentSymbol("BRK.B", "STOCK")).toBe("BRK.B");
+      expect(getCanonicalInstrumentSymbol("BRK-B", "STOCK")).toBe("BRK-B");
+    });
+
+    test("handles missing or empty inputs gracefully", () => {
+      expect(getCanonicalInstrumentSymbol("", "STOCK")).toBe("");
+      expect(getCanonicalInstrumentSymbol(null, "CRYPTO")).toBe("");
+      expect(getCanonicalInstrumentSymbol(undefined)).toBe("");
     });
   });
 
