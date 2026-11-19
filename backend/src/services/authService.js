@@ -128,6 +128,12 @@ function validatePasswordStrength(password) {
     errors.push("Password must contain at least one symbol.");
   }
 
+  // bcrypt only reads the first 72 bytes, so a longer password silently
+  // behaves as its prefix. Reject it instead of accepting a weaker secret.
+  if (bcrypt.truncates(password)) {
+    errors.push("Password must not exceed 72 bytes.");
+  }
+
   return {
     valid: errors.length === 0,
     errors,
