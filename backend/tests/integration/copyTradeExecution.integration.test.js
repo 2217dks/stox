@@ -312,6 +312,17 @@ describe("fanOutCopyTrades sizing and destination", () => {
   });
 
   test("mirrors a SELL as a market order", async () => {
+    await prisma.holding.create({
+      data: {
+        portfolioId: copierAPortfolioId,
+        symbol: "AAPL",
+        assetType: "STOCK",
+        quantity: 10,
+        averageBuyPrice: 100,
+        totalInvested: 1000,
+      },
+    });
+
     const trade = await createSourceTrade({
       side: "SELL",
       quantity: "4",

@@ -586,6 +586,17 @@ describe("Trading realtime events", () => {
     const portfolioId = await newPortfolio("reject-position");
     await join(primary.client, portfolioId);
 
+    await prisma.holding.create({
+      data: {
+        portfolioId,
+        symbol: "GOOG",
+        assetType: "STOCK",
+        quantity: 1,
+        averageBuyPrice: 100,
+        totalInvested: 100,
+      },
+    });
+
     const placed = await placeOrder({
       portfolioId,
       symbol: "GOOG",
@@ -593,6 +604,10 @@ describe("Trading realtime events", () => {
       quantity: "1",
     });
     const orderId = placed.body.data.order.id;
+
+    await prisma.holding.deleteMany({
+      where: { portfolioId, symbol: "GOOG" },
+    });
 
     const rejected = waitForEvent(primary.client, "order-status", {
       predicate: orderStatus(orderId),
