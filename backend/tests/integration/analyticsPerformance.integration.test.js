@@ -228,18 +228,18 @@ describe("Analytics Caching & Performance Integration Tests", () => {
         where: { id: userCId },
       });
 
-      // 6. Retry with still-valid token: assert 404 USER_NOT_FOUND even on cache hit
+      // 6. Retry with still-valid token: auth middleware looks up account existence and rejects with 401 INVALID_ACCESS_TOKEN
       const deletedStatsRes = await request(app)
         .get("/api/v1/users/me/statistics")
         .set("Authorization", `Bearer ${tokenC}`);
-      expect(deletedStatsRes.status).toBe(404);
-      expect(deletedStatsRes.body.error.code).toBe("USER_NOT_FOUND");
+      expect(deletedStatsRes.status).toBe(401);
+      expect(deletedStatsRes.body.error.code).toBe("INVALID_ACCESS_TOKEN");
 
       const deletedMonthlyRes = await request(app)
         .get("/api/v1/users/me/statistics/monthly")
         .set("Authorization", `Bearer ${tokenC}`);
-      expect(deletedMonthlyRes.status).toBe(404);
-      expect(deletedMonthlyRes.body.error.code).toBe("USER_NOT_FOUND");
+      expect(deletedMonthlyRes.status).toBe(401);
+      expect(deletedMonthlyRes.body.error.code).toBe("INVALID_ACCESS_TOKEN");
 
       // 7. Verify normal active user (User A) is unaffected and receives valid responses
       const activeRes = await request(app)
