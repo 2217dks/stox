@@ -131,7 +131,9 @@ When a refresh token is exchanged:
 1. The supplied token is hashed.
 2. The hash is looked up in PostgreSQL.
 3. The token must exist, must not be revoked, and must not be expired.
-4. The associated account must not be suspended.
+4. The associated account must not be suspended. Protected HTTP requests load
+   the current role and suspension state from PostgreSQL after JWT verification;
+   claims in a previously issued token do not override current account state.
 5. The old token is revoked.
 6. A new access-token and refresh-token pair is issued.
 7. The new refresh-token hash is stored.
@@ -144,9 +146,9 @@ The logout endpoint revokes the supplied refresh token.
 
 Revocation is performed against the stored token hash.
 
-Access tokens are not stored as server-side sessions. Revoking a refresh
-token does not, by itself, invalidate an already-issued access token
-before its expiration.
+Protected HTTP requests recheck the current account state in PostgreSQL, so
+suspension blocks existing access tokens immediately. Existing socket sessions
+are not forcibly disconnected, but new socket handshakes are rejected.
 
 ---
 

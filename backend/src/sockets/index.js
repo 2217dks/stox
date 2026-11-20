@@ -12,12 +12,14 @@ const {
 } = require("../services/pollingPriceStream");
 const { registerMarketNamespace } = require("./marketNamespace");
 const { registerTradingNamespace } = require("./tradingNamespace");
-const { registerNotificationsNamespace } = require("./notificationsNamespace");
+const { registerNotificationsNamespace, userRoom } = require("./notificationsNamespace");
 const {
   resolveSocketTiming,
 } = require("../config/socketConfig");
 
 const DEFAULT_CORS_ORIGIN = "http://localhost:3000";
+
+let activeIo = null;
 
 /**
  * WebSocket streaming is the default. `MARKET_STREAM_ENABLED=false` swaps in
@@ -111,13 +113,64 @@ function createSocketServer(httpServer, options = {}) {
     corsOrigins,
   });
 
+  activeIo = io;
+
   // `priceStream` is exposed so operational/debug handlers can read its
   // `getState()` snapshot without reaching into module internals.
   return { io, marketRooms, priceStream };
 }
 
+function getSocketServer() {
+  return activeIo;
+}
+
+function setSocketServer(io) {
+  activeIo = io;
+}
+
+async function disconnectUserSockets(userId, ioInstance = activeIo) {
+  if (!ioInstance || !userId) {
+    return;
+  }
+
+  const room = userRoom(userId);
+
+  try {
+    const tradingNsp = ioInstance.of("/trading");
+    const notificationsNsp = ioInstance.of("/notifications");
+
+    if (tradingNsp?.in) {
+      tradingNsp.in(room).disconnectSockets(true);
+    }
+    if (notificationsNsp?.in) {
+      notificationsNsp.in(room).disconnectSockets(true);
+    }
+
+    for (const nsp of [tradingNsp, notificationsNsp]) {
+      if (nsp?.sockets?.values) {
+        for (const socket of nsp.sockets.values()) {
+          if (socket.data?.user?.userId === userId) {
+            socket.disconnect(true);
+          }
+        }
+      }
+    }
+
+    logger.info("Disconnected user sockets on suspension", { userId });
+  } catch (error) {
+    logger.warn("Failed disconnecting user sockets", {
+      userId,
+      error: error.message,
+    });
+  }
+}
+
 module.exports = {
   createSocketServer,
+  disconnectUserSockets,
+  getSocketServer,
+  setSocketServer,
+  userRoom,
   parseOrigins,
   resolveCorsOrigins,
   resolveSocketTiming,

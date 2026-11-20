@@ -3,6 +3,7 @@ const { z } = require("zod");
 const logger = require("../utils/logger");
 const portfolioService = require("../services/portfolioService");
 const { authenticateSocket } = require("./auth");
+const { userRoom } = require("./notificationsNamespace");
 const { reply, handleEvent } = require("./socketHandlers");
 
 const portfolioPayloadSchema = z.object({
@@ -112,6 +113,8 @@ function registerTradingNamespace(io) {
 
   namespace.on("connection", (socket) => {
     const { userId } = socket.data.user;
+
+    socket.join(userRoom(userId));
 
     logger.info("Trading socket connected", {
       socketId: socket.id,

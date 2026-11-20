@@ -1,9 +1,14 @@
 const jwt = require("jsonwebtoken");
 
+jest.mock("../../../src/config/database", () => ({
+  user: { findUnique: jest.fn(async ({ where }) => ({ id: where.id, role: "TRADER", email: "asha@example.com", isSuspended: false })) },
+}));
+
 process.env.JWT_ACCESS_SECRET =
   process.env.JWT_ACCESS_SECRET || "unit-test-access-secret";
 
 const { authenticateSocket } = require("../../../src/sockets/auth");
+const prisma = require("../../../src/config/database");
 
 const SECRET = process.env.JWT_ACCESS_SECRET;
 
@@ -100,6 +105,17 @@ describe("authenticateSocket", () => {
 
     expect(error).toBeInstanceOf(Error);
     expect(error.data).toEqual({ code: "INVALID_AUTH_HEADER" });
+  });
+
+  it("rejects a token for a currently suspended user", async () => {
+    prisma.user.findUnique.mockResolvedValueOnce({
+      id: "user-1",
+      role: "TRADER",
+      email: "asha@example.com",
+      isSuspended: true,
+    });
+    const error = await runMiddleware(buildSocket({ auth: { token: signToken() } }));
+    expect(error.data).toEqual({ code: "ACCOUNT_SUSPENDED" });
   });
 
   it("rejects an invalid token", async () => {

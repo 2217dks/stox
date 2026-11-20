@@ -165,6 +165,8 @@ export const adminApi = {
   portfolio: (portfolioId) => call(`/admin/portfolios/${portfolioId}`),
   users: (query) => call("/admin/users", { query }),
   user: (userId) => call(`/admin/users/${userId}`),
+  setUserSuspension: (userId, body) =>
+    call(`/admin/users/${userId}/suspend`, { method: "PATCH", body }),
 };
 
 export const preferencesApi = {

@@ -1,17 +1,16 @@
 # Stox Phase 1 API handover
 
 **Repository:** `daksheshsharma2409/stox`  
-**Branch inspected:** `main`  
-**Main tree inspected:** `617af9318d79e1ecee9e7f3a6b4108d57adaba19`  
+**Branch inspected:** `feat/admin-account-controls` (admin account controls update)
 **Base URL:** `/api/v1`
 
-This reference is derived from the route registration, validators, controllers, services referenced by those controllers, and backend tests in the current `main` tree. It describes only endpoints that are actually mounted by `backend/src/routes/index.js`. Some older documentation lists routes that are not mounted; those are called out as absent below.
+This reference is derived from the route registration, validators, controllers, services referenced by those controllers, and backend tests in the current branch. It describes only endpoints that are actually mounted by `backend/src/routes/index.js`. Some older documentation lists routes that are not mounted; those are called out as absent below.
 
 ## Calling conventions
 
 ### Authentication and authorization
 
-Protected endpoints require `Authorization: Bearer <access-token>`. The access token is a JWT issued by the auth endpoints and verified with issuer `stox`. Missing credentials produce `401 UNAUTHORIZED`; malformed, expired, or unusable tokens produce `401 INVALID_ACCESS_TOKEN`; a valid token without the required role produces `403 FORBIDDEN`.
+Protected endpoints require `Authorization: Bearer <access-token>`. The access token is a JWT issued by the auth endpoints and verified with issuer `stox`. Protected HTTP requests verify identity, current role, and suspension against PostgreSQL: missing credentials produce `401 UNAUTHORIZED`; malformed, expired, nonexistent/deleted-user, or unusable tokens produce `401 INVALID_ACCESS_TOKEN`; suspended accounts produce `403 ACCOUNT_SUSPENDED`; and a valid token without the required role produces `403 FORBIDDEN`.
 
 `GET /users/:id` is the only endpoint with optional authentication. Without a token it returns the public profile and `isFollowing: null`; with a valid token it can return the caller-specific follow state. All market endpoints and `/api/v1/health` are public.
 
@@ -401,7 +400,7 @@ Query: `page`/`limit`, optional `search`, `role=TRADER|MODERATOR|ADMIN`, `isSusp
 
 UUID path. Returns `200` as `{ data:{ user } }` with the admin service's selected user projection.
 
-No admin write, analytics, audit-log, system-health, report, or market-data routes are mounted in the current branch. Older documentation describing `PATCH /admin/users/:id/suspend`, `GET /admin/analytics`, `GET /admin/health`, `GET /admin/market-data`, `POST /admin/reports`, or `GET /admin/audit-logs` is not an implementation claim for this handover.
+`PATCH /admin/users/:userId/suspend` is mounted and documented in `docs/API.md`. It requires an active ADMIN, accepts `{isSuspended, reason}`, and returns the minimal admin user projection. Analytics, audit-log listing, system-health, report, and market-data admin routes are not mounted. Suspension revokes refresh tokens, blocks protected HTTP requests even for previously issued access tokens (returning `403 ACCOUNT_SUSPENDED`), cancels pending orders and releases their reservations, records `CANCELLED` order lifecycle events, rejects new socket handshakes, and terminates existing authenticated socket connections in the `/trading` and `/notifications` namespaces immediately upon transaction commit. Tokens for deleted accounts fail authentication with `401 INVALID_ACCESS_TOKEN`. Admin state changes are durably recorded in `AdminAccountAction`, while repeated no-op requests are idempotent and do not create duplicate audit rows.
 
 ## Confirmed absent from the current route graph
 

@@ -2208,27 +2208,37 @@ Get user details.
 
 ## `PATCH /admin/users/:id/suspend`
 
-Suspend or unsuspend a user.
+Suspend or unsuspend a user. This route is mounted as
+`PATCH /api/v1/admin/users/:userId/suspend` and requires a valid access token
+for an active `ADMIN` account.
 
-## `GET /admin/analytics`
+Request body (strict):
 
-Get platform-wide analytics.
+```json
+{ "isSuspended": true, "reason": "Policy violation" }
+```
 
-## `GET /admin/health`
+`reason` is required, trimmed, and 1–500 characters. The `userId` path value
+must be a UUID. The response is `200 { "success": true, "data": { "user":
+{ "id", "email", "name", "avatarUrl", "role", "isVerified",
+"isSuspended", "createdAt", "updatedAt", "lastLoginAt" } } }`.
+Repeating the current state is idempotent and does not create a duplicate audit
+row. Self-suspension and suspension of the last active administrator return
+409. Admin account actions are stored with actor, target, action, reason, and
+timestamp in `AdminAccountAction`.
 
-Get system health.
+Suspension revokes all active refresh tokens. Every protected HTTP request
+rechecks the current account state, so already-issued access tokens stop
+working immediately (returning `403 ACCOUNT_SUSPENDED`); tokens for deleted
+accounts fail authentication with `401 INVALID_ACCESS_TOKEN`. New socket handshakes
+are also rejected (`ACCOUNT_SUSPENDED`). Pending orders are cancelled, their cash
+reservations released, and normal order lifecycle events recorded with reason
+`ACCOUNT_SUSPENDED`. When suspension commits, existing authenticated socket
+connections in the `/trading` and `/notifications` namespaces are immediately
+terminated.
 
-## `GET /admin/market-data`
-
-Get market-data provider health.
-
-## `POST /admin/reports`
-
-Generate administrative reports.
-
-## `GET /admin/audit-logs`
-
-Search audit activity.
+`GET /admin/analytics`, `GET /admin/health`, `GET /admin/market-data`,
+`POST /admin/reports`, and `GET /admin/audit-logs` are not mounted.
 
 ---
 

@@ -47,7 +47,7 @@ regular trader account.
 | `/achievements` | Catalog and unlock history |
 | `/notifications` | In-app notification inbox |
 | `/settings` | Profile, channels, theme, session |
-| `/admin` | Read-only users/portfolios/orders (ADMIN role only) |
+| `/admin` | Users (with suspension controls), portfolios, and orders inspection (ADMIN role only) |
 
 Protected routes live in `app/(app)/` behind `AuthGuard`; auth routes live in
 `app/(auth)/`.

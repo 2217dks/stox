@@ -17,7 +17,7 @@
 
 ## 📖 Overview
 
-The frontend is built with **Next.js 14** (App Router) + **Tailwind CSS** + **React**. It handles:
+The frontend uses **Next.js 16** (App Router), **Tailwind CSS 4**, and React 19. It handles:
 
 - Authentication (login/register)
 - Real-time price displays
@@ -47,7 +47,7 @@ The frontend is built with **Next.js 14** (App Router) + **Tailwind CSS** + **Re
 /leagues                    → Trading leagues
 /achievements               → User achievements
 /settings                   → User settings
-/admin                      → Admin panel (admin only)
+/admin                      → Admin panel: users (with account suspension controls), portfolios, and orders (admin only)
 ```
 
 ---
