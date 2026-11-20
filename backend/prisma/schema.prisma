@@ -160,6 +160,9 @@ model User {
   // Copy-trade execution audit rows where this user is the copier.
   copyExecutions CopyTradeExecution[] @relation("CopyExecutions")
 
+  adminAccountActions AdminAccountAction[] @relation("AdminAccountActor")
+  accountActions      AdminAccountAction[] @relation("AdminAccountTarget")
+
   // Preferences
   preference UserPreference?
 
@@ -191,6 +194,21 @@ model RefreshToken {
   createdAt DateTime @default(now())
 
   @@index([userId])
+}
+
+model AdminAccountAction {
+  id        String   @id @default(uuid())
+  actorId   String
+  targetId  String
+  action    String
+  reason    String
+  createdAt DateTime @default(now())
+
+  actor  User @relation("AdminAccountActor", fields: [actorId], references: [id], onDelete: Restrict)
+  target User @relation("AdminAccountTarget", fields: [targetId], references: [id], onDelete: Restrict)
+
+  @@index([targetId, createdAt])
+  @@index([actorId, createdAt])
 }
 
 // ============================================================
@@ -857,4 +875,3 @@ model LeagueMember {
   @@index([leagueId])
   @@index([userId])
 }
-

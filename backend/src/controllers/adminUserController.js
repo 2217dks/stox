@@ -1,6 +1,7 @@
 const {
   listAdminUsers,
   getAdminUserById,
+  setAdminUserSuspension,
 } = require("../services/adminUserService");
 
 async function listUsers(req, res, next) {
@@ -33,7 +34,21 @@ async function getUser(req, res, next) {
   }
 }
 
+async function setUserSuspension(req, res, next) {
+  try {
+    const user = await setAdminUserSuspension({
+      actorId: req.user.userId,
+      targetId: req.params.userId,
+      ...req.body,
+    });
+    return res.status(200).json({ success: true, data: { user } });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 module.exports = {
   listUsers,
   getUser,
+  setUserSuspension,
 };

@@ -7,6 +7,7 @@ const { requireRole } = require("../middleware/rbac");
 const {
   adminUserListQuerySchema,
   adminUserParamsSchema,
+  adminUserSuspensionSchema,
 } = require("../validators/adminUserValidator");
 
 const {
@@ -30,6 +31,15 @@ router.get(
   requireRole("ADMIN"),
   validate(adminOrderListQuerySchema, "query", "validatedQuery"),
   adminOrderController.listOrders,
+);
+
+router.patch(
+  "/users/:userId/suspend",
+  authMiddleware,
+  requireRole("ADMIN"),
+  validate(adminUserParamsSchema, "params"),
+  validate(adminUserSuspensionSchema),
+  adminUserController.setUserSuspension,
 );
 
 router.get(

@@ -30,7 +30,13 @@ const adminUserParamsSchema = z.object({
   userId: z.string().uuid("Invalid user ID."),
 });
 
+const adminUserSuspensionSchema = z.object({
+  isSuspended: z.boolean(),
+  reason: z.string().trim().min(1).max(500),
+}).strict();
+
 module.exports = {
   adminUserListQuerySchema,
   adminUserParamsSchema,
+  adminUserSuspensionSchema,
 };
