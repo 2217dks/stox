@@ -6,10 +6,13 @@ active ADMIN accounts. Send a strict JSON body containing `isSuspended`
 updated user projection. Repeating the current state is idempotent.
 
 Suspension revokes every unrevoked refresh token and blocks protected HTTP
-requests immediately, including requests made with an already-issued access
-token. New authenticated socket handshakes are rejected; currently established
-socket connections are not actively disconnected. Pending orders are cancelled,
-their reserved cash is released, and order lifecycle events are recorded.
+requests immediately (403 `ACCOUNT_SUSPENDED`), including requests made with an
+already-issued access token. Tokens for deleted user accounts fail authentication
+with 401 `INVALID_ACCESS_TOKEN`. When suspension commits, existing authenticated
+socket sessions in the `/trading` and `/notifications` namespaces are terminated
+immediately, and new authenticated socket handshakes are rejected. Pending orders
+are cancelled, their reserved cash is released back to the portfolio, and order
+lifecycle events are recorded with reason `ACCOUNT_SUSPENDED`.
 Unsuspension allows new login/refresh sessions but does not restore revoked
 refresh tokens or cancelled orders. Self-suspension and suspension of the last
 active administrator are rejected.

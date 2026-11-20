@@ -2229,10 +2229,13 @@ timestamp in `AdminAccountAction`.
 
 Suspension revokes all active refresh tokens. Every protected HTTP request
 rechecks the current account state, so already-issued access tokens stop
-working immediately; new socket handshakes are also rejected. Pending orders
-are cancelled, their cash reservations released, and normal order lifecycle
-events recorded. Already established socket connections are not forcibly
-disconnected by this endpoint.
+working immediately (returning `403 ACCOUNT_SUSPENDED`); tokens for deleted
+accounts fail authentication with `401 INVALID_ACCESS_TOKEN`. New socket handshakes
+are also rejected (`ACCOUNT_SUSPENDED`). Pending orders are cancelled, their cash
+reservations released, and normal order lifecycle events recorded with reason
+`ACCOUNT_SUSPENDED`. When suspension commits, existing authenticated socket
+connections in the `/trading` and `/notifications` namespaces are immediately
+terminated.
 
 `GET /admin/analytics`, `GET /admin/health`, `GET /admin/market-data`,
 `POST /admin/reports`, and `GET /admin/audit-logs` are not mounted.
