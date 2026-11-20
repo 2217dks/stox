@@ -34,4 +34,6 @@ open `/admin`, select an account in the Users tab, suspend it with a reason, con
 status updates, and verify its existing access token is rejected and refresh
 token no longer works. Unsuspend the account and verify list/detail update;
 the old refresh token remains revoked. Also verify the UI reports a rejected
-non-admin request and that self-suspension is rejected.
+non-admin request, that self-suspension and suspension of the last active admin
+are rejected, and that suspending a user with a pending order cancels it and
+releases its reserved cash.
