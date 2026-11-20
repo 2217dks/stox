@@ -39,6 +39,7 @@ async function setUserSuspension(req, res, next) {
     const user = await setAdminUserSuspension({
       actorId: req.user.userId,
       targetId: req.params.userId,
+      io: req.app?.get("io"),
       ...req.body,
     });
     return res.status(200).json({ success: true, data: { user } });

@@ -394,6 +394,240 @@ describe("Admin users integration API", () => {
       expect(response.status).toBe(409);
       expect(response.body.error.code).toBe("ADMIN_SELF_SUSPENSION");
     });
+
+    test("cancels pending orders, clears order reservedCash, decrements portfolio reservedCash, and records order events atomically without touching unrelated accounts", async () => {
+      const targetCreds = {
+        name: "Order Suspension Target",
+        email: `target-orders-${Date.now()}@stox.local`,
+        password: "TargetPassword123!",
+      };
+      const targetReg = await request(app).post("/api/v1/auth/register").send(targetCreds);
+      expect(targetReg.status).toBe(201);
+      const targetId = targetReg.body.data.user.id;
+
+      const targetPortfolio = await prisma.portfolio.findFirst({
+        where: { userId: targetId, isDefault: true },
+      });
+      expect(targetPortfolio).toBeTruthy();
+
+      await prisma.portfolio.update({
+        where: { id: targetPortfolio.id },
+        data: { reservedCash: 500 },
+      });
+
+      const targetOrder = await prisma.order.create({
+        data: {
+          portfolioId: targetPortfolio.id,
+          symbol: "AAPL",
+          assetType: "STOCK",
+          side: "BUY",
+          type: "LIMIT",
+          status: "PENDING",
+          quantity: 5,
+          limitPrice: 100,
+          reservedCash: 500,
+        },
+      });
+
+      const bystanderCreds = {
+        name: "Order Suspension Bystander",
+        email: `bystander-orders-${Date.now()}@stox.local`,
+        password: "BystanderPassword123!",
+      };
+      const bystanderReg = await request(app).post("/api/v1/auth/register").send(bystanderCreds);
+      expect(bystanderReg.status).toBe(201);
+      const bystanderId = bystanderReg.body.data.user.id;
+
+      const bystanderPortfolio = await prisma.portfolio.findFirst({
+        where: { userId: bystanderId, isDefault: true },
+      });
+
+      await prisma.portfolio.update({
+        where: { id: bystanderPortfolio.id },
+        data: { reservedCash: 200 },
+      });
+
+      const bystanderOrder = await prisma.order.create({
+        data: {
+          portfolioId: bystanderPortfolio.id,
+          symbol: "MSFT",
+          assetType: "STOCK",
+          side: "BUY",
+          type: "LIMIT",
+          status: "PENDING",
+          quantity: 1,
+          limitPrice: 200,
+          reservedCash: 200,
+        },
+      });
+
+      const suspendRes = await request(app)
+        .patch(suspensionPath(targetId))
+        .set("Authorization", `Bearer ${adminAccessToken}`)
+        .send({ isSuspended: true, reason: "Order safety suspension test" });
+      expect(suspendRes.status).toBe(200);
+      expect(suspendRes.body.data.user.isSuspended).toBe(true);
+
+      const updatedTargetOrder = await prisma.order.findUnique({
+        where: { id: targetOrder.id },
+      });
+      expect(updatedTargetOrder.status).toBe("CANCELLED");
+      expect(Number(updatedTargetOrder.reservedCash)).toBe(0);
+
+      const updatedTargetPortfolio = await prisma.portfolio.findUnique({
+        where: { id: targetPortfolio.id },
+      });
+      expect(Number(updatedTargetPortfolio.reservedCash)).toBe(0);
+
+      const events = await prisma.orderEvent.findMany({
+        where: { orderId: targetOrder.id },
+      });
+      expect(events.length).toBeGreaterThanOrEqual(1);
+      const cancelEvent = events.find((e) => e.eventType === "CANCELLED");
+      expect(cancelEvent).toBeDefined();
+      expect(cancelEvent.previousStatus).toBe("PENDING");
+      expect(cancelEvent.newStatus).toBe("CANCELLED");
+      expect(cancelEvent.metadata).toMatchObject({
+        reason: "ACCOUNT_SUSPENDED",
+        releasedReservedCash: "500",
+      });
+
+      const updatedBystanderOrder = await prisma.order.findUnique({
+        where: { id: bystanderOrder.id },
+      });
+      expect(updatedBystanderOrder.status).toBe("PENDING");
+      expect(Number(updatedBystanderOrder.reservedCash)).toBe(200);
+
+      const updatedBystanderPortfolio = await prisma.portfolio.findUnique({
+        where: { id: bystanderPortfolio.id },
+      });
+      expect(Number(updatedBystanderPortfolio.reservedCash)).toBe(200);
+
+      await prisma.adminAccountAction.deleteMany({
+        where: { OR: [{ actorId: { in: [targetId, bystanderId] } }, { targetId: { in: [targetId, bystanderId] } }] },
+      });
+      await prisma.user.deleteMany({
+        where: { id: { in: [targetId, bystanderId] } },
+      });
+    });
+
+    test("race-safely handles orders that become non-pending before cancellation commits", async () => {
+      const targetCreds = {
+        name: "Order Race Target",
+        email: `race-target-${Date.now()}@stox.local`,
+        password: "TargetPassword123!",
+      };
+      const reg = await request(app).post("/api/v1/auth/register").send(targetCreds);
+      expect(reg.status).toBe(201);
+      const targetId = reg.body.data.user.id;
+
+      const portfolio = await prisma.portfolio.findFirst({
+        where: { userId: targetId, isDefault: true },
+      });
+
+      const executedOrder = await prisma.order.create({
+        data: {
+          portfolioId: portfolio.id,
+          symbol: "AAPL",
+          assetType: "STOCK",
+          side: "BUY",
+          type: "LIMIT",
+          status: "EXECUTED",
+          quantity: 2,
+          limitPrice: 100,
+          reservedCash: 0,
+        },
+      });
+
+      await prisma.portfolio.update({
+        where: { id: portfolio.id },
+        data: { reservedCash: 300 },
+      });
+
+      const pendingOrder = await prisma.order.create({
+        data: {
+          portfolioId: portfolio.id,
+          symbol: "GOOGL",
+          assetType: "STOCK",
+          side: "BUY",
+          type: "LIMIT",
+          status: "PENDING",
+          quantity: 3,
+          limitPrice: 100,
+          reservedCash: 300,
+        },
+      });
+
+      const suspendRes = await request(app)
+        .patch(suspensionPath(targetId))
+        .set("Authorization", `Bearer ${adminAccessToken}`)
+        .send({ isSuspended: true, reason: "Race condition test" });
+      expect(suspendRes.status).toBe(200);
+
+      const postExecuted = await prisma.order.findUnique({ where: { id: executedOrder.id } });
+      expect(postExecuted.status).toBe("EXECUTED");
+
+      const postPending = await prisma.order.findUnique({ where: { id: pendingOrder.id } });
+      expect(postPending.status).toBe("CANCELLED");
+      expect(Number(postPending.reservedCash)).toBe(0);
+
+      const postPortfolio = await prisma.portfolio.findUnique({ where: { id: portfolio.id } });
+      expect(Number(postPortfolio.reservedCash)).toBe(0);
+
+      await prisma.adminAccountAction.deleteMany({
+        where: { OR: [{ actorId: targetId }, { targetId }] },
+      });
+      await prisma.user.deleteMany({ where: { id: targetId } });
+    });
+
+    test("maintains atomicity: if suspension is rejected, no state changes are committed", async () => {
+      const adminPortfolio = await prisma.portfolio.findFirst({
+        where: { userId: otherAdminUserId, isDefault: true },
+      });
+      await prisma.portfolio.update({
+        where: { id: adminPortfolio.id },
+        data: { reservedCash: 150 },
+      });
+      const order = await prisma.order.create({
+        data: {
+          portfolioId: adminPortfolio.id,
+          symbol: "TSLA",
+          assetType: "STOCK",
+          side: "BUY",
+          type: "LIMIT",
+          status: "PENDING",
+          quantity: 1,
+          limitPrice: 150,
+          reservedCash: 150,
+        },
+      });
+
+      const otherAdminLogin = await request(app).post("/api/v1/auth/login").send({
+        email: users.otherAdmin.email,
+        password: users.otherAdmin.password,
+      });
+      const otherAdminToken = otherAdminLogin.body.data.accessToken;
+
+      const selfRes = await request(app)
+        .patch(suspensionPath(otherAdminUserId))
+        .set("Authorization", `Bearer ${otherAdminToken}`)
+        .send({ isSuspended: true, reason: "Self attempt" });
+      expect(selfRes.status).toBe(409);
+      expect(selfRes.body.error.code).toBe("ADMIN_SELF_SUSPENSION");
+
+      const currentOrder = await prisma.order.findUnique({ where: { id: order.id } });
+      expect(currentOrder.status).toBe("PENDING");
+      expect(Number(currentOrder.reservedCash)).toBe(150);
+
+      const currentPortfolio = await prisma.portfolio.findUnique({ where: { id: adminPortfolio.id } });
+      expect(Number(currentPortfolio.reservedCash)).toBe(150);
+
+      await prisma.order.delete({ where: { id: order.id } });
+      await prisma.portfolio.update({
+        where: { id: adminPortfolio.id },
+        data: { reservedCash: 0 },
+      });
+    });
   });
 
   describe("Admin user detail", () => {

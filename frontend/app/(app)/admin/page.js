@@ -53,7 +53,7 @@ import {
   formatRelative,
 } from "@/lib/format";
 import { useSession } from "@/store/use-session";
-import { apiFetch } from "@/lib/api";
+import { adminApi } from "@/lib/endpoints";
 
 function AdminUsers() {
   const [search, setSearch] = useState("");
@@ -225,12 +225,13 @@ function AdminUserDetail({ userId, onClose, onUpdated }) {
       toast.error("A reason is required.");
       return;
     }
+    if (reason.length > 500) {
+      toast.error("Reason must be 500 characters or less.");
+      return;
+    }
     setUpdating(true);
     try {
-      await apiFetch(`/admin/users/${user.id}/suspend`, {
-        method: "PATCH",
-        body: { isSuspended, reason },
-      });
+      await adminApi.setUserSuspension(user.id, { isSuspended, reason });
       await Promise.all([mutate(), onUpdated()]);
       toast.success(`Account ${isSuspended ? "suspended" : "unsuspended"}.`);
     } catch (requestError) {
@@ -287,11 +288,12 @@ function AdminUserDetail({ userId, onClose, onUpdated }) {
               variant={user.isSuspended ? "success" : "danger"}
               onClick={changeSuspension}
               loading={updating}
+              disabled={updating}
             >
               {user.isSuspended ? "Unsuspend account" : "Suspend account"}
             </Button>
           ) : null}
-          <Button variant="ghost" onClick={onClose}>Close</Button>
+          <Button variant="ghost" onClick={onClose} disabled={updating}>Close</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
