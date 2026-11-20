@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const prisma = require("../config/database");
 
 const UNAUTHORIZED = "UNAUTHORIZED";
 const INVALID_AUTH_HEADER = "INVALID_AUTH_HEADER";
@@ -64,38 +65,34 @@ function extractToken(socket) {
  * issuer, same claim shape. The resolved identity lives on `socket.data.user`,
  * never on the client payload, so handlers can trust it.
  */
-function authenticateSocket(socket, next) {
+async function authenticateSocket(socket, next) {
   const extracted = extractToken(socket);
 
   if (extracted.error) {
     return next(extracted.error);
   }
 
+  let decoded;
   try {
-    const decoded = jwt.verify(extracted.token, process.env.JWT_ACCESS_SECRET, {
-      issuer: "stox",
-    });
+    decoded = jwt.verify(extracted.token, process.env.JWT_ACCESS_SECRET, { issuer: "stox" });
+  } catch (error) {
+    return next(socketAuthError("Invalid or expired access token.", INVALID_ACCESS_TOKEN));
+  }
 
-    if (!decoded.userId) {
-      return next(
-        socketAuthError("Invalid access token.", INVALID_ACCESS_TOKEN),
-      );
-    }
+  if (!decoded.userId) return next(socketAuthError("Invalid access token.", INVALID_ACCESS_TOKEN));
 
+  try {
+    const user = await prisma.user.findUnique({ where: { id: decoded.userId }, select: { id: true, role: true, email: true, isSuspended: true } });
+    if (!user || user.isSuspended) return next(socketAuthError(user ? "Account is suspended." : "Invalid access token.", user ? "ACCOUNT_SUSPENDED" : INVALID_ACCESS_TOKEN));
     socket.data.user = {
-      userId: decoded.userId,
-      role: decoded.role,
-      email: decoded.email,
+      userId: user.id,
+      role: user.role,
+      email: user.email,
     };
 
     return next();
   } catch (error) {
-    return next(
-      socketAuthError(
-        "Invalid or expired access token.",
-        INVALID_ACCESS_TOKEN,
-      ),
-    );
+    return next(error);
   }
 }
 

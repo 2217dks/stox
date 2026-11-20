@@ -18,6 +18,12 @@ const users = {
     password: "TraderPassword123!",
   },
 
+  otherAdmin: {
+    name: "Other Admin Integration User",
+    email: `admin-users-other-${timestamp}@stox.local`,
+    password: "OtherAdminPassword123!",
+  },
+
   suspended: {
     name: "Suspended Integration User",
     email: `admin-users-suspended-${timestamp}@stox.local`,
@@ -35,9 +41,11 @@ let adminUserId;
 let traderUserId;
 let suspendedUserId;
 let verifiedUserId;
+let otherAdminUserId;
 
 let adminAccessToken;
 let traderAccessToken;
+let traderRefreshToken;
 
 function expectErrorEnvelope(body) {
   expect(body).toHaveProperty("success", false);
@@ -66,6 +74,7 @@ beforeAll(async () => {
 
   traderUserId = traderRegister.body.data.user.id;
   traderAccessToken = traderRegister.body.data.accessToken;
+  traderRefreshToken = traderRegister.body.data.refreshToken;
 
   const suspendedRegister = await request(app)
     .post("/api/v1/auth/register")
@@ -82,6 +91,15 @@ beforeAll(async () => {
   expect(verifiedRegister.status).toBe(201);
 
   verifiedUserId = verifiedRegister.body.data.user.id;
+
+  const otherAdminRegister = await request(app).post("/api/v1/auth/register").send(users.otherAdmin);
+  expect(otherAdminRegister.status).toBe(201);
+  otherAdminUserId = otherAdminRegister.body.data.user.id;
+
+  await prisma.user.update({
+    where: { id: otherAdminUserId },
+    data: { role: "ADMIN" },
+  });
 
   await prisma.user.update({
     where: {
@@ -127,9 +145,11 @@ afterAll(async () => {
     traderUserId,
     suspendedUserId,
     verifiedUserId,
+    otherAdminUserId,
   ].filter(Boolean);
 
   if (userIds.length > 0) {
+    await prisma.adminAccountAction.deleteMany({ where: { OR: [{ actorId: { in: userIds } }, { targetId: { in: userIds } }] } });
     await prisma.user.deleteMany({
       where: {
         id: {
@@ -333,6 +353,46 @@ describe("Admin users integration API", () => {
         expect(user.pushToken).toBeUndefined();
         expect(user.refreshTokens).toBeUndefined();
       }
+    });
+  });
+
+  describe("Admin account suspension", () => {
+    const suspensionPath = (id) => `/api/v1/admin/users/${id}/suspend`;
+
+    test("requires ADMIN authorization and validates target and body", async () => {
+      const denied = await request(app).patch(suspensionPath(traderUserId)).set("Authorization", `Bearer ${traderAccessToken}`).send({ isSuspended: true, reason: "Policy" });
+      expect(denied.status).toBe(403);
+      const invalid = await request(app).patch(suspensionPath("bad-id")).set("Authorization", `Bearer ${adminAccessToken}`).send({ isSuspended: true, reason: "Policy" });
+      expect(invalid.status).toBe(400);
+      const invalidBody = await request(app).patch(suspensionPath(traderUserId)).set("Authorization", `Bearer ${adminAccessToken}`).send({ isSuspended: true });
+      expect(invalidBody.status).toBe(400);
+    });
+
+    test("suspends and unsuspends idempotently, records reasons, and revokes refresh tokens", async () => {
+      const response = await request(app).patch(suspensionPath(traderUserId)).set("Authorization", `Bearer ${adminAccessToken}`).send({ isSuspended: true, reason: "Terms violation" });
+      expect(response.status).toBe(200);
+      expect(response.body.data.user).toMatchObject({ id: traderUserId, isSuspended: true });
+      expect(Object.keys(response.body.data.user).sort()).toEqual(["avatarUrl", "createdAt", "email", "id", "isSuspended", "isVerified", "lastLoginAt", "name", "role", "updatedAt"].sort());
+      const token = await prisma.refreshToken.findFirst({ where: { userId: traderUserId } });
+      expect(token.revokedAt).toBeTruthy();
+      const audit = await prisma.adminAccountAction.findFirst({ where: { actorId: adminUserId, targetId: traderUserId }, orderBy: { createdAt: "desc" } });
+      expect(audit).toMatchObject({ action: "SUSPENDED", reason: "Terms violation" });
+      const blocked = await request(app).get("/api/v1/auth/me").set("Authorization", `Bearer ${traderAccessToken}`);
+      expect(blocked.status).toBe(403);
+      const refresh = await request(app).post("/api/v1/auth/refresh").send({ refreshToken: traderRefreshToken });
+      expect(refresh.status).toBe(401);
+      await request(app).patch(suspensionPath(traderUserId)).set("Authorization", `Bearer ${adminAccessToken}`).send({ isSuspended: true, reason: "Repeated request" });
+      expect(await prisma.adminAccountAction.count({ where: { targetId: traderUserId } })).toBe(1);
+      const unsuspended = await request(app).patch(suspensionPath(traderUserId)).set("Authorization", `Bearer ${adminAccessToken}`).send({ isSuspended: false, reason: "Appeal accepted" });
+      expect(unsuspended.status).toBe(200);
+      expect(unsuspended.body.data.user.isSuspended).toBe(false);
+      expect(await prisma.adminAccountAction.count({ where: { targetId: traderUserId } })).toBe(2);
+    });
+
+    test("prevents self-suspension", async () => {
+      const response = await request(app).patch(suspensionPath(adminUserId)).set("Authorization", `Bearer ${adminAccessToken}`).send({ isSuspended: true, reason: "Self" });
+      expect(response.status).toBe(409);
+      expect(response.body.error.code).toBe("ADMIN_SELF_SUSPENSION");
     });
   });
 

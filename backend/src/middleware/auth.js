@@ -1,9 +1,10 @@
 const jwt = require("jsonwebtoken");
 const { AppError } = require("../utils/errors");
+const prisma = require("../config/database");
 
 require("dotenv").config();
 
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   const authorization = req.headers.authorization;
 
   if (!authorization) {
@@ -20,31 +21,27 @@ function authMiddleware(req, res, next) {
     );
   }
 
+  let decoded;
   try {
-    const decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET, {
-      issuer: "stox",
-    });
-
-    if (!decoded.userId) {
-      return next(
-        AppError.unauthorized("Invalid access token.", "INVALID_ACCESS_TOKEN"),
-      );
-    }
-
-    req.user = {
-      userId: decoded.userId,
-      role: decoded.role,
-      email: decoded.email,
-    };
-
-    next();
+    decoded = jwt.verify(token, process.env.JWT_ACCESS_SECRET, { issuer: "stox" });
   } catch (error) {
-    return next(
-      AppError.unauthorized(
-        "Invalid or expired access token.",
-        "INVALID_ACCESS_TOKEN",
-      ),
-    );
+    return next(AppError.unauthorized("Invalid or expired access token.", "INVALID_ACCESS_TOKEN"));
+  }
+
+  if (!decoded.userId) return next(AppError.unauthorized("Invalid access token.", "INVALID_ACCESS_TOKEN"));
+
+  try {
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      select: { id: true, role: true, email: true, isSuspended: true },
+    });
+    if (!user) return next(AppError.unauthorized("Invalid access token.", "INVALID_ACCESS_TOKEN"));
+    if (user.isSuspended) return next(AppError.forbidden("Account is suspended.", "ACCOUNT_SUSPENDED"));
+    req.user = { userId: user.id, role: user.role, email: user.email };
+
+    return next();
+  } catch (error) {
+    return next(error);
   }
 }
 
