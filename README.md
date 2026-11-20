@@ -1,150 +1,144 @@
-# 📈 stox
+# stox
 
-> **A realistic paper-trading platform for US stocks and cryptocurrency — built to make trading feel real without risking real money.**
+**A paper trading platform for US stocks and cryptocurrency, built around real market data and realistic trading workflows.**
 
----
+stox lets users explore financial markets, build virtual portfolios, and test trading strategies without using real money.
 
-## 🎯 What is stox?
+## What is stox?
 
-**stox** is a full-stack paper trading platform that lets users practice trading with virtual money while working with real market data.
+stox is a full-stack paper trading application that combines market data, order execution, portfolio tracking, analytics, and social trading in one platform.
 
 Users can:
 
-- Build and manage virtual portfolios
-- Buy and sell stocks and cryptocurrency
+- Create and manage virtual portfolios
+- Buy and sell stocks and cryptocurrencies
 - Place market, limit, stop-loss, and take-profit orders
-- Track live positions and profit/loss
-- Follow other traders
-- Copy trading strategies
-- Compete on leaderboards and trading leagues
-- Set price alerts
+- Track open positions and portfolio performance
+- Follow other traders and copy their strategies
+- Participate in leaderboards and trading leagues
+- Set custom price alerts
 - Analyze portfolio performance and risk
 - Receive real-time notifications
-- Earn achievements through trading milestones
+- Unlock achievements through trading milestones
 
-Every account starts with virtual funds. No real money is involved.
-
----
-
-# 🌟 Why stox?
-
-Traditional paper-trading platforms often focus only on placing orders.
-
-stox is designed to simulate a much broader trading experience:
-
-```text
-Real Market Data
-       +
-Realistic Order Execution
-       +
-Portfolio Management
-       +
-Risk & Performance Analytics
-       +
-Real-Time Updates
-       +
-Social Trading
-       +
-Competition & Gamification
-```
-
-The goal is to make learning and experimenting with trading engaging without financial risk.
+Every account starts with virtual capital. All trading takes place within the simulator, so no real money is involved.
 
 ---
 
-# 💰 Trading Experience
+## Why stox?
 
-Users receive a virtual starting balance and can build their own portfolios.
+Most paper trading applications focus primarily on placing trades and tracking their results.
+
+stox takes a broader approach by bringing together the different parts of a trading platform:
+
+- Market data from external providers
+- Order management and execution
+- Portfolio and position tracking
+- Performance and risk analytics
+- Real-time updates
+- Social and copy trading
+- Leaderboards and competitions
+
+The idea is to give users a place to experiment with trading strategies, understand market movements, and evaluate their decisions without financial risk.
+
+---
+
+## Trading
+
+Users receive a virtual starting balance and can use it to build and manage their portfolios.
+
+### Order types
 
 The platform supports:
-
-### Orders
 
 - Market orders
 - Limit orders
 - Stop-loss orders
 - Take-profit orders
 
-### Position Management
+### Position management
 
-- Long positions
-- Short positions
+- Long and short positions
 - Multiple portfolios
 - Portfolio-level cash balances
 - Holdings and average entry prices
 
-### Order Execution
+### Order execution
 
-Orders are evaluated against live market prices and executed according to their conditions.
+Orders are evaluated against available market prices and executed when their conditions are met.
 
-The platform maintains consistency between:
+The trading engine maintains consistency across orders, trades, holdings, cash balances, and portfolio valuations.
 
 ```text
 Order
-  ↓
+  |
+  v
 Trade
-  ↓
+  |
+  v
 Holding
-  ↓
+  |
+  v
 Cash Balance
-  ↓
+  |
+  v
 Portfolio Value
 ```
 
 ---
 
-# 📊 Live Markets
+## Market Data
 
-stox combines multiple market-data sources to provide a single trading experience.
+stox integrates multiple market data providers to support both stock and cryptocurrency trading.
 
 ### Stocks
 
-US stock market data including:
+US stock market data includes:
 
-- Prices
-- Historical candles
+- Current prices and quotes
+- Historical price candles
 - Company information
-- News
+- Financial news
 - Market activity
 
 ### Cryptocurrency
 
-Cryptocurrency market data including:
+Cryptocurrency market data includes:
 
 - Live prices
-- Market trades
-- Order-book depth
+- Recent market trades
+- Order book depth
 - Historical prices
 
-The application normalizes market data internally so the rest of the platform does not need to care which provider supplied it.
+Market data from different providers is normalized internally through a common interface. This keeps provider-specific implementation details separate from the rest of the application.
 
 ---
 
-# ⚡ Real-Time Experience
+## Real-Time Updates
 
-The application is designed around real-time updates.
+Several parts of the application depend on timely updates rather than repeated manual requests.
 
-Users can see:
+Users can receive updates for:
 
-- Live market prices
-- Portfolio-value changes
-- Order execution updates
-- Price-alert events
+- Market prices
+- Portfolio value changes
+- Order execution
+- Price alerts
 - Notifications
 - Social activity
 
-Socket.IO provides the real-time communication layer while Redis supports scaling across multiple backend instances.
+Socket.IO handles real-time communication between the server and clients. Redis is used to support communication and coordination across backend instances.
 
 ---
 
-# 📈 Portfolio Analytics
+## Portfolio Analytics
 
-Every portfolio provides detailed performance information.
+Each portfolio includes performance and risk metrics to help users understand how their investments are performing.
 
-Users can view:
+Available metrics include:
 
 - Total portfolio value
-- Cash balance
+- Available cash balance
 - Holdings value
 - Realized P&L
 - Unrealized P&L
@@ -156,49 +150,47 @@ Users can view:
 - Maximum drawdown
 - Volatility
 - Sharpe ratio
-- Performance against benchmarks
+- Benchmark comparisons
 - P&L heatmaps
 
 ---
 
-# 👥 Social Trading
+## Social Trading
 
-stox includes a social trading layer.
+stox also includes features that let users interact with other traders.
 
 Users can:
 
 - Follow other traders
 - View public trader profiles
-- See activity from followed traders
-- Copy traders
-- Control copy-trading allocation
+- Browse activity from followed users
+- Copy other traders' activity
+- Configure copy-trading allocation
 - Set maximum copied trade sizes
 
-Copy trading is executed through the same core order and portfolio engine as normal trading.
+Copy trading uses the same underlying order execution and portfolio management systems as regular trades.
 
 ---
 
-# 🏆 Competition & Gamification
-
-Trading becomes competitive through:
+## Leaderboards and Trading Leagues
 
 ### Leaderboards
 
-Rank traders using performance metrics such as portfolio return.
+Leaderboards rank traders based on portfolio performance and other supported metrics.
 
-### Trading Leagues
+### Trading leagues
 
-Users can participate in time-limited competitions with:
+Users can join time-limited trading competitions with:
 
-- Starting virtual capital
-- Defined start/end dates
-- Rankings
-- Final returns
+- Virtual starting capital
+- Defined start and end dates
 - Participant limits
+- Rankings
+- Final performance calculations
 
 ### Achievements
 
-Users unlock achievements for milestones such as:
+The platform includes achievements for different trading milestones, including:
 
 - First trade
 - First profitable trade
@@ -209,19 +201,21 @@ Users unlock achievements for milestones such as:
 
 ---
 
-# 🔔 Alerts & Notifications
+## Alerts and Notifications
 
-Users can configure price alerts such as:
+Users can create price alerts for specific assets.
+
+Examples:
 
 ```text
 AAPL > $250
 BTCUSDT < $100,000
 ```
 
-Supported alert conditions include:
+Supported conditions include:
 
-- Price above target
-- Price below target
+- Price above a target
+- Price below a target
 - Percentage increase
 - Percentage decrease
 
@@ -231,25 +225,25 @@ Notifications can be delivered through:
 - Email
 - Push notifications
 
-Users control their notification preferences.
+Users can configure their notification preferences.
 
 ---
 
-# 🔐 Security
+## Security
 
-stox uses a layered security model.
+Security is handled across authentication, authorization, request validation, and application-level protection.
 
 ### Authentication
 
 - JWT access tokens
-- Secure refresh-token rotation
+- Refresh-token rotation
 - Password hashing
 - Google authentication
 - Session tracking
 
 ### Authorization
 
-Role-based permissions support:
+Role-based access control supports three roles:
 
 ```text
 TRADER
@@ -257,25 +251,23 @@ MODERATOR
 ADMIN
 ```
 
-Resource ownership is enforced server-side.
+Resource ownership and permissions are enforced on the server.
 
-### Protection
-
-The platform includes:
+### Application protection
 
 - Request validation
 - Rate limiting
 - Security headers
 - Centralized error handling
-- CORS protection
+- CORS configuration
 - Audit logging
 - Sensitive-data sanitization
 
 ---
 
-# 🛡️ Admin Platform
+## Admin Platform
 
-Administrators have access to platform-level management tools.
+The platform includes administrative tools for managing users and monitoring application activity.
 
 Admin capabilities include:
 
@@ -283,179 +275,197 @@ Admin capabilities include:
 - User suspension
 - Platform analytics
 - System health monitoring
-- Market-data monitoring
+- Market data monitoring
 - Report generation
-- Audit-log inspection
+- Audit log inspection
 
-Administrative operations are protected by RBAC.
+Administrative operations are protected through role-based access control.
 
 ---
 
-# 🧠 High-Level Architecture
+## Architecture
+
+The application follows a client-server architecture, with separate components for API handling, data storage, background processing, and real-time communication.
 
 ```text
-                         ┌─────────────────────┐
-                         │     Next.js Web App  │
-                         └──────────┬──────────┘
-                                    │
+                         +---------------------+
+                         |    Next.js Web App  |
+                         +----------+----------+
+                                    |
                               REST / WebSocket
-                                    │
-                                    ▼
-                         ┌─────────────────────┐
-                         │     Express API     │
-                         └──────────┬──────────┘
-                                    │
-             ┌──────────────────────┼──────────────────────┐
-             │                      │                      │
-             ▼                      ▼                      ▼
-      ┌──────────────┐       ┌──────────────┐       ┌──────────────┐
-      │ PostgreSQL   │       │ Redis/BullMQ │       │  Socket.IO   │
-      │   Database   │       │ Queue/Cache  │       │ Real-Time    │
-      └──────────────┘       └──────┬───────┘       └──────────────┘
-                                    │
-                                    ▼
-                             ┌──────────────┐
-                             │   Workers    │
-                             └──────┬───────┘
-                                    │
-                                    ▼
-                         ┌─────────────────────┐
-                         │  Market Data APIs   │
-                         └─────────────────────┘
+                                    |
+                                    v
+                         +---------------------+
+                         |     Express API     |
+                         +----------+----------+
+                                    |
+              +---------------------+---------------------+
+              |                     |                     |
+              v                     v                     v
+       +--------------+      +--------------+      +--------------+
+       | PostgreSQL   |      | Redis/BullMQ |      |  Socket.IO   |
+       | Database     |      | Queue/Cache  |      | Real-Time    |
+       +--------------+      +------+-------+      +--------------+
+                                    |
+                                    v
+                             +--------------+
+                             |   Workers    |
+                             +------+-------+
+                                    |
+                                    v
+                         +---------------------+
+                         |  Market Data APIs   |
+                         +---------------------+
 ```
 
 ---
 
-# 🛠️ Technology
+## Technology Stack
 
-| Layer           | Technology        |
-| --------------- | ----------------- |
-| Frontend        | Next.js + React   |
-| Styling         | Tailwind CSS      |
-| Backend         | Node.js + Express |
-| Database        | PostgreSQL        |
-| ORM             | Prisma            |
-| Cache           | Redis             |
-| Background Jobs | BullMQ            |
-| Real-Time       | Socket.IO         |
-| Authentication  | JWT + OAuth       |
-| Validation      | Zod               |
-| Market Data     | Finnhub + Binance |
-| Testing         | Jest + Supertest  |
+| Layer | Technology |
+|---|---|
+| Frontend | Next.js, React |
+| Styling | Tailwind CSS |
+| Backend | Node.js, Express |
+| Database | PostgreSQL |
+| ORM | Prisma |
+| Cache | Redis |
+| Background Jobs | BullMQ |
+| Real-Time Communication | Socket.IO |
+| Authentication | JWT, OAuth |
+| Validation | Zod |
+| Market Data | Finnhub, Binance |
+| Testing | Jest, Supertest |
 
 ---
 
-# 🏗️ Major Product Modules
+## Major Modules
+
+The application is divided into the following functional modules:
 
 ```text
 Authentication
-        │
-        ├── Users
-        ├── Sessions
-        └── Authorization
+    |
+    +-- Users
+    +-- Sessions
+    +-- Authorization
 
 Trading
-        │
-        ├── Portfolios
-        ├── Orders
-        ├── Trades
-        └── Holdings
+    |
+    +-- Portfolios
+    +-- Orders
+    +-- Trades
+    +-- Holdings
 
 Market Data
-        │
-        ├── Quotes
-        ├── History
-        ├── News
-        └── Order Book
+    |
+    +-- Quotes
+    +-- History
+    +-- News
+    +-- Order Book
 
 Analytics
-        │
-        ├── P&L
-        ├── Risk
-        ├── Performance
-        └── Benchmarks
+    |
+    +-- P&L
+    +-- Risk
+    +-- Performance
+    +-- Benchmarks
 
 Social
-        │
-        ├── Follow
-        ├── Feed
-        └── Copy Trading
+    |
+    +-- Follow
+    +-- Feed
+    +-- Copy Trading
 
 Competition
-        │
-        ├── Leaderboards
-        ├── Leagues
-        └── Achievements
+    |
+    +-- Leaderboards
+    +-- Leagues
+    +-- Achievements
 
 Notifications
-        │
-        ├── Alerts
-        ├── Email
-        ├── Push
-        └── In-App
+    |
+    +-- Alerts
+    +-- Email
+    +-- Push
+    +-- In-App
 
 Administration
-        │
-        ├── Users
-        ├── Analytics
-        ├── Monitoring
-        └── Reports
+    |
+    +-- Users
+    +-- Analytics
+    +-- Monitoring
+    +-- Reports
 ```
 
 ---
 
-# 🌎 Target User Journey
+## User Journey
+
+A typical user workflow looks like this:
 
 ```text
 Create Account
-      ↓
+      |
+      v
 Receive Virtual Capital
-      ↓
+      |
+      v
 Explore Markets
-      ↓
+      |
+      v
 Build Portfolio
-      ↓
+      |
+      v
 Place Orders
-      ↓
+      |
+      v
 Orders Execute Against Market Data
-      ↓
+      |
+      v
 Track Portfolio Performance
-      ↓
-Analyze Risk & P&L
-      ↓
-Follow / Copy Traders
-      ↓
-Compete in Leagues
-      ↓
-Earn Achievements
+      |
+      v
+Analyze Risk and P&L
+      |
+      v
+Follow or Copy Traders
+      |
+      v
+Participate in Leagues
+      |
+      v
+Unlock Achievements
 ```
 
 ---
 
-# 📚 Documentation
+## Documentation
 
-| Document                                      | Description                     |
-| --------------------------------------------- | ------------------------------- |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md)       | Complete technical architecture |
-| [FEATURES.md](docs/FEATURES.md)               | Complete product feature set    |
-| [DATABASE.md](docs/DATABASE.md)               | Final database architecture     |
-| [API.md](docs/API.md)                         | REST API specification          |
-| [REALTIME.md](docs/REALTIME.md)               | Real-time architecture          |
-| [BACKGROUND_JOBS.md](docs/BACKGROUND_JOBS.md) | Background job system           |
-| [CACHING.md](docs/CACHING.md)                 | Redis caching architecture      |
-| [NOTIFICATIONS.md](docs/NOTIFICATIONS.md)     | Notification pipeline           |
-| [MARKET_DATA.md](docs/MARKET_DATA.md)         | Market-data architecture        |
-| [MARKET_DATA_SERVICE.md](docs/MARKET_DATA_SERVICE.md) | Backend market-data service contract |
-| [SECURITY.md](docs/SECURITY.md)               | Security architecture           |
-| [FRONTEND.md](docs/FRONTEND.md)               | Frontend architecture           |
-| [SETUP.md](docs/SETUP.md)                     | Project setup                   |
-| [DEPLOYMENT.md](docs/DEPLOYMENT.md)           | Deployment architecture         |
-| [PROJECT_PLAN.md](docs/PROJECT_PLAN.md)       | Development roadmap             |
+The `docs/` directory contains detailed documentation covering the application's architecture, APIs, individual services, and development setup.
+
+| Document | Description |
+|---|---|
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Technical architecture |
+| [FEATURES.md](docs/FEATURES.md) | Product features |
+| [DATABASE.md](docs/DATABASE.md) | Database architecture |
+| [API.md](docs/API.md) | REST API specification |
+| [REALTIME.md](docs/REALTIME.md) | Real-time communication |
+| [BACKGROUND_JOBS.md](docs/BACKGROUND_JOBS.md) | Background job system |
+| [CACHING.md](docs/CACHING.md) | Redis caching architecture |
+| [NOTIFICATIONS.md](docs/NOTIFICATIONS.md) | Notification pipeline |
+| [MARKET_DATA.md](docs/MARKET_DATA.md) | Market data architecture |
+| [MARKET_DATA_SERVICE.md](docs/MARKET_DATA_SERVICE.md) | Market data service contract |
+| [SECURITY.md](docs/SECURITY.md) | Security architecture |
+| [FRONTEND.md](docs/FRONTEND.md) | Frontend architecture |
+| [SETUP.md](docs/SETUP.md) | Development setup |
+| [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Deployment architecture |
+| [PROJECT_PLAN.md](docs/PROJECT_PLAN.md) | Development roadmap |
 
 ---
 
-# 📈 stox
+# stox
 
-### **Trade. Analyze. Compete. Learn.**
+**Trade. Analyze. Compete. Learn.**
 
-A realistic trading simulator without the financial risk.
+A paper trading platform built to bring market data, trading, analytics, and social competition together in one place.
