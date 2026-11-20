@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 import {
   ArrowLeft,
   ChevronRight,
@@ -52,6 +53,7 @@ import {
   formatRelative,
 } from "@/lib/format";
 import { useSession } from "@/store/use-session";
+import { apiFetch } from "@/lib/api";
 
 function AdminUsers() {
   const [search, setSearch] = useState("");
@@ -61,7 +63,7 @@ function AdminUsers() {
   const [selectedId, setSelectedId] = useState(null);
   const debounced = useDebouncedValue(search, 300);
 
-  const { data, loading, error } = useApi("/admin/users", {
+  const { data, loading, error, mutate } = useApi("/admin/users", {
     query: {
       page,
       limit: 20,
@@ -200,24 +202,52 @@ function AdminUsers() {
       <AdminUserDetail
         userId={selectedId}
         onClose={() => setSelectedId(null)}
+        onUpdated={() => mutate()}
       />
     </div>
   );
 }
 
-function AdminUserDetail({ userId, onClose }) {
-  const { data, loading, error } = useApi(
+function AdminUserDetail({ userId, onClose, onUpdated }) {
+  const [updating, setUpdating] = useState(false);
+  const { data, loading, error, mutate } = useApi(
     userId ? `/admin/users/${userId}` : null,
     { enabled: Boolean(userId) },
   );
   const user = data?.user;
+
+  async function changeSuspension() {
+    const isSuspended = !user.isSuspended;
+    const action = isSuspended ? "Suspend" : "Unsuspend";
+    if (!window.confirm(`${action} ${user.name} (${user.email})?`)) return;
+    const reason = window.prompt("Enter a reason (required, up to 500 characters):")?.trim();
+    if (!reason) {
+      toast.error("A reason is required.");
+      return;
+    }
+    setUpdating(true);
+    try {
+      await apiFetch(`/admin/users/${user.id}/suspend`, {
+        method: "PATCH",
+        body: { isSuspended, reason },
+      });
+      await Promise.all([mutate(), onUpdated()]);
+      toast.success(`Account ${isSuspended ? "suspended" : "unsuspended"}.`);
+    } catch (requestError) {
+      toast.error("Account status was not changed.", {
+        description: requestError?.message || "Please try again.",
+      });
+    } finally {
+      setUpdating(false);
+    }
+  }
 
   return (
     <Dialog open={Boolean(userId)} onOpenChange={(open) => !open && onClose()}>
       <DialogContent size="md">
         <DialogHeader>
           <DialogTitle>User detail</DialogTitle>
-          <DialogDescription>Read-only account projection.</DialogDescription>
+          <DialogDescription>Account details and status controls.</DialogDescription>
         </DialogHeader>
         <DialogBody>
           {loading && !user ? (
@@ -252,6 +282,15 @@ function AdminUserDetail({ userId, onClose }) {
           ) : null}
         </DialogBody>
         <DialogFooter>
+          {user ? (
+            <Button
+              variant={user.isSuspended ? "success" : "danger"}
+              onClick={changeSuspension}
+              loading={updating}
+            >
+              {user.isSuspended ? "Unsuspend account" : "Suspend account"}
+            </Button>
+          ) : null}
           <Button variant="ghost" onClick={onClose}>Close</Button>
         </DialogFooter>
       </DialogContent>
@@ -607,7 +646,7 @@ export default function AdminPage() {
       <PageHeader
         eyebrow="Operations"
         title="Admin console"
-        description="Read-only platform inspection for users, portfolios and cross-user orders. No write operations are mounted in this phase."
+        description="Inspect users, portfolios and cross-user orders, and manage user account suspensions."
         actions={
           <Badge tone="violet" dot>
             <Shield className="size-3" aria-hidden="true" />
