@@ -84,6 +84,8 @@ model User {
 
   portfolios      Portfolio[]
   refreshTokens   RefreshToken[]
+  adminAccountActions AdminAccountAction[] @relation("AdminAccountActor")
+  accountActions      AdminAccountAction[] @relation("AdminAccountTarget")
   alerts          Alert[]
   achievements    UserAchievement[]
   followers       Follow[]       @relation("UserFollowers")
@@ -105,6 +107,10 @@ model User {
   @@index([role])
 }
 ```
+
+`AdminAccountAction` stores durable suspension decisions with actor, target,
+action (`SUSPENDED` or `UNSUSPENDED`), reason, and timestamp. It intentionally
+contains no token, credential, or unrelated personal data.
 
 ---
 

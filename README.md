@@ -277,15 +277,10 @@ The platform includes:
 
 Administrators have access to platform-level management tools.
 
-Admin capabilities include:
-
-- User management
-- User suspension
-- Platform analytics
-- System health monitoring
-- Market-data monitoring
-- Report generation
-- Audit-log inspection
+Implemented admin capabilities include read-only user, portfolio, and order
+inspection plus user suspension controls. User account state changes are
+recorded in a dedicated durable audit table. Analytics, reports, system and
+market-data dashboards, and audit-log browsing are not currently mounted.
 
 Administrative operations are protected by RBAC.
 

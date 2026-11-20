@@ -1,8 +1,7 @@
 # Stox Phase 1 API handover
 
 **Repository:** `daksheshsharma2409/stox`  
-**Branch inspected:** `main`  
-**Main tree inspected:** `617af9318d79e1ecee9e7f3a6b4108d57adaba19`  
+**Branch inspected:** `feat/admin-account-controls` (admin account controls update)
 **Base URL:** `/api/v1`
 
 This reference is derived from the route registration, validators, controllers, services referenced by those controllers, and backend tests in the current `main` tree. It describes only endpoints that are actually mounted by `backend/src/routes/index.js`. Some older documentation lists routes that are not mounted; those are called out as absent below.
@@ -401,7 +400,7 @@ Query: `page`/`limit`, optional `search`, `role=TRADER|MODERATOR|ADMIN`, `isSusp
 
 UUID path. Returns `200` as `{ data:{ user } }` with the admin service's selected user projection.
 
-No admin write, analytics, audit-log, system-health, report, or market-data routes are mounted in the current branch. Older documentation describing `PATCH /admin/users/:id/suspend`, `GET /admin/analytics`, `GET /admin/health`, `GET /admin/market-data`, `POST /admin/reports`, or `GET /admin/audit-logs` is not an implementation claim for this handover.
+`PATCH /admin/users/:userId/suspend` is mounted and documented in `docs/API.md`. It requires an active ADMIN, accepts `{isSuspended, reason}`, and returns the minimal admin user projection. Analytics, audit-log listing, system-health, report, and market-data admin routes are not mounted. Suspension revokes refresh tokens, blocks protected HTTP requests even for previously issued access tokens, cancels pending orders and releases their reservations, and rejects new socket handshakes. Established socket sessions are not forcibly disconnected. Admin state changes are durably recorded in `AdminAccountAction`.
 
 ## Confirmed absent from the current route graph
 
