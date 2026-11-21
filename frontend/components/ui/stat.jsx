@@ -13,11 +13,13 @@ export function Stat({
   className,
   children,
 }) {
+  // delta is often a formatted string ("+1.23%"), so Number() would be NaN; parseFloat reads the sign.
+  const deltaValue = Number.parseFloat(delta);
   const deltaTone =
     tone ||
-    (delta === undefined || delta === null || Number(delta) === 0
+    (Number.isNaN(deltaValue) || deltaValue === 0
       ? "flat"
-      : Number(delta) > 0
+      : deltaValue > 0
         ? "up"
         : "down");
 

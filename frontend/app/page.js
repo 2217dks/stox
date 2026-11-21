@@ -164,9 +164,6 @@ export default function HomePage() {
 
           <div className="relative mx-auto grid w-full max-w-[1200px] items-center gap-12 px-5 pb-16 pt-14 sm:px-8 sm:pb-20 sm:pt-20 lg:grid-cols-[1.08fr_.92fr] lg:gap-10 lg:pb-24 lg:pt-24">
             <div className="animate-rise">
-              <Badge tone="brand" dot pulse className="mb-5">
-                Paper trading · live market data
-              </Badge>
               <h1 className="max-w-[12ch] text-[clamp(2.6rem,6.4vw,4.4rem)] font-semibold leading-[0.94] tracking-[-0.055em] text-fg">
                 Trade the market.
                 <br />
